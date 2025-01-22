@@ -73,7 +73,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     const { result } = response.data;
     accessToken = result.access_token;
     tokenExpiry = Date.now() + result.expire_time * 1000;
-    console.log("Access token fetched:", accessToken);
+    //console.log("Access token fetched:", accessToken);
   }
   
   async function ensureAccessToken(req, res, next) {
