@@ -96,7 +96,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
 
     // Get device id if we passed an index
     const isInteger = Number.isInteger(Number(device));
-    const deviceId = isInteger? process.env.DEVICES[device] : deviceId
+    const deviceId = isInteger? process.env.DEVICES.split(',')[device] : deviceId
 
 
     const timestamp = Date.now().toString();
