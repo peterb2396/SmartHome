@@ -1,0 +1,48 @@
+{
+  "app": {
+    "welcome_msg": "Welcome! You have been granted some free tokens! Please view the Preferences tab to learn how to use the app.",
+    "theme": {
+      "red": "#F9063C",
+      "blue": "#849bff",
+      "creme": "#FFFFF1"
+    },
+    "api": "http://localhost:3001",
+    "email": "TemplateApp@template.example"
+  
+  },
+  "expo": {
+    "name": "mobile",
+    "slug": "mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.builtbypeter.theclubhouse"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "ee588c2b-e525-4eb1-aca6-5689307f717c"
+      }
+    },
+    "owner": "peterbuo"
+  }
+}

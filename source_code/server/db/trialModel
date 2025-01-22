@@ -1,0 +1,17 @@
+const mongoose = require("mongoose");
+const TrialSchema = new mongoose.Schema({
+    
+
+devices: {
+    type: Array,
+    default: []
+},
+
+emails: {
+    type: Array,
+    default: []
+},
+
+})
+  
+module.exports = mongoose.model.Trials || mongoose.model("Trial", TrialSchema);
