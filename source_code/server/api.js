@@ -88,9 +88,16 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     next();
   }
   
-  async function controlDevice(password, deviceId, isOn) {
+  async function controlDevice(password, device, isOn) {
+
+
 
     if (password !== process.env.PASSWORD) return null
+
+    // Get device id if we passed an index
+    const isInteger = Number.isInteger(Number(device));
+    const deviceId = isInteger? process.env.DEVICES[device] : deviceId
+
 
     const timestamp = Date.now().toString();
     const body = JSON.stringify({
