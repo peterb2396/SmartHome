@@ -123,8 +123,11 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
       if (!result)
         {
           res.status(401).send("UNAUTHORIZED")
+          console.log("Unauthorized request receieved")
           return
-        } 
+        }
+
+        console.log(req.body.who? req.body.who : "Anonymous","executed power", req.body.on? "on for" : "off for", req.body.deviceId)
         
       res.json({ success: true, data: result });
     } catch (error) {
@@ -173,6 +176,7 @@ const pingUrl = () => {
 
 cron.schedule('*/10 * * * *', pingUrl);
 pingUrl();
+
 
   async function maintainUsers()
   {
