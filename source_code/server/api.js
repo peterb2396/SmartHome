@@ -55,7 +55,7 @@ const headers = {
 
 var options = {
   'method': 'POST',
-  'url': `https://api.smartthings.com/oauth/token?grant_type=client_credentials&client_id=${clientId}&client_secret=${clientSecret}`,
+  'url': `https://api.smartthings.com/v1/oauth/token?grant_type=client_credentials&client_id=${clientId}&client_secret=${clientSecret}`,
   'headers': {
     'Content-Type': 'application/x-www-form-urlencoded'
   },
