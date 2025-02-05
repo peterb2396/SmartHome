@@ -4,8 +4,8 @@ import { Routes, Route } from "react-router-dom";
 
 import Nav from './Nav';
 import Account from './Account';
-import ContactForm from './ContactForm';
 import Dashboard from './Dashboard';
+import Lights from './Lights';
 
 
 const MyRouter = ({host}) => {
@@ -16,9 +16,10 @@ const MyRouter = ({host}) => {
     
     <Nav></Nav>
       <Routes>
-          <Route index element={<Dashboard/>} />
+          <Route index element={<Dashboard BASE_URL = {host}/>} />
           <Route path="account" element={<Account host = {host}/>} />
-          <Route path="contact" element={<ContactForm host = {host}/>} />
+          <Route path="lights" element={<Lights BASE_URL = {host}/>} />
+
       </Routes>
     
       

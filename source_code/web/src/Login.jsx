@@ -58,7 +58,10 @@ export default function LoginScreen(props) {
         setShowCode(true);
       } else if (status === 404) {
         setStatus("User not found!");
-      } else {
+      } else if (status === 401) {
+        setStatus("Not whitelisted!");
+      }
+       else {
         setStatus("Error, please try again");
       }
     } else {

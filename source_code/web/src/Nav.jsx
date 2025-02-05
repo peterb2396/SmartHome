@@ -11,8 +11,8 @@ const Nav = props => {
                 <div class="navbar-container">
                     
                     <ul class="navbar">
-                        <li><NavLink to = "/">Dashboard</NavLink></li>
-                        <li><NavLink to = "/contact">Help</NavLink></li>
+                        <li><NavLink to = "/">Settings</NavLink></li>
+                        <li><NavLink to = "/lights">Lights</NavLink></li>
                         <li><NavLink to = "/account">Account</NavLink></li>
                     </ul>
                 

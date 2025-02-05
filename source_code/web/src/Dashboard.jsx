@@ -1,8 +1,9 @@
-export default function Dashboard() {
+import SettingsPage from "./SettingsPage";
+
+export default function Dashboard({ BASE_URL }) {
   return (
     <div>
-      <h1>Dashboard</h1>
-      <p>This is the dashboard page</p>
+      <SettingsPage BASE_URL = {BASE_URL}></SettingsPage>
     </div>
   );
 }
