@@ -10,6 +10,7 @@
   const bcrypt = require("bcrypt");
   const nodemailer = require('nodemailer');
   const crypto = require("crypto");
+  const qs = require('qs'); // Import qs for URL encoding
 
   
 
@@ -38,23 +39,25 @@
 // Function to get a new access token
 async function getAccessToken() {
   try {
-    const response = await axios.post('https://api.smartthings.com/v1/oauth/token', null, {
-      params: {
-        grant_type: 'client_credentials',
-        client_id: clientId,
-        client_secret: clientSecret,
-      },
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+    const data = qs.stringify({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret,
     });
 
+    const headers = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+
+    const response = await axios.post('https://api.smartthings.com/oauth/token', data, { headers });
+
     accessToken2 = response.data.access_token;
-    tokenExpiration = Date.now() + (response.data.expires_in * 1000); // Token expiration time
+    tokenExpiration = Date.now() + response.data.expires_in * 1000;
+
     console.log('Access Token:', accessToken2);
+    return accessToken2;
   } catch (error) {
-    console.error('Error getting access token:', error.response ? error.response.data : error.message);
-    throw new Error('Failed to get access token');
+    console.error('Error getting access token:', error);
   }
 }
 
@@ -74,12 +77,12 @@ async function listDevices() {
   try {
     const response = await axios.get('https://api.smartthings.com/v1/devices', {
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${accessToken2}`,
       },
     });
     return response.data.items;
   } catch (error) {
-    console.error('Error listing devices:', error);
+    console.error('Error listing devices:', error.code);
     throw new Error('Failed to list devices');
   }
 }
