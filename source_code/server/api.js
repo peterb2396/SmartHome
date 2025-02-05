@@ -12,7 +12,7 @@
   const crypto = require("crypto");
   const qs = require('qs'); // Import qs for URL encoding
 
-  
+  let lightsOn = [] // Lights that are on when the house is left
 
   // DB connection
   //dbConnect()
@@ -107,25 +107,69 @@ async function listDevices() {
     });
     return response.data.items;
   } catch (error) {
-    console.error('Error listing devices:', error.code);
+    console.error('Error listing devices:', error);
     throw new Error('Failed to list devices');
   }
 }
 
-// Turn off or on all lights
+// Function to convert a user's inputted devices to device objects
+async function makeDevices(lightDevices) {
+  const devices = lightDevices || await listDevices();
+  let lights;
+
+  try {
+      lights = devices.filter(device =>
+          device.components.some(component =>
+              component.capabilities.some(cap => cap.id === "switch")
+          )
+      );
+  } catch (error) {
+      // All devices to filter from
+      let baseArray = await listDevices();
+      baseArray = baseArray.filter(device =>
+          device.components.some(component =>
+              component.capabilities.some(cap => cap.id === "switch")
+          )
+      );
+
+      // Provided filters
+      const filterArray = devices;
+
+      // Return device objects matching user's input: could be a room id, a device name, or a device id
+      lights = baseArray.filter(device =>
+          filterArray.some(filter =>
+              (filter.deviceId && filter.deviceId === device.deviceId) ||
+              (filter.roomId && filter.roomId === device.roomId) ||
+              (filter.label && filter.label === device.label)
+          )
+      );
+
+      // Include level field if present in input
+      lights = lights.map(device => {
+          const match = filterArray.find(filter => filter.deviceId === device.deviceId);
+          return match && match.level !== undefined
+              ? { ...device, level: match.level }
+              : device;
+      });
+  }
+
+  return lights;
+}
+
+
+// Turn off or on all or some lights
+// can provide SmartThings device objects,
+// or an array of device IDs, room IDs, or device labels.
+// Optionally provide a level for each light by including a level field.
+// * if this doesnt work, it may be because we need to provide an array of objects rather than just raw strings.
 async function lights(lightDevices = null, on = true, password) {
   if (password !== process.env.PASSWORD) return null;
 
   await ensureValidToken();
 
   try {
-    const devices = lightDevices || await listDevices();
-    const lights = devices.filter(device => {
-      // Iterate over components to find a capability with id 'switch'
-      return device.components.some(component =>
-        component.capabilities.some(cap => cap.id === 'switch')
-      );
-    });
+
+    const lights = await makeDevices(lightDevices);
 
     for (const light of lights) {
       const deviceId = light.deviceId;
@@ -137,6 +181,11 @@ async function lights(lightDevices = null, on = true, password) {
             {
               capability: 'switch',
               command: on ? 'on' : 'off',
+            },
+            {
+              capability: "switchLevel",  // Correct capability name
+              command: "setLevel",       // Correct command name
+              arguments: [on && light.level ? light.level : 0], // Needs to be an array
             },
           ],
         },
@@ -250,7 +299,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
   async function powerPlug(password, device, on) {
     const body = JSON.stringify({
       commands: [
-        { code: "switch_1", value: isOn }
+        { code: "switch_1", value: on }
       ]
     });
 
@@ -289,35 +338,131 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     return response.data;
   }
 
-  // User left the house
   router.post("/leave", ensureAccessToken, async (req, res) => {
-    
     try {
       // Turn on Milo's camera
-
       const result = await powerPlug(req.body.password, 1, true);
-      if (!result)
-      {
-        res.status(401).send("UNAUTHORIZED")
-        console.log("Unauthorized request receieved")
-        return
+      if (!result) {
+        res.status(401).send("UNAUTHORIZED");
+        console.log("Unauthorized request received");
+        return;
       }
-
-      console.log(req.body.who? req.body.who : "Anonymous","left the house", req.body.deviceId)
-
-      // Turn off all the lights
-
+  
+      console.log(req.body.who ? req.body.who : "Anonymous", "left the house");
+  
+      // Fetch all devices and filter for light devices
+      const allDevices = await listDevices();
+      const lightDevices = allDevices.filter(device => 
+        device.components.some(component => 
+          component.capabilities.some(cap => cap.id === 'switch')
+        )
+      );
+  
+      // Store all lights that are currently on
       
+      for (const device of lightDevices) {
+  
+        // Query the current state of each light (on/off)
+        const lightState = await axios.get(
+          `https://api.smartthings.com/v1/devices/${device.deviceId}/status`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken2}`,
+            },
+          }
+        );
 
-
-
-        
-      // res.json({ success: true, data: result });
+  
+        // Check if the light is on, and if so, add it to the lightsOn array
+        // console.log(lightState.data.components.main)
+        if (lightState.data.components.main.switch.switch.value === 'on') {
+          lightsOn.push({label: device.label, deviceId: device.deviceId, roomId: device.roomId, level: lightState.data.components.main.switchLevel.level.value});
+        }
+      }
+  
+      console.log("Lights that are currently on:", lightsOn);
+  
+      // Turn off all the lights
+      // This will also turn off the outdoor lights that we put on before we left
+      // and it will turn them back on, to their same brightness, when we get to the driveway
+      // What we need to do then, is set a delay to turn off any outdoor lights after 5 minutes.
+      const password = req.body.password;
+      await lights(lightsOn, false, password);
+  
+      // Send a success response
+      res.json({ success: true });
     } catch (error) {
-      console.error("Error powering device:", error);
-      res.status(500).json({ error: "Failed to power device" });
+      console.error("Error processing leave request:", error);
+      res.status(500).json({ error: "Failed to process leave request" });
     }
   });
+
+  // Supports provding a temp_lights roomId, to turn off lights in that room after ariving home after a short delay.
+  // Useful for turning off lights in the garage, outside, etc after a few minutes
+
+  // EX: 
+  // {
+  //   "password": "xxx",
+  //   "temp_lights": "f6ff15b0-e82e-4808-b01e-388ccb1ed1e2", <or an array of rooms>
+  //   "temp_mins": 0.5
+  // }
+
+  router.post("/arrive", ensureAccessToken, async (req, res) => {
+    try {
+        // Turn off Milo's camera
+        const result = await powerPlug(req.body.password, 0, true);
+        if (!result) {
+            res.status(401).send("UNAUTHORIZED");
+            console.log("Unauthorized request received");
+            return;
+        }
+
+        console.log(req.body.who ? req.body.who : "Anonymous", "arrived at the house");
+
+        console.log("Turning these lights back on:", lightsOn);
+
+        // Turn on all the lights which were turned off when we left
+        const password = req.body.password;
+        await lights(lightsOn, true, password);
+
+        // Extract filters (temp_lights can be a single string or an array)
+        const temp_lights = req.body.temp_lights
+        const temp_mins = req.body.temp_mins || 5
+
+        if (temp_mins && temp_lights) {
+            // Ensure temp_lights is always an array for easier processing
+            const filters = Array.isArray(temp_lights) ? temp_lights : [temp_lights];
+
+            // Find devices in lightsOn that match any of the provided values
+            const tempDevices = lightsOn.filter(device =>
+                filters.includes(device.roomId) ||
+                filters.includes(device.deviceId) ||
+                filters.includes(device.label)
+            );
+
+            if (tempDevices.length > 0) {
+                console.log(`Waiting ${temp_mins} minutes before turning off these devices:`, tempDevices);
+
+                setTimeout(async () => {
+                    console.log("Turning off temp lights:", tempDevices);
+                    await lights(tempDevices, false, password);
+                }, temp_mins * 60 * 1000); // Convert minutes to milliseconds
+            }
+        }
+
+        // Clear lightsOn after turning them back on
+        lightsOn = [];
+
+        // Send a success response
+        res.json({ success: true });
+    } catch (error) {
+        console.error("Error processing arrive request:", error);
+        res.status(500).json({ error: "Failed to process arrive request" });
+    }
+});
+
+
+
   
   
   router.post("/power", ensureAccessToken, async (req, res) => {
