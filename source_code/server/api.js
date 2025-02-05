@@ -21,7 +21,7 @@
   const clientSecret = process.env.SMART_CLIENT_SECRET;
 
   // Store token info (access and expiration)
-  let accessToken2 = '';
+  let accessToken2 = process.env.SMART_PAT;
   let tokenExpiration = 0;
 
   
@@ -39,40 +39,40 @@
 // Function to get a new access token
 async function getAccessToken() {
   try {
-    const data = qs.stringify({
-      grant_type: 'client_credentials',
-      client_id: clientId,
-      client_secret: clientSecret,
-    });
+
+
 //     const data = new URLSearchParams();
 // data.append('grant_type', 'client_credentials');
 // data.append('client_id', process.env.SMART_CLIENT_ID);
 // data.append('client_secret', process.env.SMART_CLIENT_SECRET);
 
-const headers = {
-  'Content-Type': 'application/x-www-form-urlencoded',
-};
-
-var options = {
-  'method': 'POST',
-  'url': `https://api.smartthings.com/v1/oauth/token?grant_type=client_credentials&client_id=${clientId}&client_secret=${clientSecret}`,
-  'headers': {
-    'Content-Type': 'application/x-www-form-urlencoded'
-  },
-  form: {
-    grant_type: 'client_credentials',
-    client_id: clientId,
-    client_secret: clientSecret,
-  }
-};
-
-
+    var options = {
+      'method': 'POST',
+      'url': `https://api.smartthings.com/v1/oauth/token?grant_type=client_credentials&client_id=${clientId}&client_secret=${clientSecret}`,
+      'headers': {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      form: {
+        grant_type: 'client_credentials',
+        client_id: clientId,
+        client_secret: clientSecret,
+      }
+    };
 
     
 
-    // const response = await axios.post('https://api.smartthings.com/oauth/token', data, { headers });
+    const data = qs.stringify({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret,
+    });
+
+    const headers = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+    const response = await axios.post('https://api.smartthings.com/oauth/token', data, { headers });
     //const response = await axios.post(options)
-    const response = await axios.post(options.url, new URLSearchParams(options.form), { headers: options.headers });
+    // const response = await axios.post(options.url, new URLSearchParams(options.form), { headers: options.headers });
 
 
     accessToken2 = response.data.access_token;
@@ -82,14 +82,13 @@ var options = {
     return accessToken2;
   } catch (error) {
     console.error('Error getting access token:', error);
-    console.log(process.env.SMART_CLIENT_ID)
-console.log(process.env.SMART_CLIENT_SECRET)
   }
 }
 
 
 // Ensure valid access token
 async function ensureValidToken() {
+  return
   if (!accessToken2 || Date.now() >= tokenExpiration) {
     console.log('Token expired or not available. Getting a new one...');
     await getAccessToken();
@@ -113,13 +112,20 @@ async function listDevices() {
   }
 }
 
-// Turn off all lights
-async function lights(lightDevices = null, on = true) {
+// Turn off or on all lights
+async function lights(lightDevices = null, on = true, password) {
+  if (password !== process.env.PASSWORD) return null;
+
   await ensureValidToken();
 
   try {
     const devices = lightDevices || await listDevices();
-    const lights = devices.filter(device => device.capabilities.some(cap => cap.id === 'switch'));
+    const lights = devices.filter(device => {
+      // Iterate over components to find a capability with id 'switch'
+      return device.components.some(component =>
+        component.capabilities.some(cap => cap.id === 'switch')
+      );
+    });
 
     for (const light of lights) {
       const deviceId = light.deviceId;
@@ -142,10 +148,11 @@ async function lights(lightDevices = null, on = true) {
       );
     }
   } catch (error) {
-    console.error('Error turning off lights:', error);
-    throw new Error('Failed to turn off lights');
+    console.error('Error controlling lights:', error);
+    throw new Error('Failed to control lights');
   }
 }
+
 
   // Function to get all devices ( SmartThings )
   router.get('/list-devices', async (req, res) => {
@@ -158,7 +165,18 @@ async function lights(lightDevices = null, on = true) {
   });
 
 
+// Endpoint to control lights
+router.post('/lights', async (req, res) => {
+  const { devices, on, password } = req.body;
 
+  try {
+    await lights(devices, on, password);
+    res.status(200).send('Lights controlled successfully');
+  } catch (error) {
+    console.error('Error in /control-lights endpoint:', error);
+    res.status(500).send('Failed to control lights');
+  }
+});
 
   
   async function encryptStr(str, secret) {
