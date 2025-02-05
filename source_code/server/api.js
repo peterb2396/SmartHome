@@ -197,6 +197,12 @@ async function lights(lightDevices = null, on = true, password) {
       );
     }
   } catch (error) {
+    if (error.response.status === 429)
+    {
+      console.log('Too many requests. Trying again in ', error.respose.headers['x-ratelimit-reset']);
+      await new Promise(resolve => setTimeout(resolve, error.respose.headers['x-ratelimit-reset']));
+      return lights(lightDevices, on, password);
+    }
     console.error('Error controlling lights:', error);
     throw new Error('Failed to control lights');
   }
