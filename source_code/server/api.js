@@ -16,8 +16,8 @@
   // DB connection
   //dbConnect()
 
-  const clientId = '8468206d-1a85-496c-9453-6458b0e3b172';
-  const clientSecret = '6e47f247-0bdf-47f4-b4b9-c7b6ee1f89b6';
+  const clientId = process.env.SMART_CLIENT_ID;
+  const clientSecret = process.env.SMART_CLIENT_SECRET;
 
   // Store token info (access and expiration)
   let accessToken2 = '';
