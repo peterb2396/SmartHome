@@ -17,6 +17,7 @@
     "mongoose-unique-validator": "^5.0.0",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.13",
-    "nodemon": "^2.0.22"
+    "nodemon": "^2.0.22",
+    "telnet-client": "^2.2.2"
   }
 }

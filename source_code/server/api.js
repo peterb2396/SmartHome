@@ -11,8 +11,17 @@
   const nodemailer = require('nodemailer');
   const crypto = require("crypto");
 
+  
+
   // DB connection
   //dbConnect()
+
+  const clientId = '8468206d-1a85-496c-9453-6458b0e3b172';
+  const clientSecret = '6e47f247-0bdf-47f4-b4b9-c7b6ee1f89b6';
+
+  // Store token info (access and expiration)
+  let accessToken2 = '';
+  let tokenExpiration = 0;
 
   
   const ACCESS_ID = process.env.ACCESS_ID
@@ -21,6 +30,107 @@
   
   let accessToken = null;
   let tokenExpiry = null;
+
+
+  // Function to turn on all lights
+
+  // Function to get a new access token
+// Function to get a new access token
+async function getAccessToken() {
+  try {
+    const response = await axios.post('https://api.smartthings.com/v1/oauth/token', null, {
+      params: {
+        grant_type: 'client_credentials',
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
+
+    accessToken2 = response.data.access_token;
+    tokenExpiration = Date.now() + (response.data.expires_in * 1000); // Token expiration time
+    console.log('Access Token:', accessToken2);
+  } catch (error) {
+    console.error('Error getting access token:', error.response ? error.response.data : error.message);
+    throw new Error('Failed to get access token');
+  }
+}
+
+
+// Ensure valid access token
+async function ensureValidToken() {
+  if (!accessToken2 || Date.now() >= tokenExpiration) {
+    console.log('Token expired or not available. Getting a new one...');
+    await getAccessToken();
+  }
+}
+
+// List devices
+async function listDevices() {
+  await ensureValidToken();
+  
+  try {
+    const response = await axios.get('https://api.smartthings.com/v1/devices', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    return response.data.items;
+  } catch (error) {
+    console.error('Error listing devices:', error);
+    throw new Error('Failed to list devices');
+  }
+}
+
+// Turn off all lights
+async function lights(lightDevices = null, on = true) {
+  await ensureValidToken();
+
+  try {
+    const devices = lightDevices || await listDevices();
+    const lights = devices.filter(device => device.capabilities.some(cap => cap.id === 'switch'));
+
+    for (const light of lights) {
+      const deviceId = light.deviceId;
+
+      await axios.post(
+        `https://api.smartthings.com/v1/devices/${deviceId}/commands`,
+        {
+          commands: [
+            {
+              capability: 'switch',
+              command: on ? 'on' : 'off',
+            },
+          ],
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken2}`,
+          },
+        }
+      );
+    }
+  } catch (error) {
+    console.error('Error turning off lights:', error);
+    throw new Error('Failed to turn off lights');
+  }
+}
+
+  // Function to get all devices ( SmartThings )
+  router.get('/list-devices', async (req, res) => {
+    try {
+      const devices = await listDevices();
+      res.json(devices);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+
+
+
   
   async function encryptStr(str, secret) {
     return crypto.createHmac('sha256', secret).update(str, 'utf8').digest('hex').toUpperCase();
@@ -87,8 +197,22 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     }
     next();
   }
+
+  // Control power of a smart plug
+  // Uses controlDevice function
+  async function powerPlug(password, device, on) {
+    const body = JSON.stringify({
+      commands: [
+        { code: "switch_1", value: isOn }
+      ]
+    });
+
+    const result = await controlDevice(password, device, body);
+    return result;
+  }
   
-  async function controlDevice(password, device, isOn) {
+  // General device control: Pass the body
+  async function controlDevice(password, device, body) {
 
 
 
@@ -99,13 +223,8 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     const deviceId = Number.isInteger(Number(device)) ? devices[device] : device;
 
 
-
     const timestamp = Date.now().toString();
-    const body = JSON.stringify({
-      commands: [
-        { code: "switch_1", value: isOn }
-      ]
-    });
+    
     const sign = await generateSignatureGeneral(timestamp, `/v1.0/devices/${deviceId}/commands`, 'POST', body);
     const response = await axios.post(
       `${BASE_URL}/v1.0/devices/${deviceId}/commands`,
@@ -122,12 +241,42 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     );
     return response.data;
   }
+
+  // User left the house
+  router.post("/leave", ensureAccessToken, async (req, res) => {
+    
+    try {
+      // Turn on Milo's camera
+
+      const result = await powerPlug(req.body.password, 1, true);
+      if (!result)
+      {
+        res.status(401).send("UNAUTHORIZED")
+        console.log("Unauthorized request receieved")
+        return
+      }
+
+      console.log(req.body.who? req.body.who : "Anonymous","left the house", req.body.deviceId)
+
+      // Turn off all the lights
+
+      
+
+
+
+        
+      // res.json({ success: true, data: result });
+    } catch (error) {
+      console.error("Error powering device:", error);
+      res.status(500).json({ error: "Failed to power device" });
+    }
+  });
   
   
   router.post("/power", ensureAccessToken, async (req, res) => {
     
     try {
-      const result = await controlDevice(req.body.password, req.body.deviceId, req.body.on);
+      const result = await powerPlug(req.body.password, req.body.deviceId, req.body.on);
       if (!result)
         {
           res.status(401).send("UNAUTHORIZED")
@@ -143,6 +292,33 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
       res.status(500).json({ error: "Failed to power device" });
     }
   });
+
+
+  async function getDevices() {
+    const timestamp = Date.now().toString();
+    const sign = await generateSignatureGeneral(timestamp, `/v1.0/users/${process.env.UID}/devices`, 'GET');
+  
+    const response = await axios.get(`${BASE_URL}/v1.0/users/${process.env.UID}/devices`, {
+      headers: {
+        client_id: ACCESS_ID,
+        access_token: accessToken,
+        sign: sign,
+        t: timestamp,
+        sign_method: "HMAC-SHA256",
+      },
+    });
+  
+    if (response.data.success) {
+      const devices = response.data.result;
+      // devices.forEach((device) => {
+      //   console.log(`Device Name: ${device.name}, Device ID: ${device.id}`);
+      // });
+      return devices
+    } else {
+      throw new Error(`Failed to fetch devices: ${response.data.msg}`);
+    }
+  }
+  
   
 
   // Change password button on login page, send code, when verified, choose new password
@@ -162,9 +338,9 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
   // * Delete inactive accounts (if they arent subscribed!)
 
   // Maitenance
-  const job = cron.schedule('0 0 * * *', maintainUsers);
+  //const job = cron.schedule('0 0 * * *', maintainUsers);
   //const job = cron.schedule('*/30 * * * * *', maintainUsers);
-  job.start()
+  //job.start()
   
 let latest;
 const bypass_confirmations = false

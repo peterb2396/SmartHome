@@ -12,6 +12,10 @@ var app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+app.use((req, res, next) => {
+  console.log(`User accessed: ${req.method} ${req.originalUrl}`); // Logs the HTTP method and requested path
+  next(); // Passes control to the next middleware or route handler
+});
 
 app.use(express.json());
 app.use (express.urlencoded({extended: true}));
