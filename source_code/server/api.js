@@ -1,8 +1,7 @@
   var express = require('express');
   const dbConnect = require("./db/dbConnect");
-  const User = require("./db/userModel");
-  const Trial = require("./db/trialModel");
-  const Options = require("./db/optionsModel");
+  const User = require("./db/userModel.js");
+  const mongoose = require('mongoose');
   const cron = require('node-cron');
   var router = express.Router();
   require('dotenv').config();
@@ -11,11 +10,35 @@
   const nodemailer = require('nodemailer');
   const crypto = require("crypto");
   const qs = require('qs'); // Import qs for URL encoding
+  const moment = require('moment');
 
-  let lightsOn = [] // Lights that are on when the house is left
+  // To determine sunset
+  const zipCode = '16901'; // Wellsboro, PA
+  const apiUrl = `https://api.sunrise-sunset.org/json?zip=${zipCode}&formatted=0`;
+
+  async function isAfterSunset() {
+    try {
+      // Fetch the sunset data
+      const response = await axios.get(apiUrl);
+      const sunsetTime = response.data.results.sunset;
+      
+      // Convert sunset time to a moment object
+      const sunsetMoment = moment(sunsetTime);
+  
+      // Get the current time in the same format as sunset (UTC)
+      const currentTime = moment.utc();
+  
+      // Check if current time is after sunset
+      return currentTime.isAfter(sunsetMoment)
+
+    } catch (error) {
+      console.error('Error fetching sunset data:', error);
+    }
+  }
+
 
   // DB connection
-  //dbConnect()
+  dbConnect()
 
   const clientId = process.env.SMART_CLIENT_ID;
   const clientSecret = process.env.SMART_CLIENT_SECRET;
@@ -32,11 +55,59 @@
   let accessToken = null;
   let tokenExpiry = null;
 
+  // Timer to shutoff temp lights
+  temp_light_timeout = null
 
-  // Function to turn on all lights
+  // Settings from frontend
+  let settings = {}
+  const settingsSchema = new mongoose.Schema({}, { strict: false });
+  const Settings = mongoose.model('Settings', settingsSchema);
 
-  // Function to get a new access token
-// Function to get a new access token
+  async function updateSettings() {
+    settings = await Settings.findOne();
+
+  }
+  // Call once
+  updateSettings()
+
+  
+  // Update a setting
+  async function updateSetting(key, value) {
+    const result = await Settings.findOneAndUpdate(
+        {}, // Find the existing settings document
+        { [key]: value }, // Update the specific key dynamically
+        { upsert: true, new: true, setDefaultsOnInsert: true } // Create if not exists
+    );
+
+    settings = result.toObject()
+    return settings;
+
+
+}
+
+
+// API route to update a setting
+router.post("/settings", async (req, res) => {
+  try {
+      const { key, value } = req.body;
+      if (!key) {
+          return res.status(400).json({ error: "Key is required" });
+      }
+
+      const updatedSettings = await updateSetting(key, value);
+      res.json({ success: true, settings: updatedSettings });
+  } catch (error) {
+      res.status(500).json({ error: error.message });
+  }
+});
+
+router.get("/settings", async(req,res) => {
+  res.json(settings)
+})
+
+
+
+// Function to get a new access token (SmartThings)
 async function getAccessToken() {
   try {
 
@@ -96,21 +167,43 @@ async function ensureValidToken() {
 }
 
 // List devices
+// List devices
 async function listDevices() {
   await ensureValidToken();
   
   try {
+    // Fetch the list of devices
     const response = await axios.get('https://api.smartthings.com/v1/devices', {
       headers: {
         Authorization: `Bearer ${accessToken2}`,
       },
     });
-    return response.data.items;
+
+    // Fetch status for each device
+    const devicesWithStatus = await Promise.all(
+      response.data.items.map(async (device) => {
+        try {
+          const statusResponse = await axios.get(`https://api.smartthings.com/v1/devices/${device.deviceId}/status`, {
+            headers: {
+              Authorization: `Bearer ${accessToken2}`,
+            },
+          });
+          // Merge the status into the device object
+          return { ...device, status: statusResponse.data };
+        } catch (statusError) {
+          console.error(`Error fetching status for device ${device.deviceId}:`, statusError);
+          return device; // Return the device without status if an error occurs
+        }
+      })
+    );
+
+    return devicesWithStatus;
   } catch (error) {
     console.error('Error listing devices:', error);
     throw new Error('Failed to list devices');
   }
 }
+
 
 // Function to convert a user's inputted devices to device objects
 async function makeDevices(lightDevices) {
@@ -156,23 +249,42 @@ async function makeDevices(lightDevices) {
   return lights;
 }
 
+async function validatePassword(password)
+{
+  if (password !== process.env.PASSWORD) 
+    {
+      // See if we provided a value which is the _id string for any user in the db
+      try {
+        const user = await User
+        .findOne({ _id: password })
+  
+        if (!user) return null
+  
+      } catch (error) {
+        return null
+      }
+  
+  
+    }
+}
 
 // Turn off or on all or some lights
 // can provide SmartThings device objects,
 // or an array of device IDs, room IDs, or device labels.
 // Optionally provide a level for each light by including a level field.
 // * if this doesnt work, it may be because we need to provide an array of objects rather than just raw strings.
-async function lights(lightDevices = null, on = true, password) {
-  if (password !== process.env.PASSWORD) return null;
+async function lights(lightDevices = null, on = true, password, level = 100) {
+  await validatePassword(password)
 
   await ensureValidToken();
 
   try {
 
-    const lights = await makeDevices(lightDevices);
+    // const lights = await makeDevices(lightDevices);
+    const lights = lightDevices || await listDevices();
 
     for (const light of lights) {
-      const deviceId = light.deviceId;
+      const deviceId = light.deviceId || light;
 
       await axios.post(
         `https://api.smartthings.com/v1/devices/${deviceId}/commands`,
@@ -185,7 +297,7 @@ async function lights(lightDevices = null, on = true, password) {
             {
               capability: "switchLevel",  // Correct capability name
               command: "setLevel",       // Correct command name
-              arguments: [on && light.level ? light.level : 0], // Needs to be an array
+              arguments: [on ? (light.level ? light.level : level) : 0], // Needs to be an array
             },
           ],
         },
@@ -199,8 +311,8 @@ async function lights(lightDevices = null, on = true, password) {
   } catch (error) {
     if (error.response.status === 429)
     {
-      console.log('Too many requests. Trying again in ', error.respose.headers['x-ratelimit-reset']);
-      await new Promise(resolve => setTimeout(resolve, error.respose.headers['x-ratelimit-reset']));
+      console.log('Too many requests. Trying again in ', error.response.headers['x-ratelimit-reset']);
+      await new Promise(resolve => setTimeout(resolve, error.response.headers['x-ratelimit-reset']));
       return lights(lightDevices, on, password);
     }
     console.error('Error controlling lights:', error);
@@ -222,10 +334,10 @@ async function lights(lightDevices = null, on = true, password) {
 
 // Endpoint to control lights
 router.post('/lights', async (req, res) => {
-  const { devices, on, password } = req.body;
+  const { devices, on, password, level } = req.body;
 
   try {
-    await lights(devices, on, password);
+    await lights(devices, on, password, level);
     res.status(200).send('Lights controlled successfully');
   } catch (error) {
     console.error('Error in /control-lights endpoint:', error);
@@ -345,6 +457,11 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
   }
 
   router.post("/leave", ensureAccessToken, async (req, res) => {
+    let lightsOn = []
+    // Get the latest settings
+    await updateSettings();
+    const temp_lights = settings.temp_lights.split(',').map(item => item.trim())
+
     try {
       // Turn on Milo's camera
       const result = await powerPlug(req.body.password, 1, true);
@@ -353,8 +470,18 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         console.log("Unauthorized request received");
         return;
       }
-  
-      console.log(req.body.who ? req.body.who : "Anonymous", "left the house");
+      
+      const username = req.body.who ? req.body.who : "Anonymous"
+      console.log(username, "left the house");
+
+      // Remove the user from the usersHome list, in the db
+      let usersHome = settings.usersHome
+      usersHome = usersHome.filter(u => u !== username)
+
+      await updateSetting('usersHome', usersHome);
+
+
+      const homeEmpty = usersHome.length === 0
   
       // Fetch all devices and filter for light devices
       const allDevices = await listDevices();
@@ -377,16 +504,26 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
             },
           }
         );
-
-  
         // Check if the light is on, and if so, add it to the lightsOn array
-        // console.log(lightState.data.components.main)
         if (lightState.data.components.main.switch.switch.value === 'on') {
           lightsOn.push({label: device.label, deviceId: device.deviceId, roomId: device.roomId, level: lightState.data.components.main.switchLevel.level.value});
         }
       }
+
+      // Store all lights that are on in the database
+      updateSetting('lightsOn', lightsOn)
+
+      // If this house is not empty, only include temp lights (dont turn lights off on people who are home)
+      if (!homeEmpty)
+      {
+        lightsOn = lightsOn.filter(device =>
+          temp_lights.includes(device.roomId) ||
+          temp_lights.includes(device.deviceId) ||
+          temp_lights.includes(device.label)
+        );
+      }
   
-      console.log("Lights that are currently on:", lightsOn);
+      console.log(homeEmpty? "All lights" : "Temp lights", "that are currently on:", lightsOn);
   
       // Turn off all the lights
       // This will also turn off the outdoor lights that we put on before we left
@@ -403,18 +540,14 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     }
   });
 
-  // Supports provding a temp_lights roomId, to turn off lights in that room after ariving home after a short delay.
-  // Useful for turning off lights in the garage, outside, etc after a few minutes
-
-  // EX: 
-  // {
-  //   "password": "xxx",
-  //   "temp_lights": "f6ff15b0-e82e-4808-b01e-388ccb1ed1e2", <or an array of rooms>
-  //   "temp_mins": 0.5
-  // }
+  
+  
 
   router.post("/arrive", ensureAccessToken, async (req, res) => {
+    // Get latest settings
+    // await updateSettings(); adding the user to arrival will trigger this
     try {
+
         // Turn off Milo's camera
         const result = await powerPlug(req.body.password, 1, false);
         if (!result) {
@@ -423,41 +556,68 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
             return;
         }
 
-        console.log(req.body.who ? req.body.who : "Anonymous", "arrived at the house");
+        const username = req.body.who ? req.body.who : "Anonymous"
+        console.log(username, "arrived at the house");
+        // Ensure settings.usersHome is an array
+        if (!Array.isArray(settings.usersHome)) {
+          settings.usersHome = [settings.usersHome];
+        }
+  
 
-        console.log("Turning these lights back on:", lightsOn);
+        // Add the new user to the array
+        await updateSetting('usersHome', [...settings.usersHome, username]);
+
+        // Is it after sunset?
+        const afterSunset = await isAfterSunset();
+
 
         // Turn on all the lights which were turned off when we left
+        let lightsOn = settings.lightsOn
+
+        console.log("Turning these lights back on:", lightsOn);
         const password = req.body.password;
         await lights(lightsOn, true, password);
 
         // Extract filters (temp_lights can be a single string or an array)
-        const temp_lights = req.body.temp_lights
-        const temp_mins = req.body.temp_mins || 5
+        const temp_lights = settings.temp_lights.split(',').map(item => item.trim());
+        
 
-        if (temp_mins && temp_lights) {
-            // Ensure temp_lights is always an array for easier processing
-            const filters = Array.isArray(temp_lights) ? temp_lights : [temp_lights];
-
+        if (temp_lights) {
             // Find devices in lightsOn that match any of the provided values
             const tempDevices = lightsOn.filter(device =>
-                filters.includes(device.roomId) ||
-                filters.includes(device.deviceId) ||
-                filters.includes(device.label)
+              temp_lights.includes(device.roomId) ||
+              temp_lights.includes(device.deviceId) ||
+              temp_lights.includes(device.label)
             );
 
-            if (tempDevices.length > 0) {
-                console.log(`Waiting ${temp_mins} minutes before turning off these devices:`, tempDevices);
+            // If it is after sunset, include all temp_lights from getDevices in the tempDevices.
+            if (afterSunset) {
+                const allDevices = await listDevices();
+                const tempDevicesAll = allDevices.filter(device =>
+                  temp_lights.includes(device.roomId) ||
+                  temp_lights.includes(device.deviceId) ||
+                  temp_lights.includes(device.label)
+                );
+                tempDevices.push(...tempDevicesAll);
+            }
 
-                setTimeout(async () => {
+            if (tempDevices.length > 0) {
+                console.log(`Waiting ${settings.temp_mins || 0.1} minutes before turning off these devices:`, tempDevices);
+                // clear the existing timeout (reset the timer)
+                if (temp_light_timeout) clearTimeout(temp_light_timeout)
+
+                temp_light_timeout = setTimeout(async () => {
                     console.log("Turning off temp lights:", tempDevices);
                     await lights(tempDevices, false, password);
-                }, temp_mins * 60 * 1000); // Convert minutes to milliseconds
+                    temp_light_timeout = null
+                }, (settings.temp_mins || 0.1) * 60 * 1000); // Convert minutes to milliseconds
             }
         }
 
         // Clear lightsOn after turning them back on
-        lightsOn = [];
+        // Now its in the database
+        // lightsOn = [];
+        updateSettings('lightsOn', [])
 
         // Send a success response
         res.json({ success: true });
@@ -976,65 +1136,10 @@ pingUrl();
             // Check if the codes match, if so add the device
             if (user.code == req.body.code)
             {
-              // Before adding this device, check if we can activate trial tokens
-              Trial.findOne({}).then((trial_doc) => {
-
-                const emailExists = trial_doc.emails.includes(user.email);
-                const deviceExists = trial_doc.devices.includes(user.pending_device);
-                let new_user = true
-
-                if (emailExists)
-                {
-                  new_user = false
-                }
-                else
-                {
-                  trial_doc.emails.push(user.email)
-                }
-
-                if (deviceExists)
-                {
-                  new_user = false
-                }
-                else
-                {
-                  trial_doc.devices.push(user.pending_device)
-                }
-
-                
-
-                trial_doc.save()
-
-
-                // Confirm email / grant trial if applicable
-                User.findByIdAndUpdate(
-                  user._id,
-                  {
-                    // Grant trial if applicable
-                    // $inc: { tokens: new_user? process.env.TRIAL_TOKENS: 0 },
-                    $set: { email_confirmed: true }, // Confirmed the email
-                    $push: { devices: user.pending_device}
-                  },
-                  { new: true }).then((updatedUser) => {
-
-                    if (updatedUser) {
-                      response.status(200).send({
-                        message: "Success!",
-                        new_user: new_user,
-                        new_account: !user.account_complete,
-                        token: user._id
-                      });
-
-
-                    } else {
-                      response.status(404).send({
-                          message: "Could not locate user",
-                      });
-                    }
-
-                  })
-              })
-
+              response.status(200).send({
+                message: "Success!",
+                token: user._id
+              });
                 
                   
 
@@ -1277,6 +1382,7 @@ router.post('/update-account', (req, res) => {
 
 router.post("/log-or-reg", (request, response) => {
     // check if email exists
+    updateSettings()
     
     User.findOne({ email: request.body.email })
     
@@ -1301,18 +1407,7 @@ router.post("/log-or-reg", (request, response) => {
 
             console.log('Logging in..')
 
-            //Now check if device is permitted
-            if (bypass_confirmations || user.devices.includes(request.body.device) || user.email == "demo@demo.demo")
-            {
-
-                response.status(200).send({
-                    message: "Login Successful",
-                    token: user._id,
-                    new_account: !user.account_complete,
-                    new_user: false
-                });
-            }
-            else 
+            // Force 2FA for each login
             {
                 // Device not recognized. Send email code to recognize device!
                 // When code is entered, allow the login and add the device to DB.
@@ -1350,6 +1445,22 @@ router.post("/log-or-reg", (request, response) => {
       })
       // catch error if email does not exist
       .catch((e) => {
+
+        // Make sure we're on the whitelist. If not, return with error. The whilelist is found in settings.users_whitelist
+
+        // settings.users_whitelist is a csv string. Convert it to an array so we can use .includes on it
+        const whitelist = settings.users_whitelist.split(',').map(item => item.trim());
+
+
+        if (!whitelist.includes(request.body.email))
+        {
+          response.status(401).send({
+            message: "Unauthorized",
+            e,
+          });
+          return
+        }
+        
         
         // @REGISTER : EMAIL NOT FOUND
         // hash the password
@@ -1367,30 +1478,8 @@ router.post("/log-or-reg", (request, response) => {
           user.save()
             // return success if the new user is added to the database successfully
             .then((result) => {
-              // Email me of the new user, if option is enabled
-              Options.findOne({}).then((option_doc) => {
-                if (option_doc.registerAlerts)
-                {
-                  // Send the email
-                  const mailOptions = {
-                    from: process.env.MAILER_USER,
-                    to: process.env.MAILER_USER,
-                    bcc: process.env.ADMIN_EMAIL,
-                    subject: `${process.env.APP_NAME} new user! 😁`,
-                    text: `${request.body.email} has signed up!`,
-                  };
-                
-                  // Send the email
-                  transporter.sendMail(mailOptions, (error, info) => {
-                    if (error) {
-                      console.log('Error sending new user email (to myself):', error);
-                    } else {
-                    }
-                  });
-                  
-                }
+              
 
-              })
 
               if (bypass_confirmations)
               {
