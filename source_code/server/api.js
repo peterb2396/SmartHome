@@ -44,12 +44,36 @@ async function getAccessToken() {
       client_id: clientId,
       client_secret: clientSecret,
     });
+//     const data = new URLSearchParams();
+// data.append('grant_type', 'client_credentials');
+// data.append('client_id', process.env.SMART_CLIENT_ID);
+// data.append('client_secret', process.env.SMART_CLIENT_SECRET);
 
-    const headers = {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    };
+const headers = {
+  'Content-Type': 'application/x-www-form-urlencoded',
+};
 
-    const response = await axios.post('https://api.smartthings.com/oauth/token', data, { headers });
+var options = {
+  'method': 'POST',
+  'url': `https://api.smartthings.com/oauth/token?grant_type=client_credentials&client_id=${clientId}&client_secret=${clientSecret}`,
+  'headers': {
+    'Content-Type': 'application/x-www-form-urlencoded'
+  },
+  form: {
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret,
+  }
+};
+
+
+
+    
+
+    // const response = await axios.post('https://api.smartthings.com/oauth/token', data, { headers });
+    //const response = await axios.post(options)
+    const response = await axios.post(options.url, new URLSearchParams(options.form), { headers: options.headers });
+
 
     accessToken2 = response.data.access_token;
     tokenExpiration = Date.now() + response.data.expires_in * 1000;
@@ -58,6 +82,8 @@ async function getAccessToken() {
     return accessToken2;
   } catch (error) {
     console.error('Error getting access token:', error);
+    console.log(process.env.SMART_CLIENT_ID)
+console.log(process.env.SMART_CLIENT_SECRET)
   }
 }
 
