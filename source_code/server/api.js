@@ -416,7 +416,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
   router.post("/arrive", ensureAccessToken, async (req, res) => {
     try {
         // Turn off Milo's camera
-        const result = await powerPlug(req.body.password, 0, true);
+        const result = await powerPlug(req.body.password, 1, false);
         if (!result) {
             res.status(401).send("UNAUTHORIZED");
             console.log("Unauthorized request received");
