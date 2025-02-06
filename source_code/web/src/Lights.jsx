@@ -86,7 +86,7 @@ export default function Lights({ BASE_URL }) {
             <div className="card shadow-lg">
               <div className="card-body">
                 <h5 className="card-title">{device.label}</h5>
-                <p className="card-text">{device.manufacturerName}</p>
+                {/* <p className="card-text">{device.manufacturerName}</p> */}
                 
                 {/* Toggle On/Off Button */}
                 <button
