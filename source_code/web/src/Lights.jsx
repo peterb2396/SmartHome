@@ -90,15 +90,15 @@ export default function Lights({ BASE_URL }) {
                 
                 {/* Toggle On/Off Button */}
                 <button
-                  className={`btn ${device.status?.components.main.switch.switch.value === "on" ? "btn-success" : "btn-danger"}`}
+                  className={`btn ${device.status?.components.main.switch.switch.value|| device.status?.components.main.switchLevel.level.value > 0  === "on" ? "btn-success" : "btn-danger"}`}
                   onClick={() =>
                     handleToggleDevice(
                       device.deviceId,
-                      device.status?.components.main.switch.switch.value
+                      device.status?.components.main.switchLevel?.level?.value > 0 ? "on" : "off" || device.status?.components.main.switch.switch.value
                     )
                   }
                 >
-                  {device.status?.components.main.switch.switch.value === "on" ? "Turn Off" : "Turn On"}
+                  {device.status?.components.main.switch.switch.value === "on" || device.status?.components.main.switchLevel.level.value > 0 ? "Turn Off" : "Turn On"}
                 </button>
                 
                 {/* Brightness Control */}
