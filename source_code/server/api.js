@@ -552,6 +552,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
   
   router.get("/cb", async (req, res) => {
     console.log("callback hit")
+    res.json("callback hit")
   })
 
   router.post("/arrive", ensureAccessToken, async (req, res) => {
