@@ -49,14 +49,9 @@
   // DB connection
   dbConnect()
 
-  const clientId = process.env.SMART_CLIENT_ID;
-  const clientSecret = process.env.SMART_CLIENT_SECRET;
-
-  // Store token info (access and expiration)
-  let accessToken2 = process.env.SMART_PAT;
-  let tokenExpiration = 0;
-
   
+
+  // Tuya (GSPOTS)
   const ACCESS_ID = process.env.ACCESS_ID
   const ACCESS_SECRET = process.env.ACCESS_SECRET
   const BASE_URL = "https://openapi.tuyaus.com";
@@ -75,9 +70,26 @@
   async function updateSettings() {
     settings = await Settings.findOne();
 
-  }
+  } 
+  let accessToken2 = null;
+
   // Call once
-  updateSettings()
+  (async () => {
+    await updateSettings()
+
+    // Store token info (access and expiration)
+    accessToken2 = settings.access_token//process.env.SMART_PAT;
+    if (!accessToken2) accessToken2 = await getAccessToken();
+
+  })();
+
+  // Use the settings to get the access token.
+  const clientId = process.env.SMART_CLIENT_ID;
+  const clientSecret = process.env.SMART_CLIENT_SECRET;
+
+  
+
+  let tokenExpiration = 0;
 
   
   // Update a setting
@@ -110,75 +122,23 @@ router.post("/settings", async (req, res) => {
   }
 });
 
-router.get("/settings", async(req,res) => {
-  res.json(settings)
-})
+router.get("/settings", async (req, res) => {
+  // Create a copy of the settings object without the accessToken and refreshToken
+  const { accessToken, refreshToken, ...settingsWithoutTokens } = settings;
+  delete settingsWithoutTokens["$isNew"]
+  delete settingsWithoutTokens["$__"]
+  delete settingsWithoutTokens["_doc"]
 
 
-
-// Function to get a new access token (SmartThings)
-async function getAccessToken() {
-  try {
-
-
-//     const data = new URLSearchParams();
-// data.append('grant_type', 'client_credentials');
-// data.append('client_id', process.env.SMART_CLIENT_ID);
-// data.append('client_secret', process.env.SMART_CLIENT_SECRET);
-
-    var options = {
-      'method': 'POST',
-      'url': `https://api.smartthings.com/v1/oauth/token?grant_type=client_credentials&client_id=${clientId}&client_secret=${clientSecret}`,
-      'headers': {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      form: {
-        grant_type: 'client_credentials',
-        client_id: clientId,
-        client_secret: clientSecret,
-      }
-    };
-
-    
-
-    const data = qs.stringify({
-      grant_type: 'client_credentials',
-      client_id: clientId,
-      client_secret: clientSecret,
-    });
-
-    const headers = {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    };
-    const response = await axios.post('https://api.smartthings.com/oauth/token', data, { headers });
-    //const response = await axios.post(options)
-    // const response = await axios.post(options.url, new URLSearchParams(options.form), { headers: options.headers });
+  // Send the settings without accessToken and refreshToken
+  res.json(settingsWithoutTokens);
+});
 
 
-    accessToken2 = response.data.access_token;
-    tokenExpiration = Date.now() + response.data.expires_in * 1000;
-
-    console.log('Access Token:', accessToken2);
-    return accessToken2;
-  } catch (error) {
-    console.error('Error getting access token:', error);
-  }
-}
-
-
-// Ensure valid access token
-async function ensureValidToken() {
-  return
-  if (!accessToken2 || Date.now() >= tokenExpiration) {
-    console.log('Token expired or not available. Getting a new one...');
-    await getAccessToken();
-  }
-}
 
 // List devices
 // List devices
 async function listDevices() {
-  await ensureValidToken();
   
   try {
     // Fetch the list of devices
@@ -267,14 +227,16 @@ async function validatePassword(password)
         const user = await User
         .findOne({ _id: password })
   
-        if (!user) return null
+        if (!user) return false
+        return true
   
       } catch (error) {
-        return null
+        return false
       }
   
   
     }
+    else return true
 }
 
 // Turn off or on all or some lights
@@ -283,9 +245,9 @@ async function validatePassword(password)
 // Optionally provide a level for each light by including a level field.
 // * if this doesnt work, it may be because we need to provide an array of objects rather than just raw strings.
 async function lights(lightDevices = null, on = true, password, level = 100) {
-  await validatePassword(password)
+  const val = await validatePassword(password)
+  if (!val) return
 
-  await ensureValidToken();
 
   try {
 
@@ -439,7 +401,8 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
 
 
 
-    if (password !== process.env.PASSWORD) return null
+    const val = await validatePassword(password)
+    if (!val) return null
 
     // Get device id if we passed an index
     const devices = JSON.parse(process.env.DEVICES);
@@ -476,7 +439,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
       const result = await powerPlug(req.body.password, 1, true);
       if (!result) {
         res.status(401).send("UNAUTHORIZED");
-        console.log("Unauthorized request received");
+        console.log("Unauthorized request received!");
         return;
       }
       
@@ -709,14 +672,10 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
   });
 
 
-  // Daily Maitenance
-  // * Send warning emails
-  // * Delete inactive accounts (if they arent subscribed!)
-
   // Maitenance
-  //const job = cron.schedule('0 0 * * *', maintainUsers);
+  const job = cron.schedule('0 0 * * *', maintainUsers);
   //const job = cron.schedule('*/30 * * * * *', maintainUsers);
-  //job.start()
+  job.start()
   
 let latest;
 const bypass_confirmations = false
@@ -737,17 +696,49 @@ const pingUrl = () => {
 cron.schedule('*/10 * * * *', pingUrl);
 pingUrl();
 
+// Refresh the access token for SmartThings
+async function getAccessToken() {
+
+  try {
+    const response = await axios.post(
+      'https://api.smartthings.com/oauth/token',
+      new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        refresh_token: settings.refreshToken || "e69ec24e-5913-44af-94b9-7c567538d0c9",
+      }),
+      {
+        auth: {
+          username: clientId,
+          password: clientSecret,
+        },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      }
+    );
+
+
+    updateSetting('accessToken', response.data.access_token);
+    updateSetting('refreshToken', response.data.refresh_token);
+
+    // console.log('Access Token:', response.data.access_token);
+    return response.data.access_token;
+  } catch (error) {
+    console.error('Error fetching token:', error.response ? error.response.data : error.message);
+  }
+}
+
 
   async function maintainUsers()
   {
-    const currentDate = new Date();
 
     // Email me a confirmation that the server is running
     const mailOptions = {
       from: process.env.MAILER_USER,
       to: process.env.ADMIN_EMAIL,
-      subject: `Successful Template Maitenance`,
-      text: `Hi Peter, just a confirmation that maitenance has ran for all Template users successfully.`,
+      subject: `Successful SmartHome Maitenance`,
+      text: `Hi Peter, just a confirmation that maitenance has ran for the SmartHome`,
     };
   
     // Send the email
@@ -758,109 +749,10 @@ pingUrl();
       }
     });
 
-    // Calculate the date 10 days from now
-    const futureDate = new Date(currentDate);
-    futureDate.setDate(currentDate.getDate() + 10);
-
-    // Format the date as "Month Day, Year"
-    const options = { year: 'numeric', month: 'long', day: 'numeric' };
-    const formattedDate = futureDate.toLocaleDateString('en-US', options);
-
-
-    try {
-
-      // SUBSCRIPTIONS
-
-      // Find all users that renew today and check/update entitlements
-      let users = await User.find({renewal_date: currentDate.getDate()})
-        
-      // Iterate through each user and update tokens if they have an active entitlement
-      for (const user of users) {
-        let subscribed = await isSubscribed(user._id)
-        if (subscribed)
-        {
-          await User.updateOne({ _id: user._id }, { $set: { tokens: process.env.TOKEN_COUNT } });
-        }
-        else
-        {
-          // It looks like they expired today. Remove tokens.
-          // Update: They did pay for month long access.. so dont remove the tokens. 
-          await User.updateOne({ _id: user._id }, { $set: { renewal_date: 0 } });
-          // Be sure to stop renewing them.
-        }
-        
-      }
-
-
+    // Refresh the access token
+    await getAccessToken();
     
-      // Increment 'dormant' field by 1 for all users
-      await User.updateMany({}, { $inc: { dormant: 1 } });
 
-      // Find and remove users with 'marked_for_deletion' and 'email_confirmed' both set to false
-      await User.deleteMany({ marked_for_deletion: true });
-
-      // Email a warning to all inactive users
-      const dormantUsers = await User.find({
-        $and: [
-          { dormant: { $gte: 365 } }
-        ]
-      });
-
-      // Send each email to dormant users who are not subscribed
-      dormantUsers.forEach((user) => {
-        
-        // Dont delete paying users
-        if (!isSubscribed(user._id))
-        {
-          const mailOptions = {
-            from: process.env.MAILER_USER,
-            to: user.email,
-            subject: `${process.env.APP_NAME} account scheduled for deletion`,
-            text: `Your ${process.env.APP_NAME} account hasn't been accessed in ${user.dormant} days, 
-            and data is scheduled to be purged from our system on ${formattedDate}. 
-            To keep your data, simply log in to your account. We hope to see you soon!`,
-          };
-        
-          // Send the email
-          transporter.sendMail(mailOptions, (error, info) => {
-            if (error) {
-              console.log('Error sending warning email:', error);
-            } else {
-            }
-          });
-  
-
-        }
-        
-      });
-
-
-      // MARK UNCONFIRMED USERS FOR DELETION
-      try {
-        // Find users where 'email_confirmed' is false
-        const unconfirmedUsers = await User.find({ email_confirmed: false });
-    
-        // For all unconfirmed users prepare to mark for deletion
-        // If they are not subscribed
-        const updatePromises = unconfirmedUsers
-        .filter(user => !isSubscribed(user._id))
-        .map((user) => {
-          user.marked_for_deletion = true;
-          return user.save();
-        });
-
-    
-        // Execute all the update operations
-        await Promise.all(updatePromises);
-    
-      } catch (error) {
-        console.error('Error marking users for deletion:', error);
-      }
-
-
-    } catch (error) {
-      console.error('Error updating users:', error);
-    }
   }
 
 

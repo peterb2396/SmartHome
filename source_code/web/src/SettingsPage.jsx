@@ -6,6 +6,7 @@ export default function SettingsPage({ BASE_URL }) {
   const [settings, setSettings] = useState({});
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
+  const [name, setName] = useState(""); // For the name input
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -40,11 +41,18 @@ export default function SettingsPage({ BASE_URL }) {
     updateSetting(key, value);
   };
 
+  const handleTransitAction = async (action) => {
+    await axios.post(`${BASE_URL}/${action}`, {"who": name, "password": localStorage.getItem('token')});
+
+    setName("")
+    fetchSettings()
+  };
+
   return (
     <div className="container mt-5">
-
       <div className="row">
         <div className="col-md-8 mx-auto">
+          {/* Main Settings Card */}
           <div className="card shadow-lg p-4">
             <div className="card-body">
               <h5 className="card-title mb-3">Manage Settings</h5>
@@ -56,10 +64,18 @@ export default function SettingsPage({ BASE_URL }) {
                       key={key}
                       className="list-group-item d-flex justify-content-between align-items-center border rounded mb-2"
                     >
-                      <strong>{key}</strong>
+                      <strong>{key
+                      .replace("temp_lights", "Temporary Lights")
+                      .replace("temp_mins", "Temporary Minutes")
+                      .replace("usersHome", "Who's Home")
+                      .replace("users_whitelist", "Users")
+                      
+                      }</strong>
                       <input
                         type="text"
-                        value={Array.isArray(settings[key])? settings[key].join(', ') : settings[key]}
+                        value={Array.isArray(settings[key])
+                          ? settings[key].join(", ")
+                          : settings[key]}
                         onChange={(e) =>
                           setSettings((prev) => ({
                             ...prev,
@@ -93,6 +109,34 @@ export default function SettingsPage({ BASE_URL }) {
                 />
                 <button className="btn btn-primary" onClick={addSetting}>
                   Add
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Simulate Transit Card */}
+          <div className="card shadow-lg p-4 mt-4">
+            <div className="card-body">
+              <h5 className="card-title mb-3">Simulate Transit</h5>
+              <div className="d-flex gap-2">
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Enter Name"
+                  className="form-control w-50"
+                />
+                <button
+                  className="btn btn-success"
+                  onClick={() => handleTransitAction("arrive")}
+                >
+                  Arrive
+                </button>
+                <button
+                  className="btn btn-danger"
+                  onClick={() => handleTransitAction("leave")}
+                >
+                  Leave
                 </button>
               </div>
             </div>
