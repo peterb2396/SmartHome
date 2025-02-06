@@ -100,19 +100,6 @@ const Account = (props) => {
       <h2 className="title">MODIFY ACCOUNT</h2>
       <form onSubmit={updateAccount}>
         <div className="form-group">
-          <label style={{ marginLeft: "5px", color: "gray" }}>Company Name</label>
-          <input
-            style={{ margin: "5px" }}
-            type="text"
-            value={company}
-            onChange={(e) => setCompany(e.target.value)}
-            className="form-control"
-            id="companyInput"
-            placeholder="Enter company"
-          />
-        </div>
-
-        <div className="form-group">
           <label style={{ marginLeft: "5px", color: "gray" }}>Password</label>
           <input
             style={{ margin: "5px" }}

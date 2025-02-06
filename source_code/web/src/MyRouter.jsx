@@ -3,7 +3,7 @@ import React from 'react';
 import { Routes, Route } from "react-router-dom";
 
 import Nav from './Nav';
-import Account from './Account';
+// import Account from './Account';
 import Dashboard from './Dashboard';
 import Lights from './Lights';
 
@@ -16,9 +16,9 @@ const MyRouter = ({host}) => {
     
     <Nav></Nav>
       <Routes>
-          <Route index element={<Dashboard BASE_URL = {host}/>} />
-          <Route path="account" element={<Account host = {host}/>} />
-          <Route path="lights" element={<Lights BASE_URL = {host}/>} />
+          <Route index element={<Lights BASE_URL = {host}/>} />
+          <Route path="settings" element={<Dashboard BASE_URL = {host}/>} />
+          {/* <Route path="account" element={<Account host = {host}/>} /> */}
 
       </Routes>
     
