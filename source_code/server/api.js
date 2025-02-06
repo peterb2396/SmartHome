@@ -13,28 +13,37 @@
   const moment = require('moment');
 
   // To determine sunset
-  const zipCode = '16901'; // Wellsboro, PA
-  const apiUrl = `https://api.sunrise-sunset.org/json?zip=${zipCode}&formatted=0`;
+  const lat = 41.722034;  // wellsboro
+  const lng = -77.263969; // 
+  const apiUrl = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lng}&formatted=0`;
+
 
   async function isAfterSunset() {
     try {
       // Fetch the sunset data
       const response = await axios.get(apiUrl);
-      const sunsetTime = response.data.results.sunset;
-      
-      // Convert sunset time to a moment object
-      const sunsetMoment = moment(sunsetTime);
+      const sunsetTime = response.data.results.sunset;  // Sunset time in UTC
   
-      // Get the current time in the same format as sunset (UTC)
-      const currentTime = moment.utc();
+      // Convert sunset time from UTC to Eastern Time
+      let sunsetMoment = moment.utc(sunsetTime).subtract(5, 'hours');
+  
+      // Get the current time in UTC and convert to Eastern Time
+      let currentTime = moment.utc().subtract(5, 'hours');
+  
+      // Ensure sunsetMoment is using today's date
+      sunsetMoment = sunsetMoment.date(currentTime.date());
   
       // Check if current time is after sunset
-      return currentTime.isAfter(sunsetMoment)
-
+      return currentTime.isAfter(sunsetMoment);
+  
     } catch (error) {
       console.error('Error fetching sunset data:', error);
     }
   }
+  
+  
+  
+  
 
 
   // DB connection
@@ -541,7 +550,9 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
   });
 
   
-  
+  router.get("/cb", async (req, res) => {
+    console.log("callback hit")
+  })
 
   router.post("/arrive", ensureAccessToken, async (req, res) => {
     // Get latest settings
@@ -564,8 +575,9 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         }
   
 
-        // Add the new user to the array
-        await updateSetting('usersHome', [...settings.usersHome, username]);
+        // Add the new user to the array if they're not already in it
+        if (!settings.usersHome.includes(username)) 
+          await updateSetting('usersHome', [...settings.usersHome, username]);
 
         // Is it after sunset?
         const afterSunset = await isAfterSunset();
@@ -574,12 +586,26 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         // Turn on all the lights which were turned off when we left
         let lightsOn = settings.lightsOn
 
+        // Extract filters (temp_lights can be a single string or an array)
+        const temp_lights = settings.temp_lights.split(',').map(item => item.trim());
+
+         // If it is after sunset, include all temp_lights from getDevices in the tempDevices.
+         // This will turn on all lights when we arrive to see in the dark.
+         if (afterSunset) {
+          const allDevices = await listDevices();
+          const tempDevicesAll = allDevices.filter(device =>
+            temp_lights.includes(device.roomId) ||
+            temp_lights.includes(device.deviceId) ||
+            temp_lights.includes(device.label)
+          );
+          lightsOn.push(...tempDevicesAll);
+      }
+
         console.log("Turning these lights back on:", lightsOn);
         const password = req.body.password;
         await lights(lightsOn, true, password);
 
-        // Extract filters (temp_lights can be a single string or an array)
-        const temp_lights = settings.temp_lights.split(',').map(item => item.trim());
+        
         
 
         if (temp_lights) {
@@ -590,16 +616,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
               temp_lights.includes(device.label)
             );
 
-            // If it is after sunset, include all temp_lights from getDevices in the tempDevices.
-            if (afterSunset) {
-                const allDevices = await listDevices();
-                const tempDevicesAll = allDevices.filter(device =>
-                  temp_lights.includes(device.roomId) ||
-                  temp_lights.includes(device.deviceId) ||
-                  temp_lights.includes(device.label)
-                );
-                tempDevices.push(...tempDevicesAll);
-            }
+           
 
             if (tempDevices.length > 0) {
                 console.log(`Waiting ${settings.temp_mins || 0.1} minutes before turning off these devices:`, tempDevices);

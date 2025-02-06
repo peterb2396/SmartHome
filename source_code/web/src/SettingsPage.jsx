@@ -42,7 +42,6 @@ export default function SettingsPage({ BASE_URL }) {
 
   return (
     <div className="container mt-5">
-      <h1 className="text-center mb-4">Smart Home Settings</h1>
 
       <div className="row">
         <div className="col-md-8 mx-auto">

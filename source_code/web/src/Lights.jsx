@@ -79,7 +79,6 @@ export default function Lights({ BASE_URL }) {
 
   return (
     <div className="container mt-5">
-      <h1 className="text-center mb-4">Lights Dashboard</h1>
 
       <div className="row">
         {devices.map((device) => (
