@@ -14,13 +14,13 @@ app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
 // Make middleware to print post details
-app.use((req, res, next) => {
-  console.log(`User accessed: ${req.method} ${req.originalUrl}`);
-  if (req.method === 'POST') {
-    console.log('Body:', req.body); // Log the body for POST requests
-  }
-  next(); // Passes control to the next middleware or route handler
-});
+// app.use((req, res, next) => {
+//   console.log(`User accessed: ${req.method} ${req.originalUrl}`);
+//   if (req.method === 'POST') {
+//     console.log('Body:', req.body); // Log the body for POST requests
+//   }
+//   next(); // Passes control to the next middleware or route handler
+// });
 
 app.use(express.json());
 app.use (express.urlencoded({extended: true}));

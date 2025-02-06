@@ -78,7 +78,7 @@
     await updateSettings()
 
     // Store token info (access and expiration)
-    accessToken2 = settings.access_token//process.env.SMART_PAT;
+    accessToken2 = settings.access_token
     if (!accessToken2) accessToken2 = await getAccessToken();
 
   })();
