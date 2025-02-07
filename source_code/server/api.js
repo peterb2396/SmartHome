@@ -71,17 +71,9 @@
     settings = await Settings.findOne();
 
   } 
-  let accessToken2 = null;
-
   // Call once
   (async () => {
     await updateSettings()
-
-    // Store token info (access and expiration)
-    accessToken2 = settings.accessToken
-    if (!accessToken2) accessToken2 = await getAccessToken();
-
-    maintainUsers()
 
   })();
 
@@ -146,7 +138,7 @@ async function listDevices() {
     // Fetch the list of devices
     const response = await axios.get('https://api.smartthings.com/v1/devices', {
       headers: {
-        Authorization: `Bearer ${accessToken2}`,
+        Authorization: `Bearer ${settings.accessToken}`,
       },
     });
 
@@ -156,7 +148,7 @@ async function listDevices() {
         try {
           const statusResponse = await axios.get(`https://api.smartthings.com/v1/devices/${device.deviceId}/status`, {
             headers: {
-              Authorization: `Bearer ${accessToken2}`,
+              Authorization: `Bearer ${settings.accessToken}`,
             },
           });
           // Merge the status into the device object
@@ -276,7 +268,7 @@ async function lights(lightDevices = null, on = true, password, level = 100) {
         },
         {
           headers: {
-            Authorization: `Bearer ${accessToken2}`,
+            Authorization: `Bearer ${settings.accessToken}`,
           },
         }
       );
@@ -474,7 +466,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
           `https://api.smartthings.com/v1/devices/${device.deviceId}/status`,
           {
             headers: {
-              Authorization: `Bearer ${accessToken2}`,
+              Authorization: `Bearer ${settings.accessToken}`,
             },
           }
         );
