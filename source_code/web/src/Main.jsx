@@ -8,7 +8,7 @@ import MyRouter from './MyRouter.jsx';
 
 const Main = () => {
 
-  //const SERVER_URL = `http://localhost:3001`
+  // const SERVER_URL = `http://localhost:3001`
   const SERVER_URL = `https://smarthome-backend-bn5n.onrender.com`
   
   document.body.style = 'background: #f2f2f2';

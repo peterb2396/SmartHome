@@ -19,8 +19,27 @@ export default function Lights({ BASE_URL }) {
   }, [BASE_URL]);
 
   useEffect(() => {
-    fetchDevices();
+    fetchDevices(); // Initial fetch when component mounts
+  
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        fetchDevices();
+      }
+    };
+  
+    const handleFocus = () => {
+      fetchDevices();
+    };
+  
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
+  
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleFocus);
+    };
   }, [fetchDevices]);
+  
 
   // Function to update the device state (turn on/off or adjust brightness)
   const updateDeviceState = async (deviceId, on, level) => {
