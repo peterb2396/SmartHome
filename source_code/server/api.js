@@ -78,8 +78,10 @@
     await updateSettings()
 
     // Store token info (access and expiration)
-    accessToken2 = settings.access_token
+    accessToken2 = settings.accessToken
     if (!accessToken2) accessToken2 = await getAccessToken();
+
+    maintainUsers()
 
   })();
 
@@ -717,6 +719,7 @@ async function getAccessToken() {
         },
       }
     );
+
 
 
     updateSetting('accessToken', response.data.access_token);
