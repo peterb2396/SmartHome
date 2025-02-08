@@ -476,9 +476,6 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         }
       }
 
-      // Store all lights that are on in the database
-      updateSetting('lightsOn', lightsOn)
-
       // If this house is not empty, only include temp lights (dont turn lights off on people who are home)
       if (!homeEmpty)
       {
@@ -488,6 +485,9 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
           temp_lights.includes(device.label)
         );
       }
+
+      // Store all lights that are on in the database
+      updateSetting('lightsOn', lightsOn)
   
       console.log(homeEmpty? "All lights" : "Temp lights", "that are currently on:", lightsOn);
   
