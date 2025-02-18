@@ -6,7 +6,11 @@ export default function Lights({ BASE_URL }) {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Fetch the list of devices from /list-devices endpoint
+  // Section visibility state
+  const [showLights, setShowLights] = useState(true);
+  const [showAppliances, setShowAppliances] = useState(true);
+  const [showSmartPlugs, setShowSmartPlugs] = useState(true);
+
   const fetchDevices = useCallback(async () => {
     try {
       const { data } = await axios.get(`${BASE_URL}/list-devices`);
@@ -19,78 +23,116 @@ export default function Lights({ BASE_URL }) {
   }, [BASE_URL]);
 
   useEffect(() => {
-    fetchDevices(); // Initial fetch when component mounts
-  
+    fetchDevices();
+
     const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        fetchDevices();
-      }
+      if (!document.hidden) fetchDevices();
     };
-  
-    const handleFocus = () => {
-      fetchDevices();
-    };
-  
+
+    const handleFocus = () => fetchDevices();
+
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("focus", handleFocus);
-  
+
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("focus", handleFocus);
     };
   }, [fetchDevices]);
-  
 
-  // Function to update the device state (turn on/off or adjust brightness)
   const updateDeviceState = async (deviceId, on, level) => {
     try {
       const payload = {
         devices: [deviceId],
-        on: on, // "on" or "off"
-        password: localStorage.getItem('token'), // Replace with actual password or token
-        level: level, // Brightness level (0-100)
+        on: on === "on",
+        password: localStorage.getItem("token"),
+        level: level,
       };
       await axios.post(`${BASE_URL}/lights`, payload);
-
-      // Refresh UI
-      fetchDevices()
+      fetchDevices();
     } catch (error) {
       console.error("Error updating device state:", error);
     }
   };
 
-  // Function to handle the toggle of device on/off
   const handleToggleDevice = (deviceId, currentState) => {
-    const newState = currentState === "on" ? "off" : "on"; // Toggle between "on" and "off"
-    const newBrightness = newState === "on" ? 100 : 0; // Set brightness to 100 when on, 0 when off
-    updateDeviceState(deviceId, newState, newBrightness);
+    const newState = currentState === "on" ? "off" : "on";
+    updateDeviceState(deviceId, newState);
   };
 
-  // Function to handle the brightness change when slider is released
   const handleBrightnessChange = (deviceId, level) => {
-    updateDeviceState(deviceId, "on", Number(level)); // Keep device on while adjusting brightness
+    updateDeviceState(deviceId, "on", Number(level));
   };
 
-  // Function to handle real-time slider change
   const handleSliderChange = (deviceId, level) => {
-    setDevices(devices.map((device) =>
-      device.deviceId === deviceId ? {
-        ...device,
-        status: {
-          ...device.status,
-          components: {
-            ...device.status.components,
-            main: {
-              ...device.status.components.main,
-              switchLevel: {
-                level: { value: level }
-              }
+    setDevices((devices) =>
+      devices.map((device) =>
+        device.deviceId === deviceId
+          ? {
+              ...device,
+              status: {
+                ...device.status,
+                components: {
+                  ...device.status.components,
+                  main: {
+                    ...device.status.components.main,
+                    switchLevel: {
+                      level: { value: level },
+                    },
+                  },
+                },
+              },
             }
-          }
-        }
-      } : device
-    ));
+          : device
+      )
+    );
   };
+
+  // Format operating state using data from "samsungce.dryerOperatingState"
+  const formatOperatingState = (operatingStateObj) => {
+    if (!operatingStateObj?.operatingState) return null;
+    const { value, completionTime } = operatingStateObj.operatingState;
+    const stateLower = value.toLowerCase();
+
+    if (stateLower === "finished" || stateLower === "ready") {
+      if (completionTime) {
+        const eventTime = new Date(completionTime.value || completionTime);
+        const now = new Date();
+        const isToday = eventTime.toDateString() === now.toDateString();
+        const timeString = eventTime.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        return `Finished ${isToday ? "today" : "on " + eventTime.toLocaleDateString()} at ${timeString}`;
+      }
+      return "Finished";
+    } else if (stateLower === "running") {
+      // If running, use remainingTimeStr if available
+      if (operatingStateObj.remainingTimeStr?.value) {
+        return `${operatingStateObj.washerJobState? operatingStateObj.washerJobState.value : operatingStateObj.dryerJobState? operatingStateObj.dryerJobState.value: "Running"} – ${operatingStateObj.remainingTimeStr.value} remaining`;
+      }
+      return "Running";
+    } else {
+      return value.charAt(0).toUpperCase() + value.slice(1);
+    }
+  };
+
+  // Filter devices into categories
+  const lightsDevices = devices.filter(
+    (device) => device.name && device.name.toLowerCase().startsWith("c2c") &&
+    device.name && !device.name.toLowerCase().includes("switch")
+  );
+  const appliancesDevices = devices.filter(
+    (device) =>
+      device.deviceTypeName &&
+      device.deviceTypeName.toLowerCase().includes("samsung")
+  );
+  const smartPlugsDevices = devices.filter(
+    (device) =>
+      !(device.deviceTypeName && device.deviceTypeName.toLowerCase().includes("samsung")) &&
+      device.name && device.name.toLowerCase().includes("switch")
+
+  );
 
   if (loading) {
     return <div>Loading devices...</div>;
@@ -98,48 +140,236 @@ export default function Lights({ BASE_URL }) {
 
   return (
     <div className="container mt-5">
+      {/* Lights Section */}
+      <h2
+        className="mb-3"
+        style={{ cursor: "pointer", borderBottom: "2px solid #ccc" }}
+        onClick={() => setShowLights(!showLights)}
+      >
+        Lights {showLights ? "−" : "+"}
+      </h2>
+      {showLights && (
+        <div className="row mb-5">
+          {lightsDevices.map((device) => {
+            const mainStatus = device.status?.components?.main || {};
+            const isOn =
+              mainStatus.switch?.switch?.value === "on" ||
+              mainStatus.switchLevel?.level?.value > 0;
+              
+            return (
+              <div key={device.deviceId} className="col-md-4 mb-4">
+                <div className="card shadow-lg">
+                  <div className="card-body">
+                    {/* <h5 className="card-title">{device.label} {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"? "(Offline)": ""}</h5> */}
+                    <button
+                      className={`btn ${isOn ? "btn-success" : "btn-danger"}`}
+                      onClick={() =>
+                        handleToggleDevice(device.deviceId, isOn ? "on" : "off")
+                      }
+                      disabled = {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"}
+                    >
+                      {/* {isOn ? "Turn Off" : "Turn On"} */}
+                      {device.label} {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"? "(Offline)": ""}
 
-      <div className="row">
-        {devices.map((device) => (
-          <div key={device.deviceId} className="col-md-4 mb-4">
-            <div className="card shadow-lg">
-              <div className="card-body">
-                <h5 className="card-title">{device.label}</h5>
-                {/* <p className="card-text">{device.manufacturerName}</p> */}
-                
-                {/* Toggle On/Off Button */}
-                <button
-                  className={`btn ${(device.status?.components.main.switch.switch.value === "on" || device.status?.components.main.switchLevel.level.value > 0) ? "btn-success" : "btn-danger"}`}
-                  onClick={() =>
-                    handleToggleDevice(
-                      device.deviceId,
-                      (device.status?.components.main.switchLevel?.level?.value > 0 ? "on" : "off") || device.status?.components.main.switch.switch.value
-                    )
-                  }
-                >
-                  {(device.status?.components.main.switch.switch.value === "on" || device.status?.components.main.switchLevel.level.value > 0) ? "Turn Off" : "Turn On"}
-                </button>
-                
-                {/* Brightness Control */}
-                <div className="mt-3">
-                  <label htmlFor={`brightness-${device.deviceId}`} className="form-label">Brightness</label>
-                  <input
-                    type="range"
-                    className="form-range"
-                    min="0"
-                    max="100"
-                    id={`brightness-${device.deviceId}`}
-                    value={device.status?.components.main.switchLevel.level.value || 0}
-                    onChange={(e) => handleSliderChange(device.deviceId, e.target.value)} // Update brightness in state while sliding
-                    onMouseUp={(e) => handleBrightnessChange(device.deviceId, e.target.value)} // Trigger on release
-                    onTouchEnd={(e) => handleBrightnessChange(device.deviceId, e.target.value)} // Handle touch for mobile
-                  />
+                    </button>
+                    {mainStatus.switchLevel && (
+                      <div className="mt-3">
+                        <label
+                          htmlFor={`brightness-${device.deviceId}`}
+                          className="form-label"
+                        >
+                          Brightness
+                        </label>
+                        <input
+                          type="range"
+                          className="form-range"
+                          min="0"
+                          max="100"
+                          id={`brightness-${device.deviceId}`}
+                          value={mainStatus.switchLevel.level?.value || 0}
+                          onChange={(e) =>
+                            handleSliderChange(device.deviceId, e.target.value)
+                          }
+                          onMouseUp={(e) =>
+                            handleBrightnessChange(device.deviceId, e.target.value)
+                          }
+                          onTouchEnd={(e) =>
+                            handleBrightnessChange(device.deviceId, e.target.value)
+                          }
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Appliances Section */}
+      <h2
+        className="mb-3"
+        style={{ cursor: "pointer", borderBottom: "2px solid #ccc" }}
+        onClick={() => setShowAppliances(!showAppliances)}
+      >
+        Appliances {showAppliances ? "−" : "+"}
+      </h2>
+      {showAppliances && (
+        <div className="row mb-5">
+          {appliancesDevices.map((device) => {
+            const mainStatus = device.status?.components?.main || {};
+            const isOn =
+              mainStatus.switch?.switch?.value === "on" ||
+              mainStatus.switchLevel?.level?.value > 0;
+            return (
+              <div key={device.deviceId} className="col-md-4 mb-4">
+                <div className="card shadow-lg">
+                  <div className="card-body">
+                    <div style = {{display: "flex", flexDirecton: "row", gap: 10, alignContent: "center", alignItems: "center"}}>
+                        {/* <h5 className="card-title">{device.label}</h5> */}
+                        {/* For appliances, show a disabled on/off button */}
+                        <button
+                        className={`btn ${isOn ? "btn-success" : "btn-danger"}`}
+                        disabled
+                        >
+                        {/* {isOn ? "On" : "Off"} */}
+                            {device.label}
+                        </button>
+                    </div>
+                    <div className="mt-3">
+                      {/* Operating State */}
+                      {mainStatus["samsungce.dryerOperatingState"] &&
+                        formatOperatingState(
+                          mainStatus["samsungce.dryerOperatingState"]
+                        ) && (
+                          <p>
+                            <strong>Status:</strong>{" "}
+                            {formatOperatingState(
+                              mainStatus["samsungce.dryerOperatingState"]
+                            )}
+                          </p>
+                        )}
+
+                {mainStatus["samsungce.washerOperatingState"] &&
+                        formatOperatingState(
+                          mainStatus["samsungce.washerOperatingState"]
+                        ) && (
+                          <p>
+                            <strong>Status:</strong>{" "}
+                            {formatOperatingState(
+                              mainStatus["samsungce.washerOperatingState"]
+                            )}
+
+                          </p>
+                        )}
+
+
+                      {/* Detergent info only if deviceTypeName includes "wash" */}
+
+                      {/* {device.deviceTypeName &&
+                        device.deviceTypeName.toLowerCase().includes("wash") &&
+                        mainStatus["samsungce.detergentState"] &&
+                        mainStatus["samsungce.detergentState"].detergentType?.value !=
+                          null && (
+                          <p>
+                            <strong>Detergent:</strong>{" "}
+                            {
+                              mainStatus["samsungce.detergentState"]
+                                .detergentType.value
+                            }
+                          </p>
+                        )} */}
+
+                      {device.deviceTypeName &&
+                        device.deviceTypeName.toLowerCase().includes("wash") &&
+                        mainStatus["samsungce.detergentState"] &&
+                        mainStatus["samsungce.detergentState"].remainingAmount
+                          ?.value != null && (
+                          <p>
+                            <strong>Detergent Remaining:</strong>{" "}
+                            {
+                              mainStatus["samsungce.detergentState"]
+                                .remainingAmount.value
+                            }{" "}
+                            {mainStatus["samsungce.detergentState"].remainingAmount
+                              .unit || ""}
+                          </p>
+                        )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Smart Plugs Section */}
+      <h2
+        className="mb-3"
+        style={{ cursor: "pointer", borderBottom: "2px solid #ccc" }}
+        onClick={() => setShowSmartPlugs(!showSmartPlugs)}
+      >
+        Smart Plugs {showSmartPlugs ? "−" : "+"}
+      </h2>
+      {showSmartPlugs && (
+        <div className="row mb-5">
+          {smartPlugsDevices.map((device) => {
+            const mainStatus = device.status?.components?.main || {};
+            const isOn =
+              mainStatus.switch?.switch?.value === "on" ||
+              mainStatus.switchLevel?.level?.value > 0;
+            return (
+              <div key={device.deviceId} className="col-md-4 mb-4">
+                <div className="card shadow-lg">
+                  <div className="card-body">
+                    {/* <h5 className="card-title">{device.label} {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"? "(Offline)": ""}</h5> */}
+                    <button
+                      className={`btn ${isOn ? "btn-success" : "btn-danger"}`}
+                      onClick={() =>
+                        handleToggleDevice(device.deviceId, isOn ? "on" : "off")
+                      }
+                      disabled = {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"}
+                    >
+                      {/* {isOn ? "Turn Off" : "Turn On"} */}
+                      {device.label} {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"? "(Offline)": ""}
+
+                    </button>
+                    {mainStatus.switchLevel && (
+                      <div className="mt-3">
+                        <label
+                          htmlFor={`brightness-${device.deviceId}`}
+                          className="form-label"
+                        >
+                          Brightness
+                        </label>
+                        <input
+                          type="range"
+                          className="form-range"
+                          min="0"
+                          max="100"
+                          id={`brightness-${device.deviceId}`}
+                          value={mainStatus.switchLevel.level?.value || 0}
+                          onChange={(e) =>
+                            handleSliderChange(device.deviceId, e.target.value)
+                          }
+                          onMouseUp={(e) =>
+                            handleBrightnessChange(device.deviceId, e.target.value)
+                          }
+                          onTouchEnd={(e) =>
+                            handleBrightnessChange(device.deviceId, e.target.value)
+                          }
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -44,7 +44,7 @@ export default function SettingsPage({ BASE_URL }) {
   const handleTransitAction = async (action) => {
     await axios.post(`${BASE_URL}/${action}`, {"who": name, "password": localStorage.getItem('token')});
 
-    setName("")
+    // setName("")
     fetchSettings()
   };
 
