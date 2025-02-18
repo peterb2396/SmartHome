@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
-import OpenBlinkButton from "./OpenBlinkButton";
+// import OpenBlinkButton from "./OpenBlinkButton";
 
 export default function Lights({ BASE_URL }) {
   const [devices, setDevices] = useState([]);
@@ -92,12 +92,12 @@ export default function Lights({ BASE_URL }) {
   // Format operating state using data from "samsungce.dryerOperatingState"
   const formatOperatingState = (operatingStateObj) => {
     if (!operatingStateObj?.operatingState) return null;
-    const { value, completionTime } = operatingStateObj.operatingState;
+    const { value, timestamp } = operatingStateObj.operatingState;
     const stateLower = value.toLowerCase();
 
     if (stateLower === "finished" || stateLower === "ready") {
-      if (completionTime) {
-        const eventTime = new Date(completionTime.value || completionTime);
+      if (timestamp) {
+        const eventTime = new Date(timestamp.value || timestamp);
         const now = new Date();
         const isToday = eventTime.toDateString() === now.toDateString();
         const timeString = eventTime.toLocaleTimeString([], {
@@ -339,10 +339,9 @@ export default function Lights({ BASE_URL }) {
 
                         </button>
 
-                        {device.label.toLowerCase().includes("cam") && (
+                        {/* {device.label.toLowerCase().includes("cam") && (
                         <OpenBlinkButton></OpenBlinkButton>
-
-                        )}
+                        )} */}
 
                     </div>
                   </div>
