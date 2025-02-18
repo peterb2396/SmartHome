@@ -165,7 +165,8 @@ async function listDevices() {
 
     try {
     await getAccessToken();
-    return await listDevices()
+    const devs = await listDevices()
+    return devs
     } catch (error) {
 
       console.error('Error listing devices:', error);
