@@ -162,8 +162,15 @@ async function listDevices() {
 
     return devicesWithStatus;
   } catch (error) {
-    console.error('Error listing devices:', error);
-    throw new Error('Failed to list devices');
+
+    try {
+    await getAccessToken();
+    return await listDevices()
+    } catch (error) {
+
+      console.error('Error listing devices:', error);
+      throw new Error('Failed to list devices');
+    }
   }
 }
 
