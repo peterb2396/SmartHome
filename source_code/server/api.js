@@ -162,6 +162,7 @@ async function listDevices() {
 
     return devicesWithStatus;
   } catch (error) {
+    console.log("Error listing devices. Trying agian")
 
     try {
     await getAccessToken();
@@ -246,7 +247,7 @@ async function validatePassword(password)
 // or an array of device IDs, room IDs, or device labels.
 // Optionally provide a level for each light by including a level field.
 // * if this doesnt work, it may be because we need to provide an array of objects rather than just raw strings.
-async function lights(lightDevices = null, on = true, password, level = 100) {
+async function lights(lightDevices = null, on = true, password, level) {
   const val = await validatePassword(password)
   if (!val) return
 
@@ -258,21 +259,29 @@ async function lights(lightDevices = null, on = true, password, level = 100) {
 
     for (const light of lights) {
       const deviceId = light.deviceId || light;
+      const commands = level ? [
+        {
+          capability: 'switch',
+          command: on ? 'on' : 'off',
+        },
+        {
+          capability: "switchLevel",  // Correct capability name
+          command: "setLevel",       // Correct command name
+          arguments: [on ? (light.level ? light.level : level) : 0], // Needs to be an array
+        },
+      ] : 
+      [
+        {
+          capability: 'switch',
+          command: on ? 'on' : 'off',
+        }
+      ]
+
 
       await axios.post(
         `https://api.smartthings.com/v1/devices/${deviceId}/commands`,
         {
-          commands: [
-            {
-              capability: 'switch',
-              command: on ? 'on' : 'off',
-            },
-            {
-              capability: "switchLevel",  // Correct capability name
-              command: "setLevel",       // Correct command name
-              arguments: [on ? (light.level ? light.level : level) : 0], // Needs to be an array
-            },
-          ],
+          commands: commands,
         },
         {
           headers: {
@@ -438,7 +447,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
 
     try {
       // Turn on Milo's camera
-      const result = await powerPlug(req.body.password, 1, true);
+      const result = await powerPlug(req.body.password, 0, true);
       if (!result) {
         res.status(401).send("UNAUTHORIZED");
         console.log("Unauthorized request received!");
@@ -460,9 +469,10 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
       // Fetch all devices and filter for light devices
       const allDevices = await listDevices();
       const lightDevices = allDevices.filter(device => 
-        device.components.some(component => 
-          component.capabilities.some(cap => cap.id === 'switch')
-        )
+        device.label.startsWith("c2c") && !device.label.includes("switch")
+        // device.components.some(component => 
+        //   component.capabilities.some(cap => cap.id === 'switch')
+        // )
       );
   
       // Store all lights that are currently on
@@ -526,7 +536,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     try {
 
         // Turn off Milo's camera
-        const result = await powerPlug(req.body.password, 1, false);
+        const result = await powerPlug(req.body.password, 0, false);
         if (!result) {
             res.status(401).send("UNAUTHORIZED");
             console.log("Unauthorized request received");
