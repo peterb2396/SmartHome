@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
+import OpenBlinkButton from "./OpenBlinkButton";
 
 export default function Lights({ BASE_URL }) {
   const [devices, setDevices] = useState([]);
@@ -325,44 +326,25 @@ export default function Lights({ BASE_URL }) {
                 <div className="card shadow-lg">
                   <div className="card-body">
                     {/* <h5 className="card-title">{device.label} {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"? "(Offline)": ""}</h5> */}
-                    <button
-                      className={`btn ${isOn ? "btn-success" : "btn-danger"}`}
-                      onClick={() =>
-                        handleToggleDevice(device.deviceId, isOn ? "on" : "off")
-                      }
-                      disabled = {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"}
-                    >
-                      {/* {isOn ? "Turn Off" : "Turn On"} */}
-                      {device.label} {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"? "(Offline)": ""}
-
-                    </button>
-                    {mainStatus.switchLevel && (
-                      <div className="mt-3">
-                        <label
-                          htmlFor={`brightness-${device.deviceId}`}
-                          className="form-label"
+                    <div style = {{display: 'flex', flexDirection: "row", gap:10, alignItems: "center", alignContent: "center"}}>
+                        <button
+                        className={`btn ${isOn ? "btn-success" : "btn-danger"}`}
+                        onClick={() =>
+                            handleToggleDevice(device.deviceId, isOn ? "on" : "off")
+                        }
+                        disabled = {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"}
                         >
-                          Brightness
-                        </label>
-                        <input
-                          type="range"
-                          className="form-range"
-                          min="0"
-                          max="100"
-                          id={`brightness-${device.deviceId}`}
-                          value={mainStatus.switchLevel.level?.value || 0}
-                          onChange={(e) =>
-                            handleSliderChange(device.deviceId, e.target.value)
-                          }
-                          onMouseUp={(e) =>
-                            handleBrightnessChange(device.deviceId, e.target.value)
-                          }
-                          onTouchEnd={(e) =>
-                            handleBrightnessChange(device.deviceId, e.target.value)
-                          }
-                        />
-                      </div>
-                    )}
+                        {/* {isOn ? "Turn Off" : "Turn On"} */}
+                        {device.label} {mainStatus.healthCheck["DeviceWatch-DeviceStatus"].value === "offline"? "(Offline)": ""}
+
+                        </button>
+
+                        {device.label.toLowerCase().includes("cam") && (
+                        <OpenBlinkButton></OpenBlinkButton>
+
+                        )}
+
+                    </div>
                   </div>
                 </div>
               </div>
