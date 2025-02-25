@@ -698,6 +698,7 @@ const pingUrl = () => {
   axios.get(urlToPing)
     .then((res) => {
       latest = res.data
+      console.log(latest)
       
     })
     .catch((error) => {
