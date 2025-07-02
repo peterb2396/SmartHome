@@ -560,6 +560,17 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
 
         const username = req.body.who ? req.body.who : "Anonymous"
         console.log(username, "arrived at the house");
+        // use bark api to send notification if meg arrived.
+        if (username !== "peter") {
+          axios.post(`https://api.day.app/${process.env.barkDeviceKey}`, {
+            title: "Home",
+            body: `${username.substring(0,1).toUpperCase() + username.substring(1, username.length)} arrived at home!`,
+            icon: "https://www.creativefabrica.com/wp-content/uploads/2021/11/20/GPS-location-symbol-Graphics-20483340-1-1-580x386.jpg",   // Small icon
+            group: 'home',
+            sound: 'minuet',
+          })
+        }
+
         // Ensure settings.usersHome is an array
         if (!Array.isArray(settings.usersHome)) {
           settings.usersHome = [settings.usersHome];
