@@ -444,15 +444,12 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     // Get the latest settings
     await updateSettings();
     const temp_lights = settings.temp_lights.split(',').map(item => item.trim())
+    const whenAway = settings.whenAway.split(',').map(item => item.trim());
+
+    const allDevices = await listDevices();
+
 
     try {
-      // Turn on Milo's camera
-      const result = await powerPlug(req.body.password, 0, true);
-      if (!result) {
-        res.status(401).send("UNAUTHORIZED");
-        console.log("Unauthorized request received!");
-        return;
-      }
       
       const username = req.body.who ? req.body.who : "Anonymous"
       console.log(username, "left the house");
@@ -465,9 +462,22 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
 
 
       const homeEmpty = usersHome.length === 0
+
+      
+      // Gathers all lights in the whenAway setting and turn them all on
+      // If the house is empty, turn on the whenAway lights
+      if (homeEmpty && whenAway.length > 0) {
+        const whenAwayDevices = allDevices.filter(device =>
+          whenAway.includes(device.roomId) ||
+          whenAway.includes(device.deviceId) ||
+          whenAway.includes(device.label)
+        );
+        // turn on these lights by passing an array of ids to the lights function
+        await lights(whenAwayDevices.map((d) => d.deviceId), true, req.body.password);
+      }
+
   
       // Fetch all devices and filter for light devices
-      const allDevices = await listDevices();
       const lightDevices = allDevices.filter(device => 
         device.label.startsWith("c2c") && !device.label.includes("switch")
         // device.components.some(component => 
@@ -535,13 +545,17 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     // await updateSettings(); adding the user to arrival will trigger this
     try {
 
-        // Turn off Milo's camera
-        const result = await powerPlug(req.body.password, 0, false);
-        if (!result) {
-            res.status(401).send("UNAUTHORIZED");
-            console.log("Unauthorized request received");
-            return;
-        }
+      const whenAway = settings.whenAway.split(',').map(item => item.trim());
+
+      if (whenAway.length > 0) {
+        const whenAwayDevices = allDevices.filter(device =>
+          whenAway.includes(device.roomId) ||
+          whenAway.includes(device.deviceId) ||
+          whenAway.includes(device.label)
+        );
+        // turn on these lights by passing an array of ids to the lights function
+        await lights(whenAwayDevices.map((d) => d.deviceId), false, req.body.password);
+      }
 
         const username = req.body.who ? req.body.who : "Anonymous"
         console.log(username, "arrived at the house");
