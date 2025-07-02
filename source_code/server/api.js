@@ -546,6 +546,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     try {
 
       const whenAway = settings.whenAway.split(',').map(item => item.trim());
+      const allDevices = await listDevices();
 
       if (whenAway.length > 0) {
         const whenAwayDevices = allDevices.filter(device =>
