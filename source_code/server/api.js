@@ -517,7 +517,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
       // Store all lights that are on in the database
       updateSetting('lightsOn', lightsOn)
   
-      console.log(homeEmpty? "All lights" : "Temp lights", "that are currently on:", lightsOn);
+      console.log(homeEmpty? "All lights" : "Temp lights", "that are currently on:", lightsOn.map((d) => d.label || d.deviceId));
   
       // Turn off all the lights
       // This will also turn off the outdoor lights that we put on before we left
@@ -603,7 +603,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
           lightsOn.push(...tempDevicesAll);
       }
 
-        console.log("Turning these lights back on:", lightsOn);
+        console.log("Turning these lights back on:", lightsOn.map((d) => d.label || d.deviceId));
         const password = req.body.password;
         await lights(lightsOn, true, password);
 
@@ -626,7 +626,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
                 if (temp_light_timeout) clearTimeout(temp_light_timeout)
 
                 temp_light_timeout = setTimeout(async () => {
-                    console.log("Turning off temp lights:", tempDevices);
+                    console.log("Turning off temp lights:", tempDevices.map((d) => d.label || d.deviceId));
                     await lights(tempDevices, false, password);
                     temp_light_timeout = null
                 }, (settings.temp_mins || 0.1) * 60 * 1000); // Convert minutes to milliseconds
