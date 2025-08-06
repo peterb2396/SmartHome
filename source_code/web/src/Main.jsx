@@ -9,7 +9,8 @@ import MyRouter from './MyRouter.jsx';
 const Main = () => {
 
   // const SERVER_URL = `http://localhost:3001`
-  const SERVER_URL = `https://smarthome153.onrender.com`
+  // const SERVER_URL = `https://smarthome153.onrender.com`
+  const SERVER_URL = `https://server.153home.online`
   
   document.body.style = 'background: #f2f2f2';
 

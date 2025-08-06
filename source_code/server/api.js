@@ -719,21 +719,25 @@ let latest;
 const bypass_confirmations = false
   
 const urlToPing = process.env.PING_URL;
- 
-const pingUrl = () => {
-  axios.get(urlToPing)
-    .then((res) => {
-      latest = res.data
-      console.log(latest)
-      
-    })
-    .catch((error) => {
-      setTimeout(pingUrl, 2000); // Retry after 2 seconds
-    });
-};
 
-cron.schedule('*/10 * * * *', pingUrl);
-pingUrl();
+if (urlToPing) {
+  const pingUrl = () => {
+    axios.get(urlToPing)
+      .then((res) => {
+        latest = res.data;
+        console.log(latest);
+      })
+      .catch((error) => {
+        setTimeout(pingUrl, 2000); // Retry after 2 seconds
+      });
+  };
+
+  cron.schedule('*/10 * * * *', pingUrl);
+  pingUrl();
+} else {
+  console.log('PING_URL environment variable not set. Skipping ping schedule.');
+}
+
 
 // Refresh the access token for SmartThings
 async function getAccessToken() {
