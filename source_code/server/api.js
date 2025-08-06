@@ -621,7 +621,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
            
 
             if (tempDevices.length > 0) {
-                console.log(`Waiting ${settings.temp_mins || 0.1} minutes before turning off these devices:`, tempDevices);
+                console.log(`Waiting ${settings.temp_mins || 0.1} minutes before turning off these devices:`, tempDevices.map((d) => d.label || d.deviceId));
                 // clear the existing timeout (reset the timer)
                 if (temp_light_timeout) clearTimeout(temp_light_timeout)
 
