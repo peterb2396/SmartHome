@@ -11,11 +11,14 @@
   const crypto = require("crypto");
   const qs = require('qs'); // Import qs for URL encoding
   const moment = require('moment');
+  const Telnet = require('telnet-client');
 
   // To determine sunset
   const lat = 41.722034;  // wellsboro
   const lng = -77.263969; // 
   const apiUrl = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lng}&formatted=0`;
+
+  
 
 
   async function isAfterSunset() {
@@ -48,6 +51,16 @@
 
   // DB connection
   dbConnect()
+
+  // Smart Bridge
+  const connection = new Telnet();
+  const params = {
+    host: '192.168.1.50', //Smart Bridge Pro IP
+    port: 23,
+    shellPrompt: '', // No prompt
+    timeout: 1500,
+    debug: false
+  };
 
   
 
@@ -99,6 +112,17 @@
 
 
 }
+
+router.get("/users", async (req, res) => {
+  try {
+    // Use projection to select only the fields you need
+    const users = await User.find({}, { _id: 1, email: 1 }).lean();
+    res.json(users.map(u => ({ id: u._id.toString(), name: u.email.substring(0, u.email.indexOf('@')) })));
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
 
 
 // API route to update a setting

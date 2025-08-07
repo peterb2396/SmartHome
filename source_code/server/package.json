@@ -20,6 +20,6 @@
     "nodemailer": "^6.9.13",
     "nodemon": "^2.0.22",
     "qs": "^6.14.0",
-    "telnet-client": "^2.2.2"
+    "telnet-client": "^2.2.6"
   }
 }
