@@ -316,7 +316,7 @@ export default function Lights({ BASE_URL }) {
                               ...styles.slider,
                               background: `linear-gradient(to right, #fbbf24 0%, #fbbf24 ${brightness}%, #e5e7eb ${brightness}%, #e5e7eb 100%)`
                             }}
-                            min="0"
+                            min="1"
                             max="100"
                             value={brightness}
                             onChange={(e) => handleSliderChange(device.deviceId, e.target.value)}
