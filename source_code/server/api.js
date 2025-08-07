@@ -267,18 +267,18 @@ async function lutron(id, brightness) {
 
     client.connect(23, "192.168.4.32", () => {
       client.write(`login: lutron\r\n`);
-      setTimeout(() => client.write(`integration\r\n`), 100);
+      setTimeout(() => client.write(`integration\r\n`), 500);
 
       setTimeout(() => {
         const command = `#OUTPUT,${id},1,${brightness}\r\n`; // Format for dimmer control
         client.write(command);
         console.log(`Sent Lutron command: ${command.trim()}`);
-      }, 300);
+      }, 1000);
 
       setTimeout(() => {
         client.destroy();
         resolve(true);
-      }, 500);
+      }, 1500);
     });
 
     client.on('error', (err) => {
