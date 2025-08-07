@@ -11,7 +11,11 @@ import Lights from './Lights';
 const MyRouter = ({host}) => {
    
     return (
-      <div style = {{display: "flex", flexDirection: "column", width: "100vw", height: "100vh"}}>
+      <div style = {{display: "flex", flexDirection: "column", width: "100vw",
+        background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        height: "100vh",
+  overflowY: "auto", }}>
     {/* Navbar section */}
     
     <Nav></Nav>

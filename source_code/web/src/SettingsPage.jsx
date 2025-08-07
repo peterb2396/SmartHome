@@ -6,7 +6,7 @@ export default function SettingsPage({ BASE_URL }) {
   const [settings, setSettings] = useState({});
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
-  const [name, setName] = useState(""); // For the name input
+  const [name, setName] = useState("peter"); // For the name input
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -57,37 +57,45 @@ export default function SettingsPage({ BASE_URL }) {
             <div className="card-body">
               <h5 className="card-title mb-3">Manage Settings</h5>
               <div className="list-group">
-                {Object.keys(settings)
-                  .filter((key) => key !== "_id" && key !== "lightsOn")
-                  .map((key) => (
-                    <div
-                      key={key}
-                      className="list-group-item d-flex justify-content-between align-items-center border rounded mb-2"
-                    >
-                      <strong>{key
-                      .replace("temp_lights", "Temporary Lights")
-                      .replace("temp_mins", "Temporary Minutes")
-                      .replace("usersHome", "Who's Home")
-                      .replace("users_whitelist", "Users")
-                      
-                      }</strong>
-                      <input
-                        type="text"
-                        value={Array.isArray(settings[key])
-                          ? settings[key].join(", ")
-                          : settings[key]}
-                        onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            [key]: e.target.value,
-                          }))
-                        }
-                        onBlur={(e) => handleBlur(key, e.target.value)}
-                        disabled={Array.isArray(settings[key])}
-                        className="form-control w-50"
-                      />
-                    </div>
-                  ))}
+              {Object.keys(settings)
+  .filter((key) =>
+    key !== "_id" &&
+    key !== "lightsOn" &&
+    key !== "lights" && (
+    typeof settings[key] !== "object" // exclude objects
+    || Array.isArray(settings[key])   // but allow arrays
+    )
+  )
+  .map((key) => (
+    <div
+      key={key}
+      className="list-group-item d-flex justify-content-between align-items-center border rounded mb-2"
+    >
+      <strong>{key
+        .replace("temp_lights", "Temporary Lights")
+        .replace("temp_mins", "Temporary Minutes")
+        .replace("usersHome", "Who's Home")
+        .replace("users_whitelist", "Users")
+        .replace("whenAway", "House Empty")
+      }</strong>
+      <input
+        type="text"
+        value={Array.isArray(settings[key])
+          ? settings[key].join(", ")
+          : settings[key]}
+        onChange={(e) =>
+          setSettings((prev) => ({
+            ...prev,
+            [key]: e.target.value,
+          }))
+        }
+        onBlur={(e) => handleBlur(key, e.target.value)}
+        disabled={Array.isArray(settings[key])}
+        className="form-control w-50"
+      />
+    </div>
+  ))}
+
               </div>
 
               <hr className="my-4" />

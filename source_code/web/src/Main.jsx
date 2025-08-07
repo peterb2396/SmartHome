@@ -12,7 +12,7 @@ const Main = () => {
   // const SERVER_URL = `https://smarthome153.onrender.com`
   const SERVER_URL = `https://server.153home.online`
   
-  document.body.style = 'background: #f2f2f2';
+  
 
   const [user, setUser] = useState(null);
   //const [clients, setClients] = useState(null);
@@ -90,7 +90,7 @@ const Main = () => {
 
     <BrowserRouter>
       <ScrollToTopOnRouteChange />
-      <MyRouter host={SERVER_URL} />
+      <MyRouter host={SERVER_URL}/>
     </BrowserRouter>
   );
 };
