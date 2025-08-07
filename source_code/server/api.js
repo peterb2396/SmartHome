@@ -11,7 +11,7 @@
   const crypto = require("crypto");
   const qs = require('qs'); // Import qs for URL encoding
   const moment = require('moment');
-  const Telnet = require('telnet-client');
+  // const Telnet = require('telnet-client');
 
   // To determine sunset
   const lat = 41.722034;  // wellsboro
@@ -51,17 +51,6 @@
 
   // DB connection
   dbConnect()
-
-  // Smart Bridge
-  const connection = new Telnet();
-  const params = {
-    host: '192.168.1.50', //Smart Bridge Pro IP
-    port: 23,
-    shellPrompt: '', // No prompt
-    timeout: 1500,
-    debug: false
-  };
-
   
 
   // Tuya (GSPOTS)
