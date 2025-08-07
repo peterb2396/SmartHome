@@ -11,7 +11,7 @@
   const crypto = require("crypto");
   const qs = require('qs'); // Import qs for URL encoding
   const moment = require('moment');
-  // const Telnet = require('telnet-client');
+  const net = require('net');
 
   // To determine sunset
   const lat = 41.722034;  // wellsboro
@@ -255,65 +255,117 @@ async function validatePassword(password)
     else return true
 }
 
-// Turn off or on all or some lights
-// can provide SmartThings device objects,
-// or an array of device IDs, room IDs, or device labels.
-// Optionally provide a level for each light by including a level field.
-// * if this doesnt work, it may be because we need to provide an array of objects rather than just raw strings.
-async function lights(lightDevices = null, on = true, password, level) {
-  const val = await validatePassword(password)
-  if (!val) return
+/**
+ * Send command to Lutron Bridge via Telnet
+ * @param {string|number} id - Lutron device ID
+ * @param {number} brightness - Brightness level (0-100)
+ * @returns {Promise<boolean>} Resolves true if success, rejects on error
+ */
+async function lutron(id, brightness) {
+  return new Promise((resolve, reject) => {
+    const client = new net.Socket();
 
+    client.connect(23, "192.168.4.32", () => {
+      client.write(`login: lutron\r\n`);
+      setTimeout(() => client.write(`integration\r\n`), 100);
+
+      setTimeout(() => {
+        const command = `#OUTPUT,${id},1,${brightness}\r\n`; // Format for dimmer control
+        client.write(command);
+        console.log(`Sent Lutron command: ${command.trim()}`);
+      }, 300);
+
+      setTimeout(() => {
+        client.destroy();
+        resolve(true);
+      }, 500);
+    });
+
+    client.on('error', (err) => {
+      console.error('Lutron Telnet error:', err);
+      reject(err);
+    });
+
+    client.on('close', () => {
+      console.log(`Lutron connection closed for device ${id}`);
+    });
+  });
+}
+
+/**
+ * Control lights using SmartThings API or Lutron (if lutronId exists).
+ * Falls back to SmartThings if Lutron command fails for a device.
+ * @param {Array|Object|null} lightDevices - List of lights or null for all
+ * @param {boolean} on - True for on, false for off
+ * @param {string} password - Auth password for your system
+ * @param {number} level - Brightness level (0-100)
+ */
+async function lights(lightDevices = null, on = true, password, level) {
+  const val = await validatePassword(password);
+  if (!val) return;
+
+  await updateSettings();
 
   try {
+    const allLights = lightDevices || await listDevices();
 
-    // const lights = await makeDevices(lightDevices);
-    const lights = lightDevices || await listDevices();
-
-    for (const light of lights) {
+    for (const light of allLights) {
       const deviceId = light.deviceId || light;
+      const deviceSettings = settings.lights?.[deviceId];
+
+      if (deviceSettings?.lutronId) {
+        // Try Lutron first
+        const brightness = on ? (level || 100) : 0;
+        try {
+          await lutron(deviceSettings.lutronId, brightness);
+          console.log(`Lutron control succeeded for device ${deviceId}`);
+          continue; // success, skip to next device
+        } catch (lutronErr) {
+          console.warn(`Lutron failed for device ${deviceId}, falling back to SmartThings. Error:`, lutronErr);
+          // fall through to SmartThings fallback
+        }
+      }
+
+      // Fallback or no lutronId - use SmartThings API
       const commands = level ? [
         {
           capability: 'switch',
           command: on ? 'on' : 'off',
         },
         {
-          capability: "switchLevel",  // Correct capability name
-          command: "setLevel",       // Correct command name
-          arguments: [on ? (light.level ? light.level : level) : 0], // Needs to be an array
+          capability: "switchLevel",
+          command: "setLevel",
+          arguments: [on ? (light.level ? light.level : level) : 0],
         },
-      ] : 
-      [
+      ] : [
         {
           capability: 'switch',
           command: on ? 'on' : 'off',
         }
-      ]
-
+      ];
 
       await axios.post(
         `https://api.smartthings.com/v1/devices/${deviceId}/commands`,
-        {
-          commands: commands,
-        },
+        { commands },
         {
           headers: {
             Authorization: `Bearer ${settings.accessToken}`,
           },
         }
       );
+      console.log(`SmartThings control used for device ${deviceId}`);
     }
   } catch (error) {
-    if (error.response.status === 429)
-    {
-      console.log('Too many requests. Trying again in ', error.response.headers['x-ratelimit-reset']);
+    if (error.response?.status === 429) {
+      console.log('Too many requests. Retrying in', error.response.headers['x-ratelimit-reset']);
       await new Promise(resolve => setTimeout(resolve, error.response.headers['x-ratelimit-reset']));
-      return lights(lightDevices, on, password);
+      return lights(lightDevices, on, password, level);
     }
     console.error('Error controlling lights:', error);
     throw new Error('Failed to control lights');
   }
 }
+
 
 
   // Function to get all devices ( SmartThings )
