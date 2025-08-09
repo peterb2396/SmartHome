@@ -44,12 +44,12 @@
         return;
     }
 
-    sendText("Motion in foyer!", "PIR Sensor")
+    // sendText("Motion in foyer!", "PIR Sensor")
 
     if (isAfterSunset) {
         console.log("Motion detected in foyer after sunset! Turning on foyer light");
         // Turn on foyer light
-        lights(FOYER_LIGHT, true, process.env.PASSWORD, 30); // Turn on foyer to 30% brightness
+        lights(FOYER_LIGHT, true, process.env.PASSWORD, 10); // Turn on foyer to 30% brightness
         // After 60s, turn it off (sleeping)
         setTimeout(() => {
             lights(FOYER_LIGHT, false, process.env.PASSWORD); // Turn off foyer
