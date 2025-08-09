@@ -44,6 +44,8 @@
         return;
     }
 
+    sendText("Motion in foyer!", "PIR Sensor")
+
     if (isAfterSunset) {
         console.log("Motion detected in foyer after sunset! Turning on foyer light");
         // Turn on foyer light
@@ -656,6 +658,19 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     res.json("callback hit")
   })
 
+  // Send peter a text
+  function sendText(msg, title)
+  {
+    axios.post(`https://api.day.app/${process.env.barkDeviceKey}`, {
+      title: title,
+      body: msg,
+      icon: "https://www.creativefabrica.com/wp-content/uploads/2021/11/20/GPS-location-symbol-Graphics-20483340-1-1-580x386.jpg",   // Small icon
+      group: 'home',
+      sound: 'minuet',
+    })
+  }
+
+
   router.post("/arrive", ensureAccessToken, async (req, res) => {
     // Get latest settings
     // await updateSettings(); adding the user to arrival will trigger this
@@ -678,13 +693,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         console.log(username, "arrived at the house");
         // use bark api to send notification if meg arrived.
         if (username !== "peter") {
-          axios.post(`https://api.day.app/${process.env.barkDeviceKey}`, {
-            title: "Home",
-            body: `${username.substring(0,1).toUpperCase() + username.substring(1, username.length)} arrived at home!`,
-            icon: "https://www.creativefabrica.com/wp-content/uploads/2021/11/20/GPS-location-symbol-Graphics-20483340-1-1-580x386.jpg",   // Small icon
-            group: 'home',
-            sound: 'minuet',
-          })
+          sendText(`${username.substring(0,1).toUpperCase() + username.substring(1, username.length)} arrived at home!`, "Home");
         }
 
         // Ensure settings.usersHome is an array
