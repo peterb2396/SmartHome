@@ -21,7 +21,7 @@
 
   const gpios = [];
 
-  // Stores all GPIO in array for easy cleanup
+  // Stores all GPIO in array for easy cleanup later
   function AutoGpio(...args) {
       const pin = new Gpio(...args);
       gpios.push(pin);
