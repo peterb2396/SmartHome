@@ -12,16 +12,61 @@
   const qs = require('qs'); // Import qs for URL encoding
   const moment = require('moment');
   const net = require('net');
+  const Gpio = require('onoff').Gpio;
+
+  // Specific light ID's
+  const FOYER_LIGHT = null;
+
+  // GPIO pins
+
+  const gpios = [];
+
+  // Stores all GPIO in array for easy cleanup
+  function AutoGpio(...args) {
+      const pin = new Gpio(...args);
+      gpios.push(pin);
+      return pin;
+  }
+
+  // GPIO cleanup
+  process.on('SIGINT', () => (gpios.forEach(pin => pin.unexport()), process.exit()));
+
+
+
+  // PIR sensor (night time temp lights)
+  const pir = new AutoGpio(17, 'in', 'rising'); // GPIO17, detect rising edge
+
+  
+  // Check motion events for walking to foyer
+  pir.watch((err, value) => {
+    if (err) {
+        console.error('PIR sensor error:', err);
+        return;
+    }
+
+    if (isAfterSunset) {
+        console.log("Motion detected in foyer after sunset! Turning on foyer light");
+        // Turn on foyer light
+        lights(FOYER_LIGHT, true, process.env.PASSWORD, 30); // Turn on foyer to 30% brightness
+        // After 60s, turn it off (sleeping)
+        setTimeout(() => {
+            lights(FOYER_LIGHT, false, process.env.PASSWORD); // Turn off foyer
+        }, 60000); // 60000 ms = 60 seconds
+        
+    } else {
+        console.log("Motion detected in foyer, but it's not after sunset.");
+    }
+  });
+
+
 
   // To determine sunset
   const lat = 41.722034;  // wellsboro
   const lng = -77.263969; // 
   const apiUrl = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lng}&formatted=0`;
+  let isAfterSunset = true;
 
-  
-
-
-  async function isAfterSunset() {
+  async function checkIsAfterSunset() {
     try {
       // Fetch the sunset data
       const response = await axios.get(apiUrl);
@@ -37,12 +82,18 @@
       sunsetMoment = sunsetMoment.date(currentTime.date());
   
       // Check if current time is after sunset
-      return currentTime.isAfter(sunsetMoment);
+      isAfterSunset = currentTime.isAfter(sunsetMoment);
   
     } catch (error) {
       console.error('Error fetching sunset data:', error);
     }
   }
+
+  // Fetch isAfterSunset on startup
+  checkIsAfterSunset();
+
+  // Refresh once per day at midnight
+  setInterval(checkIsAfterSunset, 24 * 60 * 60 * 1000);
   
   
   
@@ -646,9 +697,6 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         if (!settings.usersHome.includes(username)) 
           await updateSetting('usersHome', [...settings.usersHome, username]);
 
-        // Is it after sunset?
-        const afterSunset = await isAfterSunset();
-
 
         // Turn on all the lights which were turned off when we left
         let lightsOn = settings.lightsOn
@@ -658,7 +706,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
 
          // If it is after sunset, include all temp_lights from getDevices in the tempDevices.
          // This will turn on all lights when we arrive to see in the dark.
-         if (afterSunset) {
+         if (isAfterSunset) {
           const allDevices = await listDevices();
           const tempDevicesAll = allDevices.filter(device =>
             temp_lights.includes(device.roomId) ||
