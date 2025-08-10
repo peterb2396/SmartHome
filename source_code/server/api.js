@@ -49,11 +49,11 @@
     if (isAfterSunset) {
         console.log("Motion detected in foyer after sunset! Turning on foyer light");
         // Turn on foyer light
-        lights(FOYER_LIGHT, true, process.env.PASSWORD, 10); // Turn on foyer to 30% brightness
+        lights(FOYER_LIGHT, true, process.env.PASSWORD, 10); // Turn on foyer to 10% brightness
         // After 60s, turn it off (sleeping)
         setTimeout(() => {
             lights(FOYER_LIGHT, false, process.env.PASSWORD); // Turn off foyer
-        }, 60000); // 60000 ms = 60 seconds
+        }, 20000); // 20000 ms = 20 seconds
         
     } else {
         console.log("Motion detected in foyer, but it's not after sunset.");
@@ -154,6 +154,12 @@
 
 
 }
+
+router.post('/smartthings-webhook', (req, res) => {
+  console.log('Received JSON:', req.body);
+  // Process the even
+  res.sendStatus(200); // Tell SmartThings you received it
+});
 
 router.get("/users", async (req, res) => {
   try {
