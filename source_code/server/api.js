@@ -64,38 +64,60 @@
 
 
   // To determine sunset
-  const lat = 41.722034;  // wellsboro
-  const lng = -77.263969; // 
-  const apiUrl = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lng}&formatted=0`;
-  let isAfterSunset = true;
+  const lat = 41.722034;  // Wellsboro
+const lng = -77.263969;
+const apiUrl = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lng}&formatted=0`;
 
-  async function checkIsAfterSunset() {
-    try {
-      // Fetch the sunset data
-      const response = await axios.get(apiUrl);
-      const sunsetTime = response.data.results.sunset;  // Sunset time in UTC
-      const sunriseTime = response.data.results.sunrise;
-  
-      // Convert sunset time from UTC to Eastern Time
-      let sunsetMoment = moment.utc(sunsetTime).subtract(5, 'hours');
-      let sunriseMoment = moment.utc(sunriseTime).subtract(5, 'hours');
 
-  
-      // Get the current time in UTC and convert to Eastern Time
-      let currentTime = moment.utc().subtract(5, 'hours');
-  
-      // Ensure sunsetMoment is using today's date
-      sunsetMoment = sunsetMoment.date(currentTime.date());
-      sunriseMoment = sunsetMoment.date(currentTime.date());
-  
-      // Check if current time is after sunset & before sunrise
-      isAfterSunset = currentTime.isBetween(sunsetMoment, sunriseMoment)
-      
-  
-    } catch (error) {
-      console.error('Error fetching sunset data:', error);
+async function checkIsAfterSunset() {
+  try {
+    const response = await axios.get(apiUrl);
+    const {
+      civil_twilight_end,
+      civil_twilight_begin,
+      astronomical_twilight_end,
+      astronomical_twilight_begin
+    } = response.data.results; // UTC times
+
+    // Determine current UTC offset for Eastern Time (handles DST automatically)
+    const currentOffset = moment.tz.zone("America/New_York").utcOffset(moment()) / -60;
+
+    // Convert civil twilight to local time
+    let eveningDark = moment.utc(civil_twilight_end).subtract(currentOffset, 'hours');
+    let morningLight = moment.utc(civil_twilight_begin).subtract(currentOffset, 'hours');
+
+    // Convert astronomical twilight to local time for stargazing
+    let astroEveningDark = moment.utc(astronomical_twilight_end).subtract(currentOffset, 'hours');
+    let astroMorningLight = moment.utc(astronomical_twilight_begin).subtract(currentOffset, 'hours');
+
+    let currentTime = moment().utcOffset(currentOffset);
+
+    // If it's after evening twilight, morning light is tomorrow
+    if (currentTime.isAfter(eveningDark)) {
+      morningLight.add(1, 'day');
+      astroMorningLight.add(1, 'day');
     }
+
+    // Lights logic
+    isAfterSunset = currentTime.isAfter(eveningDark) || currentTime.isBefore(morningLight);
+
+    // Format stargazing times
+
+    let stargazingStart = ""; // Astronomical twilight end (evening)
+    let stargazingEnd = "";   // Astronomical twilight begin (morning)
+
+    stargazingStart = astroEveningDark.format("h:mm");
+    stargazingEnd = astroMorningLight.format("h:mm");
+
+    updateSetting('stargazingStart', stargazingStart);
+    updateSetting('stargazingEnd', stargazingEnd);
+
+
+  } catch (error) {
+    console.error('Error fetching twilight data:', error);
   }
+}
+
 
   // Fetch isAfterSunset on startup
   checkIsAfterSunset();
