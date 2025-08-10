@@ -567,7 +567,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     let lightsOn = []
     // Get the latest settings
     await updateSettings();
-    const temp_lights = settings.temp_lights.split(',').map(item => item.trim())
+    // const temp_lights = settings.temp_lights.split(',').map(item => item.trim())
     const whenAway = settings.whenAway.split(',').map(item => item.trim());
 
     const allDevices = await listDevices();
@@ -615,6 +615,9 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         }
       }
 
+      // Store all lights that are on in the database, not just for this user, but for all (we filter on arrival)
+      updateSetting('lightsOn', lightsOn)
+
       // filter to only include all lights that are "mine" (the leaving user)
       if (!homeEmpty)
       {
@@ -623,11 +626,15 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
 
           // Only include lights that are owned by the leaving user
           settings.lights[device.deviceId].owner === username
+          
         );
+
+        lightsOn.forEach((d) => {
+          console.log(settings.lights[device.deviceId])
+        })
       }
 
-      // Store all lights that are on in the database
-      updateSetting('lightsOn', lightsOn)
+      
   
       console.log(homeEmpty? "All lights" : username + "'s lights ", "that were on:", lightsOn.map((d) => d.label || d.deviceId));
   
@@ -736,7 +743,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
           lightsOn.push(...tempDevicesAll);
       }
 
-        console.log("Turning these lights back on:", lightsOn.map((d) => d.label || d.deviceId));
+        console.log(`Turning ${username}'s lights back on:`, lightsOn.map((d) => d.label || d.deviceId));
         const password = req.body.password;
         await lights(lightsOn, true, password);
 
