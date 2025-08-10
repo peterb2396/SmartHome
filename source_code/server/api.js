@@ -594,9 +594,6 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
       // Fetch all devices and filter for light devices
       const lightDevices = allDevices.filter(device => 
         device.name.startsWith("c2c") && !device.name.includes("switch")
-        // device.components.some(component => 
-        //   component.capabilities.some(cap => cap.id === 'switch')
-        // )
       );
   
       // Store all lights that are currently on
@@ -618,20 +615,21 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         }
       }
 
-      // If this house is not empty, only include temp lights (dont turn lights off on people who are home)
+      // filter to only include all lights that are "mine" (the leaving user)
       if (!homeEmpty)
       {
         lightsOn = lightsOn.filter(device =>
-          temp_lights.includes(device.roomId) ||
-          temp_lights.includes(device.deviceId) ||
-          temp_lights.includes(device.label)
+          // !settings.lights[device.deviceId] || // Used if light has no entry in settings.lights
+
+          // Only include lights that are owned by the leaving user
+          settings.lights[device.deviceId].owner === username
         );
       }
 
       // Store all lights that are on in the database
       updateSetting('lightsOn', lightsOn)
   
-      console.log(homeEmpty? "All lights" : "Temp lights", "that are currently on:", lightsOn.map((d) => d.label || d.deviceId));
+      console.log(homeEmpty? "All lights" : username + "'s lights ", "that were on:", lightsOn.map((d) => d.label || d.deviceId));
   
       // Turn off all the lights
       // This will also turn off the outdoor lights that we put on before we left
