@@ -279,7 +279,8 @@ export default function Lights({ BASE_URL }) {
                           <div style={{
                             ...styles.deviceIcon,
                             ...(isOn ? styles.deviceIconActive : {})
-                          }}>
+                          }}
+                          onClick={() => updateDeviceState(device.deviceId, isOn ? "off" : "on", brightness || 100)}>
                             <FaLightbulb />
                           </div>
                           <div>
@@ -291,7 +292,7 @@ export default function Lights({ BASE_URL }) {
                         </div>
                       </div>
 
-                      <button
+                      {/* <button
                       className="power-button"
                         style={{
                           ...styles.powerButton,
@@ -302,7 +303,7 @@ export default function Lights({ BASE_URL }) {
                         disabled={isOffline}
                       >
                         {isOn ? 'Turn Off' : 'Turn On'}
-                      </button>
+                      </button> */}
 
                       {mainStatus.switchLevel && (
                         <div style={styles.sliderContainer}>
@@ -703,6 +704,7 @@ const styles = {
     gap: '0.75rem'
   },
   deviceIcon: {
+    cursor: "pointer",
     width: '48px',
     height: '48px',
     borderRadius: '12px',
