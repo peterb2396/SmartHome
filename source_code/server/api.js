@@ -15,7 +15,7 @@
   const Gpio = require('onoff').Gpio;
 
   // Specific light ID's
-  const FOYER_LIGHT = null;
+  const FOYER_LIGHT = "50746520-3906-4528-8473-b7735a0600e9";
 
   // GPIO pins
 
@@ -53,6 +53,7 @@
         // After 60s, turn it off (sleeping)
         setTimeout(() => {
             lights(FOYER_LIGHT, false, process.env.PASSWORD); // Turn off foyer
+            // lights("7e7d5aca-d541-4a96-ab7e-0ef87e494ef7", false, process.env.PASSWORD); // Turn off kitchen
         }, 20000); // 20000 ms = 20 seconds
         
     } else {
@@ -628,11 +629,6 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
           settings.lights[device.deviceId].owner === username
           
         );
-
-        console.log(settings.lights)
-        lightsOn.forEach((d) => {
-          console.log(settings.lights[d.deviceId])
-        })
       }
 
       

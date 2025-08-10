@@ -30,6 +30,15 @@ export default function Lights({ BASE_URL }) {
     }
   }, [BASE_URL]);
 
+  // Fetch devices every 5 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchDevices();
+    }
+    , 5000);
+    return () => clearInterval(interval);
+  }, [fetchDevices]);
+
   // Fetch settings
   const fetchSettings = useCallback(async () => {
     try {
@@ -689,7 +698,6 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    opacity: '0',
     transition: 'all 0.2s ease',
     color: '#64748b'
   },
