@@ -629,8 +629,9 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
           
         );
 
+        console.log(settings.lights)
         lightsOn.forEach((d) => {
-          console.log(settings.lights[device.deviceId])
+          console.log(settings.lights[d.deviceId])
         })
       }
 
