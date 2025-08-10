@@ -513,7 +513,8 @@ export default function Lights({ BASE_URL }) {
                   >
                     <option value="">— Select Owner —</option>
                     {users.map((u) => (
-                      <option key={u.id} value={u.id}>
+                      <option key={u.id} value={u.name}> 
+                      {/* Use u.id above for value to store UID instead of string */}
                         {u.name}
                       </option>
                     ))}
