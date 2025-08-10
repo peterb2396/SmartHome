@@ -6,7 +6,7 @@ export default function SettingsPage({ BASE_URL }) {
   const [settings, setSettings] = useState({});
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
-  const [name, setName] = useState("peter"); // For the name input
+  const [name, setName] = useState("pete.buo"); // For the name input
 
   const fetchSettings = useCallback(async () => {
     try {
