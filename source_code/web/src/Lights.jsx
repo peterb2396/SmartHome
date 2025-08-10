@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
-import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff } from "react-icons/fa";
+import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun } from "react-icons/fa";
 
 export default function Lights({ BASE_URL }) {
   const [devices, setDevices] = useState([]);
@@ -71,6 +71,107 @@ export default function Lights({ BASE_URL }) {
     },
     [BASE_URL]
   );
+
+  const StargazingDisplay = () => {
+    const moonriseTime = settings.stargazingStart || "N/A"
+    const sunsetTime = settings.stargazingEnd || "N/A"
+  
+    return (
+      <div style={{
+        padding: '1.5rem',
+        background: 'white',
+        borderRadius: '12px',
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+        border: '1px solid #e2e8f0',
+        marginBottom: '1.5rem',
+        transition: 'all 0.2s ease',
+    height: '100px'
+
+      }}>
+        {/* Header */}
+        {/* <div style={{
+          textAlign: 'center',
+          marginBottom: '1.5rem'
+        }}> */}
+          {/* <h3 style={{
+            fontSize: '1.5rem',
+            fontWeight: '500',
+            color: '#64748b',
+            margin: 0
+          }}>
+            Stargazing
+          </h3> */}
+        {/* </div> */}
+  
+        {/* Icons and Times Container */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 15
+        }}>
+          {/* Moon Section */}
+          <div style={{
+            flex: '1',
+            textAlign: 'center'
+          }}>
+            {/* Moon Icon */}
+            <div style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: '12px',
+              background: '#f3f0ff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              // margin: '0 auto 1rem',
+              color: '#64748b',
+              fontSize: '1.5rem'
+            }}>
+              <FaMoon />
+            </div>
+            {/* Moon Time Text */}
+            <div style={{
+              color: '#64748b',
+              fontSize: '0.875rem',
+              fontWeight: '500'
+            }}>
+              {moonriseTime}
+            </div>
+          </div>
+  
+          {/* Sun Section */}
+          <div style={{
+            flex: '1',
+            textAlign: 'center'
+          }}>
+            {/* Sun Icon */}
+            <div style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: '12px',
+              background: '#fef3c7',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              // margin: '0 auto 1rem',
+              color: '#64748b',
+              fontSize: '1.5rem'
+            }}>
+              <FaSun />
+            </div>
+            {/* Sun Time Text */}
+            <div style={{
+              color: '#64748b',
+              fontSize: '0.875rem',
+              fontWeight: '500'
+            }}>
+              {sunsetTime}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // Initial load
   useEffect(() => {
@@ -235,7 +336,7 @@ export default function Lights({ BASE_URL }) {
         </div>
       </div>
       <div style={styles.sectionHeaderRight}>
-        <span style={styles.toggleText}>{isExpanded ? 'Hide' : 'Show'}</span>
+        {/* <span style={styles.toggleText}>{isExpanded ? 'Hide' : 'Show'}</span> */}
         {isExpanded ? <FaChevronUp style={styles.chevron} /> : <FaChevronDown style={styles.chevron} />}
       </div>
     </div>
@@ -245,18 +346,28 @@ export default function Lights({ BASE_URL }) {
     <div style={{fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'}}>
       <div style={styles.content}>
         <div style={styles.header}>
-          {/* <h1 style={styles.mainTitle}>Smart Home</h1> */}
+          {/* <h1 style={styles.subtitle}>Smart Home</h1> */}
           {/* <p style={styles.subtitle}>Peter & Meghan</p> */}
+          {/* <StargazingDisplay></StargazingDisplay> */}
         </div>
 
         {/* Lights Section */}
+        <div style = {{display: "flex", gap: 10}}>
+
+        <div style = {{flex: 1}}>
         <SectionHeader 
           title="Lights" 
           isExpanded={showLights} 
           onClick={() => setShowLights(!showLights)}
           icon={FaLightbulb}
           count={lightsDevices.length}
+         
         />
+        </div>
+        <StargazingDisplay></StargazingDisplay>
+
+        </div>
+        
         
         {showLights && (
           <div style={styles.deviceGrid}>
@@ -614,7 +725,8 @@ const styles = {
     border: '1px solid #e2e8f0',
     cursor: 'pointer',
     marginBottom: '1.5rem',
-    transition: 'all 0.2s ease'
+    transition: 'all 0.2s ease',
+    height: '100px'
   },
   sectionHeaderLeft: {
     display: 'flex',
@@ -699,7 +811,8 @@ const styles = {
     justifyContent: 'center',
     cursor: 'pointer',
     transition: 'all 0.2s ease',
-    color: '#64748b'
+    color: '#64748b',
+    opacity: '0'
   },
   cardContent: {
     padding: '1.5rem'
