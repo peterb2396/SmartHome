@@ -717,16 +717,21 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         }
   
 
-        // Add the new user to the array if they're not already in it
-        if (!settings.usersHome.includes(username)) 
-          await updateSetting('usersHome', [...settings.usersHome, username]);
+        
 
 
         // Turn on all the lights which were turned off when we left
         // let lightsOn = settings.lightsOn
 
         // Lights for general users and this user in particular
-        let lightsOn = settings.lightsOn.filter((d) => !settings.lights[d.deviceId].owner || settings.lights[d.deviceId].owner === username)
+        // settings.usersHome
+        let lightsOn = settings.usersHome.length > 0 ? settings.lightsOn.filter((d) => settings.lights[d.deviceId].owner === username)
+        : settings.lightsOn.filter((d) => !settings.lights[d.deviceId].owner || settings.lights[d.deviceId].owner === username)
+        
+
+      // Add the new user to the array if they're not already in it
+        if (!settings.usersHome.includes(username)) 
+          await updateSetting('usersHome', [...settings.usersHome, username]);
         
 
         // Extract filters (temp_lights can be a single string or an array)
