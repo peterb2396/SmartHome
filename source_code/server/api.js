@@ -603,7 +603,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
   
       // Fetch all devices and filter for light devices
       const lightDevices = allDevices.filter(device => 
-        device.label.startsWith("c2c") && !device.label.includes("switch")
+        device.name.startsWith("c2c") && !device.name.includes("switch")
         // device.components.some(component => 
         //   component.capabilities.some(cap => cap.id === 'switch')
         // )
