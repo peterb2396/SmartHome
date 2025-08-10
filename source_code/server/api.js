@@ -15,7 +15,7 @@
   const Gpio = require('onoff').Gpio;
 
   // Specific light ID's
-  const FOYER_LIGHT = "";
+  const FOYER_LIGHT = "none";
 
   // GPIO pins
 
@@ -377,10 +377,10 @@ async function lights(lightDevices = null, on = true, password, level) {
         const brightness = on ? (level || 100) : 0;
         try {
           await lutron(deviceSettings.lutronId, brightness);
-          console.log(`Lutron control succeeded for device ${deviceId}`);
+          // console.log(`Lutron control succeeded for device ${deviceId}`);
           continue; // success, skip to next device
         } catch (lutronErr) {
-          console.warn(`Lutron failed for device ${deviceId}, falling back to SmartThings. Error:`, lutronErr);
+          // console.warn(`Lutron failed for device ${deviceId}, falling back to SmartThings. Error:`, lutronErr);
           // fall through to SmartThings fallback
         }
       }
@@ -412,7 +412,7 @@ async function lights(lightDevices = null, on = true, password, level) {
           },
         }
       );
-      console.log(`SmartThings control used for device ${deviceId}`);
+      // console.log(`SmartThings control used for device ${deviceId}`);
     }
   } catch (error) {
     if (error.response?.status === 429) {
@@ -622,6 +622,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
             },
           }
         );
+        console.log("Light state", lightState.data.components.main.switch)
         // Check if the light is on, and if so, add it to the lightsOn array
         if (lightState.data.components.main.switch.switch.value === 'on') {
           lightsOn.push({label: device.label, deviceId: device.deviceId, roomId: device.roomId, level: lightState.data.components.main.switchLevel.level.value});
