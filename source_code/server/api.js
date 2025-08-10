@@ -15,7 +15,7 @@
   const Gpio = require('onoff').Gpio;
 
   // Specific light ID's
-  const FOYER_LIGHT = null;
+  const FOYER_LIGHT = "";
 
   // GPIO pins
 
