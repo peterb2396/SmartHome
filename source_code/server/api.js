@@ -15,7 +15,7 @@
   const Gpio = require('onoff').Gpio;
 
   // Specific light ID's
-  const FOYER_LIGHT = "none";
+  const FOYER_LIGHT = null;
 
   // GPIO pins
 
@@ -46,7 +46,7 @@
 
     // sendText("Motion in foyer!", "PIR Sensor")
 
-    if (isAfterSunset) {
+    if (isAfterSunset && FOYER_LIGHT) {
         console.log("Motion detected in foyer after sunset! Turning on foyer light");
         // Turn on foyer light
         lights(FOYER_LIGHT, true, process.env.PASSWORD, 10); // Turn on foyer to 10% brightness
@@ -588,17 +588,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
       const homeEmpty = usersHome.length === 0
 
       
-      // Gathers all lights in the whenAway setting and turn them all on
-      // If the house is empty, turn on the whenAway lights
-      if (homeEmpty && whenAway.length > 0) {
-        const whenAwayDevices = allDevices.filter(device =>
-          whenAway.includes(device.roomId) ||
-          whenAway.includes(device.deviceId) ||
-          whenAway.includes(device.label)
-        );
-        // turn on these lights by passing an array of ids to the lights function
-        await lights(whenAwayDevices.map((d) => d.deviceId), true, req.body.password);
-      }
+      
 
   
       // Fetch all devices and filter for light devices
@@ -622,7 +612,6 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
             },
           }
         );
-        console.log("Light state", lightState.data.components.main.switch)
         // Check if the light is on, and if so, add it to the lightsOn array
         if (lightState.data.components.main.switch.switch.value === 'on') {
           lightsOn.push({label: device.label, deviceId: device.deviceId, roomId: device.roomId, level: lightState.data.components.main.switchLevel.level.value});
@@ -650,6 +639,19 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
       // What we need to do then, is set a delay to turn off any outdoor lights after 5 minutes.
       const password = req.body.password;
       await lights(lightsOn, false, password);
+
+
+      // Gathers all lights in the whenAway setting and turn them all on
+      // If the house is empty, turn on the whenAway lights
+      if (homeEmpty && whenAway.length > 0) {
+        const whenAwayDevices = allDevices.filter(device =>
+          whenAway.includes(device.roomId) ||
+          whenAway.includes(device.deviceId) ||
+          whenAway.includes(device.label)
+        );
+        // turn on these lights by passing an array of ids to the lights function
+        await lights(whenAwayDevices.map((d) => d.deviceId), true, req.body.password);
+      }
   
       // Send a success response
       res.json({ success: true });
@@ -699,7 +701,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         const username = req.body.who ? req.body.who : "Anonymous"
         console.log(username, "arrived at the house");
         // use bark api to send notification if meg arrived.
-        if (username !== "peter") {
+        if (username !== "pete.buo") {
           sendText(`${username.substring(0,1).toUpperCase() + username.substring(1, username.length)} arrived at home!`, "Home");
         }
 
@@ -715,7 +717,11 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
 
 
         // Turn on all the lights which were turned off when we left
-        let lightsOn = settings.lightsOn
+        // let lightsOn = settings.lightsOn
+
+        // Lights for general users and this user in particular
+        let lightsOn = settings.lightsOn.filter((d) => !settings.lights[d.deviceId].owner || settings.lights[d.deviceId].owner === username)
+        
 
         // Extract filters (temp_lights can be a single string or an array)
         const temp_lights = settings.temp_lights.split(',').map(item => item.trim());
@@ -765,7 +771,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         // Clear lightsOn after turning them back on
         // Now its in the database
         // lightsOn = [];
-        updateSettings('lightsOn', [])
+        updateSettings('lightsOn', settings.lightsOn.filter(item => !lightsOn.includes(item)))
 
         // Send a success response
         res.json({ success: true });
@@ -778,7 +784,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
 
 
   
-  
+  // Deprecated - now use /lights for any smartthings device (like smart plugs)
   router.post("/power", ensureAccessToken, async (req, res) => {
     
     try {
@@ -799,35 +805,6 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
     }
   });
 
-
-  async function getDevices() {
-    const timestamp = Date.now().toString();
-    const sign = await generateSignatureGeneral(timestamp, `/v1.0/users/${process.env.UID}/devices`, 'GET');
-  
-    const response = await axios.get(`${BASE_URL}/v1.0/users/${process.env.UID}/devices`, {
-      headers: {
-        client_id: ACCESS_ID,
-        access_token: accessToken,
-        sign: sign,
-        t: timestamp,
-        sign_method: "HMAC-SHA256",
-      },
-    });
-  
-    if (response.data.success) {
-      const devices = response.data.result;
-      // devices.forEach((device) => {
-      //   console.log(`Device Name: ${device.name}, Device ID: ${device.id}`);
-      // });
-      return devices
-    } else {
-      throw new Error(`Failed to fetch devices: ${response.data.msg}`);
-    }
-  }
-  
-  
-
-  // Change password button on login page, send code, when verified, choose new password
 
   // Mailer
   const transporter = nodemailer.createTransport({
