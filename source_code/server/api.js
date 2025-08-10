@@ -63,11 +63,10 @@
 
 
 
-  // To determine sunset
-  const lat = 41.722034;  // Wellsboro
+ // To determine sunset
+const lat = 41.722034;  // Wellsboro
 const lng = -77.263969;
 const apiUrl = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lng}&formatted=0`;
-
 
 async function checkIsAfterSunset() {
   try {
@@ -79,18 +78,15 @@ async function checkIsAfterSunset() {
       astronomical_twilight_begin
     } = response.data.results; // UTC times
 
-    // Determine current UTC offset for Eastern Time (handles DST automatically)
-    const currentOffset = moment.tz.zone("America/New_York").utcOffset(moment()) / -60;
-
     // Convert civil twilight to local time
-    let eveningDark = moment.utc(civil_twilight_end).subtract(currentOffset, 'hours');
-    let morningLight = moment.utc(civil_twilight_begin).subtract(currentOffset, 'hours');
+    let eveningDark = moment.utc(civil_twilight_end).local();
+    let morningLight = moment.utc(civil_twilight_begin).local();
 
     // Convert astronomical twilight to local time for stargazing
-    let astroEveningDark = moment.utc(astronomical_twilight_end).subtract(currentOffset, 'hours');
-    let astroMorningLight = moment.utc(astronomical_twilight_begin).subtract(currentOffset, 'hours');
+    let astroEveningDark = moment.utc(astronomical_twilight_end).local();
+    let astroMorningLight = moment.utc(astronomical_twilight_begin).local();
 
-    let currentTime = moment().utcOffset(currentOffset);
+    let currentTime = moment();
 
     // If it's after evening twilight, morning light is tomorrow
     if (currentTime.isAfter(eveningDark)) {
@@ -101,22 +97,18 @@ async function checkIsAfterSunset() {
     // Lights logic
     isAfterSunset = currentTime.isAfter(eveningDark) || currentTime.isBefore(morningLight);
 
-    // Format stargazing times
-
-    let stargazingStart = ""; // Astronomical twilight end (evening)
-    let stargazingEnd = "";   // Astronomical twilight begin (morning)
-
-    stargazingStart = astroEveningDark.format("h:mm");
-    stargazingEnd = astroMorningLight.format("h:mm");
+    // Stargazing times (strings)
+    let stargazingStart = astroEveningDark.format("h:mm");
+    let stargazingEnd = astroMorningLight.format("h:mm");
 
     updateSetting('stargazingStart', stargazingStart);
     updateSetting('stargazingEnd', stargazingEnd);
-
 
   } catch (error) {
     console.error('Error fetching twilight data:', error);
   }
 }
+
 
 
   // Fetch isAfterSunset on startup
