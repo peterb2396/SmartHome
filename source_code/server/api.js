@@ -74,18 +74,23 @@
       // Fetch the sunset data
       const response = await axios.get(apiUrl);
       const sunsetTime = response.data.results.sunset;  // Sunset time in UTC
+      const sunriseTime = response.data.results.sunrise;
   
       // Convert sunset time from UTC to Eastern Time
       let sunsetMoment = moment.utc(sunsetTime).subtract(5, 'hours');
+      let sunriseMoment = moment.utc(sunriseTime).subtract(5, 'hours');
+
   
       // Get the current time in UTC and convert to Eastern Time
       let currentTime = moment.utc().subtract(5, 'hours');
   
       // Ensure sunsetMoment is using today's date
       sunsetMoment = sunsetMoment.date(currentTime.date());
+      sunriseMoment = sunsetMoment.date(currentTime.date());
   
-      // Check if current time is after sunset
-      isAfterSunset = currentTime.isAfter(sunsetMoment);
+      // Check if current time is after sunset & before sunrise
+      isAfterSunset = currentTime.isBetween(sunsetMoment, sunriseMoment)
+      
   
     } catch (error) {
       console.error('Error fetching sunset data:', error);
