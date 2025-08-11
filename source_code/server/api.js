@@ -72,15 +72,15 @@ async function checkIsAfterSunset() {
   try {
     const response = await axios.get(apiUrl);
     const {
-      civil_twilight_end,
-      civil_twilight_begin,
+      sunset,
+      sunrise,
       astronomical_twilight_end,
       astronomical_twilight_begin
     } = response.data.results; // UTC times
 
-    // Convert civil twilight to local time
-    let eveningDark = moment.utc(civil_twilight_end).local();
-    let morningLight = moment.utc(civil_twilight_begin).local();
+    // Convert to local time
+    let eveningDark = moment.utc(sunset).local();
+    let morningLight = moment.utc(sunrise).local();
 
     // Convert astronomical twilight to local time for stargazing
     let astroEveningDark = moment.utc(astronomical_twilight_end).local();
@@ -103,6 +103,8 @@ async function checkIsAfterSunset() {
 
     updateSetting('stargazingStart', stargazingStart);
     updateSetting('stargazingEnd', stargazingEnd);
+    updateSetting('sunset', eveningDark.format("h:mm"));
+    updateSetting('sunrise', morningLight.format("h:mm"));
 
   } catch (error) {
     console.error('Error fetching twilight data:', error);
