@@ -288,7 +288,10 @@ export default function Lights({ BASE_URL }) {
         </div>
         <div>
           <h2 style={styles.sectionTitle}>{title}</h2>
+          {count > 0 && (
           <p style={styles.deviceCount}>{count} devices</p>
+
+          )}
         </div>
       </div>
       <div style={styles.sectionHeaderRight}>
