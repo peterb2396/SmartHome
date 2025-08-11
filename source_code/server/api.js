@@ -47,17 +47,24 @@
     // sendText("Motion in foyer!", "PIR Sensor")
 
     if (isAfterSunset && FOYER_LIGHT) {
-        console.log("Motion detected in foyer after sunset! Turning on foyer light");
-        // Turn on foyer light
-        lights([FOYER_LIGHT], true, process.env.PASSWORD, 25); // Turn on foyer to 10% brightness
-        // After 60s, turn it off (sleeping)
-        setTimeout(() => {
-            lights([FOYER_LIGHT], false, process.env.PASSWORD); // Turn off foyer
-            // lights("7e7d5aca-d541-4a96-ab7e-0ef87e494ef7", false, process.env.PASSWORD); // Turn off kitchen
-        }, 20000); // 20000 ms = 20 seconds
+        // console.log("Motion detected in foyer after sunset! Turning on foyer light");
+        
+        // turn on foyer to 45%
+        lights([FOYER_LIGHT], true, process.env.PASSWORD, 45);
+
+        // If there's an existing timer, clear it so we reset the 20-second countdown
+        if (foyerLightTimeout) {
+          clearTimeout(foyerLightTimeout);
+        }
+
+        // Set a new timer to turn off the light after 20 seconds of no motion
+        foyerLightTimeout = setTimeout(() => {
+          lights([FOYER_LIGHT], false, process.env.PASSWORD);
+          foyerLightTimeout = null; // clear the reference
+        }, 45000);
         
     } else {
-        console.log("Motion detected in foyer, but it's not after sunset.");
+        // console.log("Motion detected in foyer, but it's not after sunset.");
     }
   });
 
