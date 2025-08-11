@@ -33,12 +33,14 @@
   
   .brightness-slider {
     width: 100%;
-    height: 6px;
+    height: 6px; /* visible track thickness */
     border-radius: 5px;
     background: linear-gradient(90deg, #ff4d4d, #ffd700, #4caf50);
     appearance: none;
     outline: none;
   }
+  
+  /* Add invisible grab padding via shadow or negative margin */
   .brightness-slider::-webkit-slider-thumb {
     width: 20px;
     height: 20px;
@@ -48,7 +50,15 @@
     cursor: pointer;
     appearance: none;
     transition: transform 0.2s;
+    margin-top: -7px; /* centers thumb vertically with extra track height */
   }
+  
+  /* Make the actual clickable area taller */
+  .brightness-slider::-webkit-slider-runnable-track {
+    height: 34px; /* clickable zone */
+    background: transparent; /* actual color is set on main slider */
+  }
+  
   .brightness-slider::-webkit-slider-thumb:hover {
     transform: scale(1.2);
   }

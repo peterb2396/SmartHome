@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import axios from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
 import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun, FaStarAndCrescent, FaCloudMoon } from "react-icons/fa";
@@ -19,26 +19,66 @@ export default function Lights({ BASE_URL }) {
   const [showSmartPlugs, setShowSmartPlugs] = useState(false);
   const [showWeather, setShowWeather] = useState(true);
 
+  const POLL_INTERVAL = 3000
+
   // Fetch devices
+  const currentFetchController = useRef(null);
+  const [pausePollingUntil, setPausePollingUntil] = useState(0);
+
   const fetchDevices = useCallback(async () => {
+    // Don’t start if paused
+    if (Date.now() < pausePollingUntil) return;
+
+    // Cancel any ongoing request before starting a new one
+    if (currentFetchController.current) {
+      currentFetchController.current.abort();
+    }
+
+    const controller = new AbortController();
+    currentFetchController.current = controller;
+
     try {
-      const { data } = await axios.get(`${BASE_URL}/list-devices`);
+      const { data } = await axios.get(`${BASE_URL}/list-devices`, {
+        signal: controller.signal
+      });
       setDevices(data);
     } catch (e) {
-      console.error("Error fetching devices:", e);
+      if (e.name !== "CanceledError" && e.name !== "AbortError") {
+        console.error("Error fetching devices:", e);
+      }
     } finally {
       setLoading(false);
+      currentFetchController.current = null;
     }
-  }, [BASE_URL]);
+  }, [BASE_URL, pausePollingUntil]);
+
+function handleUserChange() {
+   currentFetchController.current?.abort();
+
+  pausePolling();
+}
 
   // Fetch devices every 5 seconds
+  
+
   useEffect(() => {
     const interval = setInterval(() => {
-      fetchDevices();
+      if (Date.now() >= pausePollingUntil) {
+        fetchDevices();
+      }
+    }, POLL_INTERVAL);
+
+    return () => {
+      clearInterval(interval);
+      currentFetchController.current?.abort();
     }
-    , 5000);
-    return () => clearInterval(interval);
-  }, [fetchDevices]);
+  }, [fetchDevices, pausePollingUntil]);
+
+  // Skip a poll so our changes dont get overwritten
+  function pausePolling()
+  {
+    setPausePollingUntil(Date.now() + 1000);
+  }
 
   // Fetch settings
   const fetchSettings = useCallback(async () => {
@@ -80,7 +120,7 @@ export default function Lights({ BASE_URL }) {
     return (
       <div style={styles.wrapper}>
         <div style={styles.headerWrapper}>
-          <h3 style={styles.headerTitleText}>Dark Skies</h3>
+          <h3 style={styles.headerTitleText}>Darksky</h3>
         </div>
   
         <div style={styles.timesIconRow}>
@@ -165,6 +205,8 @@ export default function Lights({ BASE_URL }) {
   // Optimistic Device state update
   const updateDeviceState = async (deviceId, on, level = 100) => {
     // Immediately update UI state
+    handleUserChange(); // Pause polling to avoid overwriting changes
+
     setDevices((devices) =>
       devices.map((device) => {
         if (device.deviceId === deviceId) {
