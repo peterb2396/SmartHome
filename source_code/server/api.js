@@ -37,6 +37,7 @@
   const pir = new AutoGpio(17, 'in', 'rising'); // GPIO17, detect rising edge
 
   
+  let foyerLightTimeout = null;
   // Check motion events for walking to foyer
   pir.watch((err, value) => {
     if (err) {
@@ -47,7 +48,7 @@
     // sendText("Motion in foyer!", "PIR Sensor")
 
     if (isAfterSunset && FOYER_LIGHT) {
-        // console.log("Motion detected in foyer after sunset! Turning on foyer light");
+        console.log("Motion detected in foyer after sunset! Turning on foyer light");
         
         // turn on foyer to 45%
         lights([FOYER_LIGHT], true, process.env.PASSWORD, 45);
