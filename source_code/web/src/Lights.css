@@ -121,3 +121,58 @@
     transform: scale(1.1);
     box-shadow: 0 6px 12px rgba(251, 191, 36, 0.4);
   }
+
+  .dark-skies-container {
+  padding: 1.5rem;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e2e8f0;
+  margin-bottom: 1.5rem;
+  transition: all 0.2s ease;
+}
+
+.header {
+  text-align: center;
+}
+
+.header-title {
+  font-size: 1.5rem;
+  font-weight: 300;
+  color: #64748b;
+}
+
+.icons-times-container {
+  display: flex;
+  justify-content: space-around;
+}
+
+.section {
+  text-align: center;
+}
+
+.icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 1.5rem;
+}
+
+/* Specific background colors for moon and sun icons */
+.moon-icon {
+  background: #f3f0ff;
+}
+
+.sun-icon {
+  background: #fef3c7;
+}
+
+.time-text {
+  color: #64748b;
+  font-size: 0.875rem;
+  font-weight: 500;
+}

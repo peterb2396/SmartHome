@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
-import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun } from "react-icons/fa";
+import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun, FaStarAndCrescent, FaCloudMoon } from "react-icons/fa";
 
 export default function Lights({ BASE_URL }) {
   const [devices, setDevices] = useState([]);
@@ -16,7 +16,8 @@ export default function Lights({ BASE_URL }) {
 
   const [showLights, setShowLights] = useState(true);
   const [showAppliances, setShowAppliances] = useState(true);
-  const [showSmartPlugs, setShowSmartPlugs] = useState(true);
+  const [showSmartPlugs, setShowSmartPlugs] = useState(false);
+  const [showWeather, setShowWeather] = useState(true);
 
   // Fetch devices
   const fetchDevices = useCallback(async () => {
@@ -77,96 +78,51 @@ export default function Lights({ BASE_URL }) {
     const sunsetTime = settings.stargazingEnd || "N/A"
   
     return (
-      <div style={{
-        padding: '1.5rem',
-        background: 'white',
-        borderRadius: '12px',
-        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-        border: '1px solid #e2e8f0',
-        marginBottom: '1.5rem',
-        transition: 'all 0.2s ease',
-    height: '100px'
-
-      }}>
-        {/* Header */}
-        {/* <div style={{
-          textAlign: 'center',
-          marginBottom: '1.5rem'
-        }}> */}
-          {/* <h3 style={{
-            fontSize: '1.5rem',
-            fontWeight: '500',
-            color: '#64748b',
-            margin: 0
-          }}>
-            Stargazing
-          </h3> */}
-        {/* </div> */}
+      <div style={styles.wrapper}>
+        <div style={styles.headerWrapper}>
+          <h3 style={styles.headerTitleText}>Dark Skies</h3>
+        </div>
   
-        {/* Icons and Times Container */}
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          gap: 15
-        }}>
-          {/* Moon Section */}
-          <div style={{
-            flex: '1',
-            textAlign: 'center'
-          }}>
-            {/* Moon Icon */}
-            <div style={{
-              width: '42px',
-              height: '42px',
-              borderRadius: '12px',
-              background: '#f3f0ff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              // margin: '0 auto 1rem',
-              color: '#64748b',
-              fontSize: '1.5rem'
-            }}>
-              <FaMoon />
+        <div style={styles.timesIconRow}>
+          <div style={styles.timeIconSection}>
+            <div style={{ ...styles.baseIconStyle, ...styles.moonIconBackground }}>
+              <FaStarAndCrescent />
             </div>
-            {/* Moon Time Text */}
-            <div style={{
-              color: '#64748b',
-              fontSize: '0.875rem',
-              fontWeight: '500'
-            }}>
-              {moonriseTime}
-            </div>
+            <div style={styles.timeTextStyle}>{moonriseTime}</div>
           </div>
   
-          {/* Sun Section */}
-          <div style={{
-            flex: '1',
-            textAlign: 'center'
-          }}>
-            {/* Sun Icon */}
-            <div style={{
-              width: '42px',
-              height: '42px',
-              borderRadius: '12px',
-              background: '#fef3c7',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              // margin: '0 auto 1rem',
-              color: '#64748b',
-              fontSize: '1.5rem'
-            }}>
+          <div style={styles.timeIconSection}>
+            <div style={{ ...styles.baseIconStyle, ...styles.sunIconBackground }}>
+              <FaCloudMoon />
+            </div>
+            <div style={styles.timeTextStyle}>{sunsetTime}</div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const SunsetDisplay = () => {
+  
+    return (
+      <div style={styles.wrapper}>
+        <div style={styles.headerWrapper}>
+          <h3 style={styles.headerTitleText}>Sunrise</h3>
+        </div>
+  
+        <div style={styles.timesIconRow}>
+          <div style={styles.timeIconSection}>
+            <div style={{ ...styles.baseIconStyle, ...styles.sunIconBackground }}>
               <FaSun />
             </div>
-            {/* Sun Time Text */}
-            <div style={{
-              color: '#64748b',
-              fontSize: '0.875rem',
-              fontWeight: '500'
-            }}>
-              {sunsetTime}
+            <div style={styles.timeTextStyle}>{settings.sunrise}</div>
+          </div>
+  
+          <div style={styles.timeIconSection}>
+            <div style={{ ...styles.baseIconStyle, ...styles.moonIconBackground }}>
+              <FaMoon />
             </div>
+            <div style={styles.timeTextStyle}>{settings.sunset}</div>
           </div>
         </div>
       </div>
@@ -364,9 +320,11 @@ export default function Lights({ BASE_URL }) {
          
         />
         </div>
-        <StargazingDisplay></StargazingDisplay>
+        {/* <StargazingDisplay></StargazingDisplay> */}
 
         </div>
+
+        
         
         
         {showLights && (
@@ -532,6 +490,22 @@ export default function Lights({ BASE_URL }) {
             })}
           </div>
         )}
+
+<SectionHeader 
+          title="Weather" 
+          isExpanded={showWeather} 
+          onClick={() => setShowWeather(!showWeather)}
+          icon={FaSun}
+         
+        />
+
+      {showWeather && (
+          <div style={{...styles.deviceGrid, gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))'}}>
+            <SunsetDisplay></SunsetDisplay>
+
+            <StargazingDisplay></StargazingDisplay>
+          </div>
+      )}
 
         {/* Smart Plugs Section */}
         <SectionHeader 
@@ -1067,7 +1041,52 @@ const styles = {
    cursor: 'pointer',
    transition: 'all 0.2s ease',
    boxShadow: '0 10px 25px rgba(59, 130, 246, 0.3)'
- }
+ },
+ wrapper: {
+  padding: '1.5rem',
+  background: 'white',
+  borderRadius: '12px',
+  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+  border: '1px solid #e2e8f0',
+  marginBottom: '1.5rem',
+  transition: 'all 0.2s ease',
+},
+headerWrapper: {
+  textAlign: 'center',
+},
+headerTitleText: {
+  fontSize: '1.5rem',
+  fontWeight: 300,
+  color: '#64748b',
+},
+timesIconRow: {
+  display: 'flex',
+  justifyContent: 'space-around',
+},
+timeIconSection: {
+  textAlign: 'center',
+},
+baseIconStyle: {
+  width: '48px',
+  height: '48px',
+  borderRadius: '12px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: '#64748b',
+  fontSize: '1.5rem',
+},
+moonIconBackground: {
+  background: '#f3f0ff',
+},
+sunIconBackground: {
+  background: '#fef3c7',
+},
+timeTextStyle: {
+  color: '#64748b',
+  fontSize: '0.875rem',
+  fontWeight: 500,
+},
 };
 
 // Helper for appliances status formatting
