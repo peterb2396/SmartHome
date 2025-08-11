@@ -16,6 +16,8 @@
 
   // Specific light ID's
   const FOYER_LIGHT = "50746520-3906-4528-8473-b7735a0600e9";
+  let morningLight = null
+  let eveningDark = null
 
   // GPIO pins
 
@@ -47,7 +49,7 @@
 
     // sendText("Motion in foyer!", "PIR Sensor")
 
-    if (isAfterSunset && FOYER_LIGHT) {
+    if (isAfterSunset() && FOYER_LIGHT) {
         console.log("Motion detected in foyer after sunset! Turning on foyer light");
         
         // turn on foyer to 45%
@@ -90,8 +92,8 @@ async function checkIsAfterSunset() {
     let currentTime = moment();
 
     // Convert API UTC times to local times *for today*
-    let eveningDark = moment.utc(sunset).local();
-    let morningLight = moment.utc(sunrise).local();
+    eveningDark = moment.utc(sunset).local();
+  morningLight = moment.utc(sunrise).local();
 
     // If we've passed today's sunrise already (morning), but before today's sunset,
     // keep morningLight as today. If we're past sunset, next sunrise is tomorrow.
@@ -107,7 +109,7 @@ async function checkIsAfterSunset() {
     }
 
     // Lights logic — it's night if we're NOT between sunrise & sunset
-    isAfterSunset = !currentTime.isBetween(morningLight, eveningDark);
+    
 
     // Format times for storage
     let stargazingStart = astroEveningDark.format("h:mm");
@@ -131,7 +133,11 @@ async function checkIsAfterSunset() {
   // Refresh once per day at midnight
   setInterval(checkIsAfterSunset, 24 * 60 * 60 * 1000);
   
-  
+  function isAfterSunset()
+  {
+    let currentTime = moment()
+    return !currentTime.isBetween(morningLight, eveningDark);
+  }
   
   
 
@@ -768,7 +774,7 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
 
          // If it is after sunset, include all temp_lights from getDevices in the tempDevices.
          // This will turn on all lights when we arrive to see in the dark.
-         if (isAfterSunset) {
+         if (isAfterSunset()) {
           const allDevices = await listDevices();
           const tempDevicesAll = allDevices.filter(device =>
             temp_lights.includes(device.roomId) ||
