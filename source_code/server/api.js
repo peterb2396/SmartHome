@@ -86,26 +86,30 @@ async function checkIsAfterSunset() {
       astronomical_twilight_begin
     } = response.data.results; // UTC times
 
-    // Convert to local time
+    // Current local time
+    let currentTime = moment();
+
+    // Convert API UTC times to local times *for today*
     let eveningDark = moment.utc(sunset).local();
     let morningLight = moment.utc(sunrise).local();
 
-    // Convert astronomical twilight to local time for stargazing
-    let astroEveningDark = moment.utc(astronomical_twilight_end).local();
-    let astroMorningLight = moment.utc(astronomical_twilight_begin).local();
-
-    let currentTime = moment();
-
-    // If it's after evening twilight, morning light is tomorrow
+    // If we've passed today's sunrise already (morning), but before today's sunset,
+    // keep morningLight as today. If we're past sunset, next sunrise is tomorrow.
     if (currentTime.isAfter(eveningDark)) {
       morningLight.add(1, 'day');
+    }
+
+    // Stargazing times (astronomical twilight) in local time
+    let astroEveningDark = moment.utc(astronomical_twilight_end).local();
+    let astroMorningLight = moment.utc(astronomical_twilight_begin).local();
+    if (currentTime.isAfter(astroEveningDark)) {
       astroMorningLight.add(1, 'day');
     }
 
-    // Lights logic
-    isAfterSunset = currentTime.isAfter(eveningDark) || currentTime.isBefore(morningLight);
+    // Lights logic — it's night if we're NOT between sunrise & sunset
+    isAfterSunset = !currentTime.isBetween(morningLight, eveningDark);
 
-    // Stargazing times (strings)
+    // Format times for storage
     let stargazingStart = astroEveningDark.format("h:mm");
     let stargazingEnd = astroMorningLight.format("h:mm");
 
