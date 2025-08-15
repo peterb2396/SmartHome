@@ -202,7 +202,7 @@ router.post('/smartthings-webhook', (req, res) => {
 });
 
 router.post('/log', (req, res) => {
-  const { src, log, pwd } = req.body;
+  const { src, pwd, log } = req.body;
   if ((pwd && pwd == process.env.SMART_CLIENT_ID) && src && log) {
     console.log(`[${src}] ${log}`);
     res.status(200).send({ status: 'ok' });
