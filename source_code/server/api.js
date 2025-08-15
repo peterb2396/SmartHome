@@ -78,7 +78,7 @@ const lat = 41.722034;  // Wellsboro
 const lng = -77.263969;
 const apiUrl = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lng}&formatted=0`;
 
-async function checkIsAfterSunset() {
+async function fetchAstroData() {
   try {
     const response = await axios.get(apiUrl);
     const {
@@ -128,10 +128,10 @@ async function checkIsAfterSunset() {
 
 
   // Fetch isAfterSunset on startup
-  checkIsAfterSunset();
+  fetchAstroData();
 
   // Refresh once per day at midnight
-  setInterval(checkIsAfterSunset, 24 * 60 * 60 * 1000);
+  setInterval(fetchAstroData, 24 * 60 * 60 * 1000);
   
   function isAfterSunset()
   {
@@ -199,6 +199,16 @@ router.post('/smartthings-webhook', (req, res) => {
   console.log('Received JSON:', req.body);
   // Process the even
   res.sendStatus(200); // Tell SmartThings you received it
+});
+
+router.post('/log', (req, res) => {
+  const { src, log, pwd } = req.body;
+  if ((pwd && pwd == process.env.SMART_CLIENT_ID) && src && log) {
+    console.log(`[${src}] ${log}`);
+    res.status(200).send({ status: 'ok' });
+  } else {
+    res.status(400).send({ error: 'Missing src or log field' });
+  }
 });
 
 router.get("/users", async (req, res) => {
