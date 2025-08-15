@@ -60,6 +60,10 @@ export default function SettingsPage({ BASE_URL }) {
               {Object.keys(settings)
   .filter((key) =>
     key !== "_id" &&
+    key !== "sunset" &&
+    key !== "sunrise" &&
+    key !== "stargazingStart" &&
+    key !== "stargazingEnd" &&
     key !== "lightsOn" &&
     key !== "lights" && (
     typeof settings[key] !== "object" // exclude objects
