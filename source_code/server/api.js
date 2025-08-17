@@ -93,7 +93,7 @@ async function fetchAstroData() {
 
     // Convert API UTC times to local times *for today*
     eveningDark = moment.utc(sunset).local();
-  morningLight = moment.utc(sunrise).local();
+    morningLight = moment.utc(sunrise).local();
 
     // If we've passed today's sunrise already (morning), but before today's sunset,
     // keep morningLight as today. If we're past sunset, next sunrise is tomorrow.
@@ -130,8 +130,6 @@ async function fetchAstroData() {
   // Fetch isAfterSunset on startup
   fetchAstroData();
 
-  // Refresh once per day at midnight
-  setInterval(fetchAstroData, 24 * 60 * 60 * 1000);
   
   function isAfterSunset()
   {
@@ -938,6 +936,9 @@ async function getAccessToken() {
 
   async function maintainUsers()
   {
+
+    // At midnight refresh astro data
+    fetchAstroData();
 
     // Email me a confirmation that the server is running
     const mailOptions = {
