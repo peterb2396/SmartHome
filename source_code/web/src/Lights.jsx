@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import axios from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
-import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun, FaStarAndCrescent, FaCloudMoon } from "react-icons/fa";
+import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun, FaStarAndCrescent, FaCloudMoon, FaFan } from "react-icons/fa";
 
 export default function Lights({ BASE_URL }) {
   const [devices, setDevices] = useState([]);
@@ -210,21 +210,26 @@ function handleUserChange() {
     setDevices((devices) =>
       devices.map((device) => {
         if (device.deviceId === deviceId) {
+          const isFan = device.name.toLowerCase().includes("fan")
           const main = device.status?.components?.main || {};
           return {
-            ...device,
-            status: {
-              ...device.status,
-              components: {
-                ...device.status.components,
-                main: {
-                  ...main,
-                  switch: { switch: { value: on === "on" ? "on" : "off" } },
-                  switchLevel: { level: { value: on === "on" ? level : 0 } },
-                },
+          ...device,
+          status: {
+            ...device.status,
+            components: {
+              ...device.status.components,
+              main: {
+                ...main,
+                switch: { switch: { value: on === "on" ? "on" : "off" } },
+                ...(isFan
+                  ? { fanSpeed: { fanSpeed: { value: on === "on" ? level : 0 } } }
+                  : { switchLevel: { level: { value: on === "on" ? level : 0 } } }
+                ),
               },
             },
-          };
+          },
+        };
+
         }
         return device;
       })
@@ -246,6 +251,7 @@ function handleUserChange() {
 
   // Slider UI immediate update
   const handleSliderChange = (deviceId, level) => {
+
     setDevices((devices) =>
       devices.map((device) =>
         device.deviceId === deviceId
@@ -257,8 +263,12 @@ function handleUserChange() {
                   ...device.status.components,
                   main: {
                     ...device.status.components.main,
-                    switchLevel: { level: { value: Number(level) } },
+                    
                     switch: { switch: { value: Number(level) > 0 ? "on" : "off" } },
+                    ...(device.name.toLowerCase().includes("fan")
+                    ? { fanSpeed: { fanSpeed: { value: Number(level) } } }
+                    : { switchLevel: { level: { value: Number(level) } } }
+                  ),
                   },
                 },
               },
@@ -380,6 +390,12 @@ function handleUserChange() {
               const isOffline = mainStatus.healthCheck?.["DeviceWatch-DeviceStatus"]?.value === "offline";
               const brightness = mainStatus.switchLevel?.level?.value || 0;
 
+              const speedLabels = ['Off', 'Low', 'Medium', 'High', 'Max'];
+
+              const speedValue = mainStatus.fanSpeed?.fanSpeed?.value || 0;
+              const speed = speedLabels[speedValue] ?? 'Unknown';
+              const isFan = device.name.toLowerCase().includes("fan")
+
               return (
                 <div key={device.deviceId} style={styles.deviceCardWrapper}>
                   <div style={{
@@ -403,13 +419,15 @@ function handleUserChange() {
                             ...styles.deviceIcon,
                             ...(isOn ? styles.deviceIconActive : {})
                           }}
-                          onClick={() => updateDeviceState(device.deviceId, isOn ? "off" : "on", brightness || 100)}>
-                            <FaLightbulb />
+                          onClick={() => updateDeviceState(device.deviceId, isOn ? "off" : "on", (isFan? speedValue : brightness || 100))}>
+                            {isFan && <FaFan />}
+                            {!isFan && <FaLightbulb />}
+
                           </div>
                           <div>
                             <h3 style={styles.deviceName}>{device.label}</h3>
                             <p style={styles.deviceStatus}>
-                              {isOffline ? 'Offline' : isOn ? `${brightness}% brightness` : 'Off'}
+                              { isOffline ? 'Offline' : isOn ? (isFan ? `${speed} speed` : `${brightness}% brightness`) : 'Off'}
                             </p>
                           </div>
                         </div>
@@ -428,11 +446,11 @@ function handleUserChange() {
                         {isOn ? 'Turn Off' : 'Turn On'}
                       </button> */}
 
-                      {mainStatus.switchLevel && (
+                      {(mainStatus.switchLevel || mainStatus.fanSpeed) && (
                         <div style={styles.sliderContainer}>
                           <div style={styles.sliderHeader}>
-                            <span style={styles.sliderLabel}>Brightness</span>
-                            <span style={styles.sliderValue}>{brightness}%</span>
+                            <span style={styles.sliderLabel}>{isFan ? "Speed" : "Brightness"}</span>
+                            <span style={styles.sliderValue}>{isFan ? `${speed}` : `${brightness}%`}</span>
                           </div>
                           <input
                             type="range"
@@ -440,9 +458,10 @@ function handleUserChange() {
                               ...styles.slider,
                               background: `linear-gradient(to right, #fbbf24 0%, #fbbf24 ${brightness}%, #e5e7eb ${brightness}%, #e5e7eb 100%)`
                             }}
-                            min="1"
-                            max="100"
-                            value={brightness}
+                            min="0"
+                            max= {isFan? "4" : "100"}
+                            // step={isFan? "25" : "1"}
+                            value={isFan ? speedValue : brightness}
                             onChange={(e) => handleSliderChange(device.deviceId, e.target.value)}
                             onMouseUp={(e) => handleBrightnessChange(device.deviceId, e.target.value)}
                             onTouchEnd={(e) => handleBrightnessChange(device.deviceId, e.target.value)}

@@ -10,8 +10,8 @@ const Main = () => {
 
   // const SERVER_URL = `http://localhost:3001`
   // const SERVER_URL = `https://smarthome153.onrender.com`
-  // const SERVER_URL = `https://server.153home.online`
-  const SERVER_URL = `http://172.20.10.3:3001`
+  const SERVER_URL = `https://server.153home.online`
+  // const SERVER_URL = `http://172.20.10.3:3001`
   
   
 
