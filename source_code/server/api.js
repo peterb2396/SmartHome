@@ -422,9 +422,9 @@ async function lights(lightDevices = null, on = true, password, level) {
   await updateSettings();
 
   try {
-    const allLights = lightDevices || await listDevices();
+    const allLights = await listDevices();
 
-    for (const light of allLights) {
+    for (const light of lightDevices ?? allLights) {
       const deviceId = light.deviceId || light;
       const deviceSettings = settings.lights?.[deviceId];
 
@@ -441,7 +441,8 @@ async function lights(lightDevices = null, on = true, password, level) {
         }
       }
 
-      var isFan = light.name?.toLowerCase().includes("fan")
+      const lightObj = allLights.find((d) => d.deviceId === deviceId)
+      var isFan = lightObj.name?.toLowerCase().includes("fan")
 
       // Fallback or no lutronId - use SmartThings API
       const commands = level ? [
