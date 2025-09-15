@@ -456,7 +456,7 @@ function handleUserChange() {
                             type="range"
                             style={{
                               ...styles.slider,
-                              background: `linear-gradient(to right, #fbbf24 0%, #fbbf24 ${isFan ? speed*25 : brightness}%, #e5e7eb ${isFan ? speed*25 : brightness}%, #e5e7eb 100%)`
+                              background: `linear-gradient(to right, #fbbf24 0%, #fbbf24 ${isFan ? speedValue*25 : brightness}%, #e5e7eb ${isFan ? speedValue*25 : brightness}%, #e5e7eb 100%)`
                             }}
                             min="0"
                             max= {isFan? "4" : "100"}
