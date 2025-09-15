@@ -441,7 +441,7 @@ async function lights(lightDevices = null, on = true, password, level) {
         }
       }
 
-      var isFan = light.label.toLowerCase().includes("fan")
+      var isFan = light.name.toLowerCase().includes("fan")
 
       // Fallback or no lutronId - use SmartThings API
       const commands = level ? [
