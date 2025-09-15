@@ -12,7 +12,7 @@
   const qs = require('qs'); // Import qs for URL encoding
   const moment = require('moment');
   const net = require('net');
-  const Gpio = require('onoff').Gpio;
+  const Gpio = require('./gpio.js');
 
   // Specific light ID's
   const FOYER_LIGHT = "50746520-3906-4528-8473-b7735a0600e9";
@@ -30,46 +30,54 @@
       return pin;
   }
 
-  // GPIO cleanup
-  process.on('SIGINT', () => (gpios.forEach(pin => pin.unexport()), process.exit()));
+  
 
 
+  if (process.platform === "linux")
+  {
 
-  // PIR sensor (night time temp lights)
-  const pir = new AutoGpio(17, 'in', 'rising'); // GPIO17, detect rising edge
+    // GPIO cleanup
+    process.on('SIGINT', () => (gpios.forEach(pin => pin.unexport()), process.exit()));
+
+    // PIR sensor (night time temp lights)
+    const pir = new AutoGpio(17, 'in', 'rising'); // GPIO17, detect rising edge
+
+    
+    let foyerLightTimeout = null;
+    // Check motion events for walking to foyer
+    pir.watch((err, value) => {
+      if (err) {
+          console.error('PIR sensor error:', err);
+          return;
+      }
+
+      // sendText("Motion in foyer!", "PIR Sensor")
+
+      if (isAfterSunset() && FOYER_LIGHT) {
+          console.log("Motion detected in foyer after sunset! Turning on foyer light");
+          
+          // turn on foyer to 45%
+          lights([FOYER_LIGHT], true, process.env.PASSWORD, 45);
+
+          // If there's an existing timer, clear it so we reset the 20-second countdown
+          if (foyerLightTimeout) {
+            clearTimeout(foyerLightTimeout);
+          }
+
+          // Set a new timer to turn off the light after 20 seconds of no motion
+          foyerLightTimeout = setTimeout(() => {
+            lights([FOYER_LIGHT], false, process.env.PASSWORD);
+            foyerLightTimeout = null; // clear the reference
+          }, 45000);
+          
+      } else {
+          // console.log("Motion detected in foyer, but it's not after sunset.");
+      }
+    });
+    
+  }
 
   
-  let foyerLightTimeout = null;
-  // Check motion events for walking to foyer
-  pir.watch((err, value) => {
-    if (err) {
-        console.error('PIR sensor error:', err);
-        return;
-    }
-
-    // sendText("Motion in foyer!", "PIR Sensor")
-
-    if (isAfterSunset() && FOYER_LIGHT) {
-        console.log("Motion detected in foyer after sunset! Turning on foyer light");
-        
-        // turn on foyer to 45%
-        lights([FOYER_LIGHT], true, process.env.PASSWORD, 45);
-
-        // If there's an existing timer, clear it so we reset the 20-second countdown
-        if (foyerLightTimeout) {
-          clearTimeout(foyerLightTimeout);
-        }
-
-        // Set a new timer to turn off the light after 20 seconds of no motion
-        foyerLightTimeout = setTimeout(() => {
-          lights([FOYER_LIGHT], false, process.env.PASSWORD);
-          foyerLightTimeout = null; // clear the reference
-        }, 45000);
-        
-    } else {
-        // console.log("Motion detected in foyer, but it's not after sunset.");
-    }
-  });
 
 
 
@@ -433,17 +441,21 @@ async function lights(lightDevices = null, on = true, password, level) {
         }
       }
 
+      var isFan = light.label.toLowerCase().includes("fan")
+
       // Fallback or no lutronId - use SmartThings API
       const commands = level ? [
         {
           capability: 'switch',
           command: on ? 'on' : 'off',
         },
+
         {
-          capability: "switchLevel",
-          command: "setLevel",
+          capability: isFan ? "fanSpeed" : "switchLevel", //fanSpeed
+          command: isFan ? "setFanSpeed" : "setLevel",       //setFanSpeed
           arguments: [on ? (light.level ? light.level : level) : 0],
         },
+
       ] : [
         {
           capability: 'switch',
