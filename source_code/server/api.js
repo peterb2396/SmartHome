@@ -34,7 +34,7 @@ const { send } = require('process');
   
 
 
-  if (process.platform === "linux")
+  if (process.platform === "linux" && !process.env.DISABLE_GPIO)
   {
 
     // GPIO cleanup
