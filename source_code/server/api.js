@@ -226,8 +226,9 @@ router.post("/sendMail", async (req, res) => {
           return res.status(400).json({ error: "Missing required fields" });
       }
 
-      await sendMail(from, to, subject, text, password);
-      res.json({ success: true });
+      const result = await sendMail(from, to, subject, text, password);
+      if (result) res.json({ success: true });
+      else res.status(500).json({ error: "Failed to send email" });
   } catch (error) {
       console.error("Error sending email:", error);
       res.status(500).json({ error: "Failed to send email" });
