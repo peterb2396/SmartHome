@@ -13,6 +13,7 @@
   const moment = require('moment');
   const net = require('net');
   const Gpio = require('./gpio.js');
+const { send } = require('process');
 
   // Specific light ID's
   const FOYER_LIGHT = "50746520-3906-4528-8473-b7735a0600e9";
@@ -214,6 +215,22 @@ router.post('/log', (req, res) => {
     res.status(200).send({ status: 'ok' });
   } else {
     res.status(400).send({ error: 'Missing src or log field' });
+  }
+});
+
+// API route to sendMail using our function
+router.post("/sendMail", async (req, res) => {
+  try {
+      const { from, to, subject, text, password } = req.body;
+      if (!from || !to || !subject || !text || !password) {
+          return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      await sendMail(from, to, subject, text, password);
+      res.json({ success: true });
+  } catch (error) {
+      console.error("Error sending email:", error);
+      res.status(500).json({ error: "Failed to send email" });
   }
 });
 
@@ -867,20 +884,13 @@ async function generateSignatureGeneral(timestamp, signUrl, method, body = '') {
         
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error("Error powering device:", error);
+      console.error("Error powering devices:", error);
       res.status(500).json({ error: "Failed to power device" });
     }
   });
 
 
-  // Mailer
-  const transporter = nodemailer.createTransport({
-    service: 'Gmail',
-    auth: {
-      user: process.env.MAILER_USER,
-      pass: process.env.MAILER_PASS,
-    },
-  });
+  const transporters = {}
 
 
   // Maitenance
@@ -946,6 +956,40 @@ async function getAccessToken() {
   }
 }
 
+async function sendMail(from, to, subject, text, password) {
+  const mailOptions = {
+    from: from,
+    to: to,
+    subject: subject,
+    text: text,
+  };
+
+  // Check if transporter for this "from" email already exists
+  if (!transporters[from]) {
+    transporters[from] = nodemailer.createTransport({
+      service: 'Gmail',
+      auth: {
+        user: from,
+        pass: password,
+      },
+    });
+  }
+
+  // Use the existing (or just-created) transporter
+  const transporter = transporters[from];
+
+  // Send the email
+  await transporter.sendMail(mailOptions, (error, info) => {
+    if (error) {
+      console.log(`Error sending email from ${from}:`, error);
+      return false
+    } else {
+      return true
+    }
+  });
+}
+
+
 
   async function maintainUsers()
   {
@@ -953,21 +997,7 @@ async function getAccessToken() {
     // At midnight refresh astro data
     fetchAstroData();
 
-    // Email me a confirmation that the server is running
-    const mailOptions = {
-      from: process.env.MAILER_USER,
-      to: process.env.ADMIN_EMAIL,
-      subject: `Successful SmartHome Maitenance`,
-      text: `Hi Peter, just a confirmation that maitenance has ran for the SmartHome`,
-    };
-  
-    // Send the email
-    transporter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        console.log('Error sending warning email:', error);
-      } else {
-      }
-    });
+    
 
     // Refresh the access token
     await getAccessToken();
@@ -1181,26 +1211,21 @@ async function getAccessToken() {
           { email: req.body.email }, // Find the user by email
           updateOperation).then(() => {
 
-            const mailOptions = {
-              from: process.env.MAILER_USER,
-              to: req.body.email,
-              subject: `${code} is your ${process.env.APP_NAME} confirmaition code`,
-              text: `A new password was requested for your account. If this was you, enter code ${code} in the app. If not, somebody tried to log in using your email.`,
-            };
-          
-            // Send the email
-            transporter.sendMail(mailOptions, (error, info) => {
-              if (error) {
-                console.log('Error sending email:', error);
-                res.status(500)
-                res.json({error: "error sending email"})
-              } else {
-                console.log('successfully sent code')
-                res.status(200)
-                res.json('successfully sent password reset email')
-                
+             if (sendMail(process.env.MAILER_USER, req.body.email, `${code} is your ${process.env.APP_NAME} confirmaition code`, `A new password was requested for your account. If this was you, enter code ${code} in the app. If not, somebody tried to log in using your email.`, process.env.MAILER_PASS))
+             {
+              res.status(200).send({
+                message: "Sent code!",
+              });
+             }
+              else
+              {
+                res.status(500).send({
+                  message: "Could not send mail!",
+                });
               }
-            });
+            
+          
+            
           }) 
 
   })
@@ -1232,24 +1257,15 @@ async function getAccessToken() {
           updateOperation, // Apply the update operation
           { new: true }).then(() => {
 
-            const mailOptions = {
-              from: process.env.MAILER_USER,
-              to: user.email,
-              subject: `${code} is your ${process.env.APP_NAME} confirmaition code`,
-              text: `Your ${process.env.APP_NAME} account was accessed from a new location. If this was you, enter code ${code} in the app. If not, you can change your password in the app. Feel free to reply to this email for any assistance!`,
-            };
-          
-            // Send the email
-            transporter.sendMail(mailOptions, (error, info) => {
-              if (error) {
-                console.log('Error sending email:', error);
-                reject('Could not send mail!')
-              } else {
-                console.log('successfully sent code')
-                resolve('Sent code!')
-                
+              if (sendMail(process.env.MAILER_USER, user.email, `${code} is your ${process.env.APP_NAME} confirmaition code`, `A new device was used to log in to your account. If this was you, enter code ${code} in the app. If not, somebody tried to log in using your email.`, process.env.MAILER_PASS))
+              {
+                resolve(true)
               }
-            });
+                else
+                {
+                  console.log('Could not send mail api/sendCode')
+                  reject('Could not send mail!')
+                }
           }) 
         
     }) // Promise end
@@ -1323,24 +1339,17 @@ async function getAccessToken() {
 
   // Send help email
   router.post("/contact", (request, response) => {
-    const mailOptions = {
-      from: process.env.MAILER_USER,
-      to: process.env.MAILER_USER,
-      bcc: process.env.ADMIN_EMAIL,
-      subject: `${process.env.APP_NAME} Support`,
-      text: `${request.body.msg}\n\nfrom ${request.body.email} (${request.body.uid})`,
-    };
-  
-    // Send the email
-    transporter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        console.log('Error sending support email from user:', error);
-        response.status(500).send("Error")
-      } else {
-        response.status(200).send("Success")
+    if (sendMail(process.env.MAILER_USER, process.env.MAILER_USER, `${process.env.APP_NAME} Support`, `${request.body.msg}\n\nfrom ${request.body.email} (${request.body.uid})`, process.env.MAILER_PASS))
+    {
+      response.status(200).send("Success")
+    }
+    else
+    {
+      response.status(500).send("Error")
+    }
+    
 
-      }
-    });
+    
   })
 
   // register endpoint
@@ -1368,22 +1377,15 @@ async function getAccessToken() {
             Options.findOne({}).then((option_doc) => {
               if (option_doc.registerAlerts)
               {
-                // Send the email
-                const mailOptions = {
-                  from: process.env.MAILER_USER,
-                  to: process.env.MAILER_USER,
-                  bcc: process.env.ADMIN_EMAIL,
-                  subject: `${process.env.APP_NAME} new user! 😁`,
-                  text: `${request.body.email} has signed up!`,
-                };
-              
-                // Send the email
-                transporter.sendMail(mailOptions, (error, info) => {
-                  if (error) {
-                    console.log('Error sending new user email (to myself):', error);
-                  } else {
-                  }
-                });
+                if (sendMail(process.env.MAILER_USER, process.env.MAILER_USER, `${process.env.APP_NAME} new user! 😁`, `${request.body.email} has signed up!`, process.env.MAILER_PASS))
+                {
+                  // Email sent
+                }
+                else
+                {
+                  console.log('Error sending new user email (to myself)')
+                }
+                
                 
               }
 
