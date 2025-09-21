@@ -1,9 +1,9 @@
 import SettingsPage from "./SettingsPage";
 
-export default function Dashboard({ BASE_URL }) {
+export default function Dashboard() {
   return (
     <div>
-      <SettingsPage BASE_URL = {BASE_URL}></SettingsPage>
+      <SettingsPage></SettingsPage>
     </div>
   );
 }

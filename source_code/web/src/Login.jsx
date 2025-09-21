@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import axios from "axios";
+import axios from "./axios"
 import CodeEntry from "./CodeEntry";
 import "bootstrap/dist/css/bootstrap.min.css";
 
@@ -32,7 +32,7 @@ export default function LoginScreen(props) {
     setLoginInProgress(true);
     setStatus("Checking credentials...");
     axios
-      .post(`${props.api}/log-or-reg`, {
+      .post(`/log-or-reg`, {
         email: email,
         password: password,
         device: deviceId,
@@ -73,7 +73,7 @@ export default function LoginScreen(props) {
     e.preventDefault();
     setStatus("Sending code to email...");
     axios
-      .post(`${props.api}/resetPassword`, { email: email })
+      .post(`/resetPassword`, { email: email })
       .then(() => {
         setStatus("Code sent to your email. Enter it below.");
         setShowCode(true);
@@ -90,7 +90,7 @@ export default function LoginScreen(props) {
       return;
     }
     axios
-      .post(`${props.api}/setNewPassword`, {
+      .post(`/setNewPassword`, {
         resetCode: resetCode,
         pass: pass1,
         email: email,
@@ -129,7 +129,7 @@ export default function LoginScreen(props) {
         <BackButton onClick={() => setShowCode(false)} />
         <CodeEntry
           fulfilled={async (code) => {
-            axios.post(`${props.api}/confirmDevice`, { email: email, code: code })
+            axios.post(`/confirmDevice`, { email: email, code: code })
             .then(async (res) => {
               if (forgotPassword) {
                 setStatus("Choose a new password");

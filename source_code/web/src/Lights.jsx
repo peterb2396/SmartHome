@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import axios from "axios";
+import axios from "./axios";
 import "bootstrap/dist/css/bootstrap.min.css";
 import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun, FaStarAndCrescent, FaCloudMoon, FaFan } from "react-icons/fa";
 
-export default function Lights({ BASE_URL }) {
+export default function Lights() {
   const [devices, setDevices] = useState([]);
   const [settings, setSettings] = useState({});
   const [users, setUsers] = useState([]);
@@ -38,7 +38,7 @@ export default function Lights({ BASE_URL }) {
     currentFetchController.current = controller;
 
     try {
-      const { data } = await axios.get(`${BASE_URL}/list-devices`, {
+      const { data } = await axios.get(`/list-devices`, {
         signal: controller.signal
       });
       setDevices(data);
@@ -50,7 +50,7 @@ export default function Lights({ BASE_URL }) {
       setLoading(false);
       currentFetchController.current = null;
     }
-  }, [BASE_URL, pausePollingUntil]);
+  }, [pausePollingUntil]);
 
 function handleUserChange() {
    currentFetchController.current?.abort();
@@ -83,34 +83,34 @@ function handleUserChange() {
   // Fetch settings
   const fetchSettings = useCallback(async () => {
     try {
-      const { data } = await axios.get(`${BASE_URL}/settings`);
+      const { data } = await axios.get(`/settings`);
       setSettings(data);
     } catch (e) {
       console.error("Error fetching settings:", e);
     }
-  }, [BASE_URL]);
+  }, []);
 
   // Fetch users
   const fetchUsers = useCallback(async () => {
     try {
-      const { data } = await axios.get(`${BASE_URL}/users`);
+      const { data } = await axios.get(`/users`);
       setUsers(data);
     } catch (e) {
       console.error("Error fetching users:", e);
     }
-  }, [BASE_URL]);
+  }, []);
 
   // Persist settings with stable callback
   const updateSetting = useCallback(
     async (key, value) => {
       try {
-        await axios.post(`${BASE_URL}/settings`, { key, value });
+        await axios.post(`/settings`, { key, value });
         setSettings((prev) => ({ ...prev, [key]: value }));
       } catch (error) {
         console.error("Error updating setting:", error);
       }
     },
-    [BASE_URL]
+    []
   );
 
   const StargazingDisplay = () => {
@@ -243,7 +243,7 @@ function handleUserChange() {
         password: localStorage.getItem("token"),
         level: level,
       };
-      await axios.post(`${BASE_URL}/lights`, payload);
+      await axios.post(`/lights`, payload);
     } catch (error) {
       console.error("Error updating device state:", error);
     }

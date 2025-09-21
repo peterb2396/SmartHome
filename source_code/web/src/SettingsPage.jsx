@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import axios from "axios";
+import axios from "./axios";
 import "bootstrap/dist/css/bootstrap.min.css";
 
-export default function SettingsPage({ BASE_URL }) {
+export default function SettingsPage() {
   const [settings, setSettings] = useState({});
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
@@ -10,12 +10,12 @@ export default function SettingsPage({ BASE_URL }) {
 
   const fetchSettings = useCallback(async () => {
     try {
-      const { data } = await axios.get(`${BASE_URL}/settings`);
+      const { data } = await axios.get(`/settings`);
       setSettings(data);
     } catch (error) {
       console.error("Error fetching settings:", error);
     }
-  }, [BASE_URL]);
+  }, []);
 
   useEffect(() => {
     fetchSettings();
@@ -23,7 +23,7 @@ export default function SettingsPage({ BASE_URL }) {
 
   const updateSetting = async (key, value) => {
     try {
-      await axios.post(`${BASE_URL}/settings`, { key, value });
+      await axios.post(`/settings`, { key, value });
       setSettings((prev) => ({ ...prev, [key]: value }));
     } catch (error) {
       console.error("Error updating setting:", error);
@@ -42,7 +42,7 @@ export default function SettingsPage({ BASE_URL }) {
   };
 
   const handleTransitAction = async (action) => {
-    await axios.post(`${BASE_URL}/${action}`, {"who": name, "password": localStorage.getItem('token')});
+    await axios.post(`/${action}`, {"who": name, "password": localStorage.getItem('token')});
 
     // setName("")
     fetchSettings()

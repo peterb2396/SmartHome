@@ -20,8 +20,8 @@ const MyRouter = ({host}) => {
     
     <Nav></Nav>
       <Routes>
-          <Route index element={<Lights BASE_URL = {host}/>} />
-          <Route path="settings" element={<Dashboard BASE_URL = {host}/>} />
+          <Route index element={<Lights/>} />
+          <Route path="settings" element={<Dashboard/>} />
           {/* <Route path="account" element={<Account host = {host}/>} /> */}
 
       </Routes>
