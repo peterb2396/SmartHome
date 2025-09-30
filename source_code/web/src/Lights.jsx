@@ -203,34 +203,40 @@ function handleUserChange() {
   }, [loading, settings, devices, initedSettings, updateSetting]);
 
   // Optimistic Device state update
-  const updateDeviceState = async (deviceId, on, level = 100) => {
+  const updateDeviceState = async (deviceId, on, level = null) => {
     // Immediately update UI state
     handleUserChange(); // Pause polling to avoid overwriting changes
 
     setDevices((devices) =>
       devices.map((device) => {
         if (device.deviceId === deviceId) {
-          const isFan = device.name.toLowerCase().includes("fan")
+          const isFan = device.name.toLowerCase().includes("fan");
+          const isPlug = device.name.toLowerCase().includes("c2c-switch");
           const main = device.status?.components?.main || {};
+
+      
+    
           return {
-          ...device,
-          status: {
-            ...device.status,
-            components: {
-              ...device.status.components,
-              main: {
-                ...main,
-                switch: { switch: { value: on === "on" ? "on" : "off" } },
-                ...(isFan
-                  ? { fanSpeed: { fanSpeed: { value: on === "on" ? level : 0 } } }
-                  : { switchLevel: { level: { value: on === "on" ? level : 0 } } }
-                ),
+            ...device,
+            status: {
+              ...device.status,
+              components: {
+                ...device.status.components,
+                main: {
+                  ...main,
+                  switch: { switch: { value: on === "on" ? "on" : "off" } },
+                  ...(!isPlug
+                    ? isFan
+                      ? { fanSpeed: { fanSpeed: { value: on === "on" ? level : 0 } } }
+                      : { switchLevel: { level: { value: on === "on" ? level : 0 } } }
+                    : {}
+                  ),
+                },
               },
             },
-          },
-        };
-
+          };
         }
+  
         return device;
       })
     );
@@ -619,7 +625,9 @@ function handleUserChange() {
                             ...(!isOn ? styles.plugToggleOff : styles.plugToggleOn),
                             ...(isOffline ? styles.powerButtonDisabled : {})
                           }}
-                          onClick={() => updateDeviceState(device.deviceId, isOn ? "off" : "on", mainStatus.switchLevel?.level?.value || 100)}
+                          onClick={() => {
+                            updateDeviceState(device.deviceId, isOn ? "off" : "on", null);
+                          }}
                           disabled={isOffline}
                         >
                           <FaPowerOff />
