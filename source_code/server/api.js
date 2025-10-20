@@ -41,9 +41,9 @@ const { send } = require('process');
     process.on('SIGINT', () => (gpios.forEach(pin => pin.unexport()), process.exit()));
 
     // PIR sensor (night time temp lights)
-    const pir = new AutoGpio(17, 'in', 'rising'); // GPIO17, detect rising edge
+    const pir = new AutoGpio(22, 'in', 'rising'); // GPIO22, detect rising edge
 
-    
+  
     let foyerLightTimeout = null;
     // Check motion events for walking to foyer
     pir.watch((err, value) => {
