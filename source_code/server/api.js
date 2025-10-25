@@ -249,6 +249,10 @@ router.post('/smartthings-webhook', (req, res) => {
 });
 
 router.post('/start-car', async (req, res) => {
+
+  // const val = await validatePassword(password);
+  // if (!val) return;
+
   console.log("Alexa triggered remote start intent, request body:", req.body);
 
   await remoteStart();
