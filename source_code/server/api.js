@@ -255,7 +255,7 @@ router.post('/start-car', async (req, res) => {
 
   console.log("Alexa triggered remote start intent, request body:", req.body);
 
-  await remoteStart();
+  await remoteStart(); // change
 
   res.json({
     version: "1.0",
