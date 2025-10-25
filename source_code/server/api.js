@@ -13,7 +13,6 @@
   const moment = require('moment');
   const net = require('net');
   const Gpio = require('./gpio.js');
-const { send } = require('process');
 
   // Specific light ID's
   const FOYER_LIGHT = "50746520-3906-4528-8473-b7735a0600e9";
@@ -118,6 +117,7 @@ async function remoteStart() {
   // Press unlock for 300 ms
   await pressButton(unlock, 300);
 
+  sendText("Car started remotely.", "Remote Start");
   console.log("Remote start sequence complete.");
 }
 
@@ -149,6 +149,182 @@ async function remoteStop() {
 const lat = 41.722034;  // Wellsboro
 const lng = -77.263969;
 const apiUrl = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lng}&formatted=0`;
+const TZ  = 'America/New_York';            // local timezone
+
+async function getTempFAt7am(date) {
+  // date is local; build YYYY-MM-DD
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const url = `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${LAT}&longitude=${LNG}` +
+    `&hourly=temperature_2m` +
+    `&temperature_unit=fahrenheit` +
+    `&timezone=${encodeURIComponent(TZ)}` +
+    `&start_date=${y}-${m}-${d}&end_date=${y}-${m}-${d}`;
+  const { data } = await axios.get(url, { timeout: 12000 });
+  const times = data?.hourly?.time || [];
+  const temps = data?.hourly?.temperature_2m || [];
+  // Find the 07:00 entry in local time
+  const target = `${y}-${m}-${d}T07:00`;
+  const idx = times.indexOf(target);
+  if (idx === -1) throw new Error(`No 07:00 reading found for ${target}`);
+  return temps[idx];
+}
+
+// ====== School calendar / holiday logic ======
+
+// In-season (inclusive): Aug 20 → Dec 31 OR Jan 1 → Jun 1
+function inSeason(date) {
+  const y = date.getFullYear();
+  const md = (m, d) => new Date(y, m - 1, d);
+  const mm = date.getMonth() + 1; // 1-12
+
+  const inFall = date >= md(8, 20) && date <= md(12, 31);
+  const inSpring = date >= md(1, 1) && date <= md(6, 1);
+  return inFall || inSpring;
+}
+
+function isWeekday(date) {
+  const day = date.getDay(); // 0=Sun..6=Sat
+  return day >= 1 && day <= 5;
+}
+
+// Federal holidays (observed) for a given date
+function isFederalHoliday(date) {
+  const y = date.getFullYear();
+  const mm = date.getMonth(); // 0-based
+  const dd = date.getDate();
+  const dow = date.getDay();
+
+  // Utility
+  const sameDay = (a, b) => a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+  const nthDow = (year, month0, dowWanted, n) => {
+    const first = new Date(year, month0, 1);
+    const shift = (dowWanted - first.getDay() + 7) % 7;
+    return new Date(year, month0, 1 + shift + 7*(n-1));
+  };
+  const lastDow = (year, month0, dowWanted) => {
+    const last = new Date(year, month0 + 1, 0);
+    const shift = (last.getDay() - dowWanted + 7) % 7;
+    return new Date(year, month0 + 1, 0 - shift);
+  };
+  const observedFixed = (year, month0, day) => {
+    const actual = new Date(year, month0, day);
+    const wd = actual.getDay();
+    if (wd === 6) return new Date(year, month0, day - 1); // Saturday -> Friday
+    if (wd === 0) return new Date(year, month0, day + 1); // Sunday -> Monday
+    return actual;
+  };
+
+  // List of US federal holidays (observed dates)
+  const holidays = [
+    observedFixed(y, 0, 1),                           // New Year's Day
+    nthDow(y, 0, 1, 3),                               // MLK Day (3rd Mon Jan)
+    nthDow(y, 1, 1, 3),                               // Washington's Birthday (Presidents Day)
+    lastDow(y, 4, 1),                                 // Memorial Day (last Mon May)
+    observedFixed(y, 5, 19),                          // Juneteenth
+    observedFixed(y, 6, 4),                           // Independence Day
+    nthDow(y, 8, 1, 1),                               // Labor Day (1st Mon Sep)
+    nthDow(y, 9, 1, 2),                               // Columbus / Indigenous Peoples (2nd Mon Oct)
+    observedFixed(y, 10, 11),                         // Veterans Day
+    nthDow(y, 10, 4, 4),                              // Thanksgiving (4th Thu Nov)
+    observedFixed(y, 11, 25),                         // Christmas
+  ];
+
+  // Thanksgiving adjacent: Thu (itself), Fri after, Mon, Tue after
+  const thanksgiving = nthDow(y, 10, 4, 4);
+  const friAfter = new Date(thanksgiving); friAfter.setDate(friAfter.getDate() + 1);
+  const monAfter = new Date(thanksgiving); monAfter.setDate(monAfter.getDate() + 4);
+  const tueAfter = new Date(thanksgiving); tueAfter.setDate(tueAfter.getDate() + 5);
+
+  // Easter-related: Good Friday (Fri before Easter), Easter Monday (Mon after Easter)
+  const easterSun = easterSunday(y);
+  const goodFriday = new Date(easterSun); goodFriday.setDate(goodFriday.getDate() - 2);
+  const easterMonday = new Date(easterSun); easterMonday.setDate(easterMonday.getDate() + 1);
+
+  // Winter break: Dec 24 → Jan 2 inclusive (spans year boundary)
+  const inWinterBreak =
+    (mm === 11 && dd >= 24) || (mm === 0 && dd <= 2); // Dec==11 (0-based), Jan==0
+
+  // Combine checks
+  if (inWinterBreak) return true;
+  if ([thanksgiving, friAfter, monAfter, tueAfter, goodFriday, easterMonday].some(d => sameDay(d, date))) return true;
+  if (holidays.some(d => sameDay(d, date))) return true;
+
+  return false;
+}
+
+// Anonymous Gregorian algorithm for Easter Sunday
+function easterSunday(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);      // 3=March, 4=April
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+// Final eligibility gate for running the car start
+function shouldRunToday(date) {
+  return inSeason(date) && isWeekday(date) && !isFederalHoliday(date);
+}
+
+// Temp gate: NOT between 60 and 80 (i.e., <60 or >80)
+function tempTriggers(tempF) {
+  return (tempF < 60) || (tempF > 80);
+}
+
+// ===== Scheduler =====
+// Two daily jobs: 07:00 and 07:11 local time. We still re-check all conditions at each run.
+
+async function maybeStartCar(reasonTag) {
+  const now = new Date();
+  try {
+    if (!shouldRunToday(now)) {
+      console.log(`[${now.toLocaleString()}] Skip (${reasonTag}): not an eligible work day.`);
+      return;
+    }
+    const tempF = await getTempFAt7am(now);
+    if (!tempTriggers(tempF)) {
+      console.log(
+        `[${now.toLocaleString()}] Skip (${reasonTag}): temp ${tempF}°F is between 60–80°F.`
+      );
+      return;
+    }
+    console.log(`[${now.toLocaleString()}] Conditions met (${reasonTag}). Temp ${tempF}°F. Starting car...`);
+    await remoteStart();
+  } catch (err) {
+    console.error(`[${now.toLocaleString()}] Error in maybeStartCar(${reasonTag}):`, err.message);
+  }
+}
+
+// Run at 7:00 AM every day
+cron.schedule('0 7 * * *', () => {
+  console.log("Cron → 07:00 triggered");
+  maybeStartCar('07:00');
+}, {
+  scheduled: true,
+  timezone: 'America/New_York'
+});
+
+// Run at 7:11 AM every day
+cron.schedule('11 7 * * *', () => {
+  console.log("Cron → 07:11 triggered");
+  maybeStartCar('07:11');
+}, {
+  scheduled: true,
+  timezone: 'America/New_York'
+});
 
 async function fetchAstroData() {
   try {
