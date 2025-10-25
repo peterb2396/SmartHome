@@ -121,6 +121,30 @@ async function remoteStart() {
   console.log("Remote start sequence complete.");
 }
 
+// Remote Start Sequence
+async function remoteStop() {
+  console.log("Starting remote stop sequence...");
+
+  // Lock twice (300 ms each)
+  await pressButton(unlock, 300);
+  await new Promise(r => setTimeout(r, 600));
+  await pressButton(unlock, 300);
+
+  // Wait 500 ms
+  await new Promise(r => setTimeout(r, 500));
+
+  // Hold remote start for 5 seconds
+  await pressButton(remoteStartButton, 5000);
+
+  // Wait 500 ms
+  await new Promise(r => setTimeout(r, 500));
+
+  // Press unlock for 300 ms
+  await pressButton(lock, 300);
+
+  console.log("Remote stop sequence complete.");
+}
+
  // To determine sunset
 const lat = 41.722034;  // Wellsboro
 const lng = -77.263969;
@@ -247,6 +271,28 @@ router.post('/smartthings-webhook', (req, res) => {
   res.sendStatus(200); // Tell SmartThings you received it
 });
 
+router.post('/lock-car', async (req, res) => {
+  // const val = await validatePassword(password);
+  // if (!val) return;
+
+  console.log("Alexa triggered remote lock intent, request body:", req.body);
+
+  await lock.writeSync(1);
+  setTimeout(() => lock.writeSync(0), 300);
+
+  res.json({
+    version: "1.0",
+    response: {
+      outputSpeech: {
+        type: "PlainText",
+        text: "Your Suburban is locking now."
+      },
+      shouldEndSession: true
+    }
+  });
+}
+);
+
 router.post('/start-car', async (req, res) => {
 
   // const val = await validatePassword(password);
@@ -262,6 +308,27 @@ router.post('/start-car', async (req, res) => {
       outputSpeech: {
         type: "PlainText",
         text: "Your Suburban is starting now."
+      },
+      shouldEndSession: true
+    }
+  });
+});
+
+router.post('/stop-car', async (req, res) => {
+
+  // const val = await validatePassword(password);
+  // if (!val) return;
+
+  console.log("Alexa triggered remote stop intent, request body:", req.body);
+
+  await remoteStop(); // change
+
+  res.json({
+    version: "1.0",
+    response: {
+      outputSpeech: {
+        type: "PlainText",
+        text: "Your Suburban is stopping now."
       },
       shouldEndSession: true
     }
