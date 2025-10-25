@@ -43,10 +43,7 @@ const { send } = require('process');
     // PIR sensor (night time temp lights)
     const pir = new AutoGpio(22, 'in', 'rising'); // GPIO22, detect rising edge
 
-    // key fob transistors
-    const unlock = new Gpio(23, 'out');
-    const remoteStartButton = new Gpio(24, 'out');
-    const lock = new Gpio(25, 'out');
+    
 
   
     let foyerLightTimeout = null;
@@ -84,7 +81,9 @@ const { send } = require('process');
   }
 
   
-
+  const unlock = new AutoGpio(23, 'out');
+  const remoteStartButton = new AutoGpio(24, 'out');
+  const lock = new AutoGpio(25, 'out');
 
 // Helper function to press a button for a duration (ms)
 function pressButton(button, duration) {
