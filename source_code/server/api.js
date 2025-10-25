@@ -43,6 +43,11 @@ const { send } = require('process');
     // PIR sensor (night time temp lights)
     const pir = new AutoGpio(22, 'in', 'rising'); // GPIO22, detect rising edge
 
+    // key fob transistors
+    const unlock = new Gpio(23, 'out');
+    const remoteStartButton = new Gpio(24, 'out');
+    const lock = new Gpio(25, 'out');
+
   
     let foyerLightTimeout = null;
     // Check motion events for walking to foyer
@@ -81,6 +86,41 @@ const { send } = require('process');
   
 
 
+// Helper function to press a button for a duration (ms)
+function pressButton(button, duration) {
+  return new Promise(resolve => {
+    button.writeSync(1);
+    setTimeout(() => {
+      button.writeSync(0);
+      resolve();
+    }, duration);
+  });
+}
+
+
+// Remote Start Sequence
+async function remoteStart() {
+  console.log("Starting remote start sequence...");
+
+  // Lock twice (300 ms each)
+  await pressButton(lock, 300);
+  await new Promise(r => setTimeout(r, 600));
+  await pressButton(lock, 300);
+
+  // Wait 500 ms
+  await new Promise(r => setTimeout(r, 500));
+
+  // Hold remote start for 5 seconds
+  await pressButton(remoteStartButton, 5000);
+
+  // Wait 500 ms
+  await new Promise(r => setTimeout(r, 500));
+
+  // Press unlock for 300 ms
+  await pressButton(unlock, 300);
+
+  console.log("Remote start sequence complete.");
+}
 
  // To determine sunset
 const lat = 41.722034;  // Wellsboro
@@ -207,6 +247,24 @@ router.post('/smartthings-webhook', (req, res) => {
   // Process the even
   res.sendStatus(200); // Tell SmartThings you received it
 });
+
+router.post('/start-car', async (req, res) => {
+  console.log("Alexa triggered remote start intent, request body:", req.body);
+
+  await remoteStart();
+
+  res.json({
+    version: "1.0",
+    response: {
+      outputSpeech: {
+        type: "PlainText",
+        text: "Your Suburban is starting now."
+      },
+      shouldEndSession: true
+    }
+  });
+});
+
 
 router.post('/log', (req, res) => {
   const { src, pwd, log } = req.body;
