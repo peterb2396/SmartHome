@@ -25,9 +25,10 @@
 
   // Stores all GPIO in array for easy cleanup later
   function AutoGpio(...args) {
-      const pin = new Gpio(...args);
-      gpios.push(pin);
-      return pin;
+    const [pinNumber, ...restArgs] = args;
+    const pin = new Gpio(pinNumber + 512, ...restArgs);
+    gpios.push(pin);
+    return pin;
   }
 
   
