@@ -1,6 +1,6 @@
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
-const MonthlyStatsSchema = new mongoose.Schema({
+const monthlyStatsSchema = new mongoose.Schema({
   month: {
     type: Number,
     required: true,
@@ -12,29 +12,23 @@ const MonthlyStatsSchema = new mongoose.Schema({
     required: true
   },
   categories: {
-    Electric: Number,
-    Gas: Number,
-    Internet: Number,
-    Mortgage: Number,
-    General: Number,
-    Food: Number,
-    Income: Number
+    Food: { type: Number, default: 0 },
+    Electric: { type: Number, default: 0 },
+    Gas: { type: Number, default: 0 },
+    Internet: { type: Number, default: 0 },
+    Mortgage: { type: Number, default: 0 },
+    General: { type: Number, default: 0 },
+    Income: { type: Number, default: 0 }
   },
   totalExpenses: {
     type: Number,
     default: 0
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
   }
-}, { strict: false });
+}, {
+  timestamps: true
+});
 
-// Create index for efficient querying
-MonthlyStatsSchema.index({ year: 1, month: 1 });
+// Unique index for year-month combination
+monthlyStatsSchema.index({ year: 1, month: 1 }, { unique: true });
 
-module.exports = mongoose.model.MonthlyStats || mongoose.model("MonthlyStats", MonthlyStatsSchema, "monthlystats");
+module.exports = mongoose.model('MonthlyStats', monthlyStatsSchema);

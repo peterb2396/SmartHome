@@ -1,9 +1,10 @@
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
-const TransactionSchema = new mongoose.Schema({
+const transactionSchema = new mongoose.Schema({
   date: {
     type: Date,
-    required: true
+    required: true,
+    index: true
   },
   description: {
     type: String,
@@ -15,36 +16,36 @@ const TransactionSchema = new mongoose.Schema({
   },
   category: {
     type: String,
+    enum: ['Food', 'Electric', 'Gas', 'Internet', 'Mortgage', 'General', 'Income'],
     required: true,
-    enum: ['Electric', 'Gas', 'Internet', 'Mortgage', 'General', 'Food', 'Income']
+    index: true
   },
   account: {
-    type: String
+    type: String,
+    required: true
   },
   month: {
     type: Number,
+    required: true,
     min: 1,
-    max: 12
+    max: 12,
+    index: true
   },
   year: {
-    type: Number
+    type: Number,
+    required: true,
+    index: true
   },
   isPayment: {
     type: Boolean,
     default: false
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
   }
-}, { strict: false });
+}, {
+  timestamps: true
+});
 
-// Create indexes for efficient querying
-TransactionSchema.index({ category: 1, date: -1 });
-TransactionSchema.index({ year: 1, month: 1 });
+// Compound index for efficient queries
+transactionSchema.index({ year: 1, month: 1, category: 1 });
+transactionSchema.index({ date: 1, description: 1, amount: 1, account: 1 }, { unique: true });
 
-module.exports = mongoose.model.Transaction || mongoose.model("Transaction", TransactionSchema, "transactions");
+module.exports = mongoose.model('Transaction', transactionSchema);
