@@ -6,6 +6,7 @@ import Nav from './Nav';
 // import Account from './Account';
 import Dashboard from './Dashboard';
 import Lights from './Lights';
+import Finance from './Finance';
 
 
 const MyRouter = ({host}) => {
@@ -22,6 +23,7 @@ const MyRouter = ({host}) => {
       <Routes>
           <Route index element={<Lights/>} />
           <Route path="settings" element={<Dashboard/>} />
+          <Route path="finance" element={<Finance/>} />
           {/* <Route path="account" element={<Account host = {host}/>} /> */}
 
       </Routes>

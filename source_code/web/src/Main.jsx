@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import axios from 'axios'
+import axios from './axios.js';
 import Login from './Login';
 import { BrowserRouter, useLocation } from "react-router-dom";
 import MyRouter from './MyRouter.jsx';
@@ -10,7 +10,7 @@ const Main = () => {
 
   // const SERVER_URL = `http://localhost:3001`
   // const SERVER_URL = `https://smarthome153.onrender.com`
-  const SERVER_URL = `https://server.153home.online`
+  // const SERVER_URL = `https://server.153home.online`
   // const SERVER_URL = `http://172.20.10.3:3001`
   
   
@@ -27,7 +27,7 @@ const Main = () => {
       localStorage.setItem('token', token);
     }
   
-    axios.post(`${SERVER_URL}/user`, { user_id: token })
+    axios.post(`/user`, { user_id: token })
       .then(response => {
         setUser({
           id: response.data.user._id,
@@ -43,7 +43,7 @@ const Main = () => {
         console.log(error);
         setLoading(false);
       });
-  }, [SERVER_URL, setUser, setLoading]);
+  }, [setUser, setLoading]);
   
 
   useEffect(() => {
@@ -82,7 +82,7 @@ const Main = () => {
 
   if (!user) {
     return (
-      <Login login = {login} api = {SERVER_URL}/>
+      <Login login = {login}/>
     )
   }
 
@@ -91,7 +91,7 @@ const Main = () => {
 
     <BrowserRouter>
       <ScrollToTopOnRouteChange />
-      <MyRouter host={SERVER_URL}/>
+      <MyRouter/>
     </BrowserRouter>
   );
 };
