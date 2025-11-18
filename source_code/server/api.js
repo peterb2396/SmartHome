@@ -1,6 +1,8 @@
   var express = require('express');
   const dbConnect = require("./db/dbConnect");
   const User = require("./db/userModel.js");
+  const MonthlyStats = require("./db/monthlyStatsModel.js");
+  const Transaction = require("./db/transactionModel.js");
   const mongoose = require('mongoose');
   const cron = require('node-cron');
   var router = express.Router();
@@ -2126,6 +2128,56 @@ User.findOne({ email: request.body.email })
           });
         });
   })
+
+
+  // Finance API Routes
+
+  // Get all monthly statistics
+  router.get('/monthly-stats', async (req, res) => {
+    try {
+      const stats = await MonthlyStats.find({}).sort({ year: 1, month: 1 });
+      res.status(200).json(stats);
+    } catch (error) {
+      console.error('Error fetching monthly stats:', error);
+      res.status(500).json({ message: 'Failed to fetch monthly statistics', error: error.message });
+    }
+  });
+
+  // Get all transactions
+  router.get('/transactions', async (req, res) => {
+    try {
+      const { category, year, month } = req.query;
+      let query = {};
+
+      if (category) {
+        query.category = category;
+      }
+      if (year) {
+        query.year = parseInt(year);
+      }
+      if (month) {
+        query.month = parseInt(month);
+      }
+
+      const transactions = await Transaction.find(query).sort({ date: -1 });
+      res.status(200).json(transactions);
+    } catch (error) {
+      console.error('Error fetching transactions:', error);
+      res.status(500).json({ message: 'Failed to fetch transactions', error: error.message });
+    }
+  });
+
+  // Get transactions by category
+  router.get('/transactions/:category', async (req, res) => {
+    try {
+      const { category } = req.params;
+      const transactions = await Transaction.find({ category }).sort({ date: -1 });
+      res.status(200).json(transactions);
+    } catch (error) {
+      console.error('Error fetching transactions by category:', error);
+      res.status(500).json({ message: 'Failed to fetch transactions', error: error.message });
+    }
+  });
 
 
   module.exports = router;
