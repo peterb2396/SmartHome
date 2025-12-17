@@ -444,81 +444,159 @@ async function fetchAstroData() {
 
 }
 
+// cellular car endpoints
+
+// Keep these secret (use env vars in real life)
+const AUTH_TOKEN = process.env.CAR_TOKEN || "test";
+
+// In-memory queues (fine to start; later you can swap Redis)
+const pendingCmdByDevice = new Map();  // deviceId -> { cmdId, cmd, createdAt }
+const waitersByCmdId = new Map();      // cmdId -> { resolve, timeoutHandle }
+
+function requireAuth(req, res, next) {
+  const auth = req.headers.authorization || "";
+  const ok = auth === `Bearer ${AUTH_TOKEN}`;
+  if (!ok) return res.status(401).json({ ok: false, error: "unauthorized" });
+  next();
+}
+
+function newCmdId() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+// Browser endpoint
+router.post("/start-car", async (req, res) => {
+  const deviceId = "CAR1"; // or pass from req.body if you want
+  const cmdId = newCmdId();
+
+  // queue the command
+  pendingCmdByDevice.set(deviceId, { cmdId, cmd: "start", createdAt: Date.now() });
+
+  // wait up to 35s for device result (tune with your poll interval)
+  const result = await new Promise((resolve) => {
+    const timeoutHandle = setTimeout(() => {
+      waitersByCmdId.delete(cmdId);
+      resolve({ ok: false, timeout: true, message: "Device did not respond in time." });
+    }, 35000);
+
+    waitersByCmdId.set(cmdId, { resolve, timeoutHandle });
+  });
+
+  return res.json({ cmdId, ...result });
+});
+
+// Device asks “any command?”
+router.get("/device/next", requireAuth, (req, res) => {
+  const deviceId = String(req.query.deviceId || "");
+  if (!deviceId) return res.status(400).json({ cmd: null, error: "missing deviceId" });
+
+  const pending = pendingCmdByDevice.get(deviceId);
+  if (!pending) return res.json({ cmd: null });
+
+  // Deliver once, but keep it queued until result comes back (safer)
+  return res.json({ cmd: pending.cmd, cmdId: pending.cmdId });
+});
+
+// Device posts result
+router.post("/device/result", requireAuth, (req, res) => {
+  const { deviceId, cmdId, ok, message } = req.body || {};
+  if (!deviceId || !cmdId) return res.status(400).json({ ok: false, error: "missing deviceId/cmdId" });
+
+  // clear the pending command if it matches
+  const pending = pendingCmdByDevice.get(deviceId);
+  if (pending && pending.cmdId === cmdId) pendingCmdByDevice.delete(deviceId);
+
+  // resolve browser waiter if present
+  const waiter = waitersByCmdId.get(cmdId);
+  if (waiter) {
+    clearTimeout(waiter.timeoutHandle);
+    waitersByCmdId.delete(cmdId);
+    waiter.resolve({ ok: !!ok, message: message || "" });
+  }
+
+  res.json({ ok: true });
+});
+
+
+// cellular car endpoints end
+
+
 router.post('/smartthings-webhook', (req, res) => {
   console.log('Received JSON:', req.body);
   // Process the even
   res.sendStatus(200); // Tell SmartThings you received it
 });
 
-router.post('/lock-car', async (req, res) => {
-  // const val = await validatePassword(password);
-  // if (!val) return;
+// @DEPRECATED : car lock/unlock/start/stop via Alexa
+// router.post('/lock-car', async (req, res) => {
+//   // const val = await validatePassword(password);
+//   // if (!val) return;
 
-  console.log("Alexa triggered remote lock intent, request body:", req.body);
+//   console.log("Alexa triggered remote lock intent, request body:", req.body);
 
-  await lock.writeSync(1);
-  setTimeout(() => lock.writeSync(0), 300);
+//   await lock.writeSync(1);
+//   setTimeout(() => lock.writeSync(0), 300);
 
-  res.json({
-    version: "1.0",
-    response: {
-      outputSpeech: {
-        type: "PlainText",
-        text: "Your Suburban is locking now."
-      },
-      shouldEndSession: true
-    }
-  });
-}
-);
+//   res.json({
+//     version: "1.0",
+//     response: {
+//       outputSpeech: {
+//         type: "PlainText",
+//         text: "Your Suburban is locking now."
+//       },
+//       shouldEndSession: true
+//     }
+//   });
+// }
+// );
 
-router.post('/start-car', async (req, res) => {
+// router.post('/start-car', async (req, res) => {
 
-  // const val = await validatePassword(password);
-  // if (!val) return;
+//   // const val = await validatePassword(password);
+//   // if (!val) return;
 
-  console.log("Alexa triggered remote start intent, request body:", req.body);
+//   console.log("Alexa triggered remote start intent, request body:", req.body);
 
   
 
-  res.json({
-    version: "1.0",
-    response: {
-      outputSpeech: {
-        type: "PlainText",
-        text: "Your Suburban is starting now."
-      },
-      shouldEndSession: true
-    }
-  });
+//   res.json({
+//     version: "1.0",
+//     response: {
+//       outputSpeech: {
+//         type: "PlainText",
+//         text: "Your Suburban is starting now."
+//       },
+//       shouldEndSession: true
+//     }
+//   });
 
-  remoteStart();
+//   remoteStart();
 
 
-});
+// });
 
-router.post('/stop-car', async (req, res) => {
+// router.post('/stop-car', async (req, res) => {
 
-  // const val = await validatePassword(password);
-  // if (!val) return;
+//   // const val = await validatePassword(password);
+//   // if (!val) return;
 
-  console.log("Alexa triggered remote stop intent, request body:", req.body);
+//   console.log("Alexa triggered remote stop intent, request body:", req.body);
 
  
 
-  res.json({
-    version: "1.0",
-    response: {
-      outputSpeech: {
-        type: "PlainText",
-        text: "Your Suburban is stopping now."
-      },
-      shouldEndSession: true
-    }
-  });
+//   res.json({
+//     version: "1.0",
+//     response: {
+//       outputSpeech: {
+//         type: "PlainText",
+//         text: "Your Suburban is stopping now."
+//       },
+//       shouldEndSession: true
+//     }
+//   });
 
-  remoteStop(); 
-});
+//   remoteStop(); 
+// });
 
 
 router.post('/log', (req, res) => {
