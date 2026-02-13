@@ -464,28 +464,36 @@ function newCmdId() {
 }
 
 // Browser endpoint
+// Browser endpoint
 router.post("/start-car", async (req, res) => {
-  if (req.body.password !== process.env.ADMIN_UID)
-  {
+  // Check BOTH body password (from website) AND Authorization header (from ESP32)
+  const bodyPassword = req.body.password;
+  const auth = req.headers.authorization || "";
+  const headerToken = auth.replace("Bearer ", "");
+  
+  // Accept either authentication method
+  const isAuthorized = (bodyPassword === process.env.ADMIN_UID) || 
+                       (headerToken === process.env.ADMIN_UID);
+  
+  if (!isAuthorized) {
     return res.status(403).json({ ok: false, error: "forbidden" });
   }
-
-  const deviceId = "SUBURBAN"; // or pass from req.body if you want
+  
+  const deviceId = "SUBURBAN";
   const cmdId = newCmdId();
-
+  
   // queue the command
   pendingCmdByDevice.set(deviceId, { cmdId, cmd: "start", createdAt: Date.now() });
-
-  // wait up to 35s for device result (tune with your poll interval)
+  
+  // wait up to 35s for device result
   const result = await new Promise((resolve) => {
     const timeoutHandle = setTimeout(() => {
       waitersByCmdId.delete(cmdId);
       resolve({ ok: false, timeout: true, message: "Device did not respond in time." });
     }, 35000);
-
     waitersByCmdId.set(cmdId, { resolve, timeoutHandle });
   });
-
+  
   return res.json({ cmdId, ...result });
 });
 
