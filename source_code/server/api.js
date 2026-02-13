@@ -445,7 +445,6 @@ async function fetchAstroData() {
 }
 
 // cellular car endpoints
-
 const AUTH_TOKEN = process.env.ADMIN_UID || "test";
 
 // In-memory queues (fine to start; later you can swap Redis)
@@ -454,8 +453,11 @@ const waitersByCmdId = new Map();      // cmdId -> { resolve, timeoutHandle }
 
 function requireAuth(req, res, next) {
   const auth = req.headers.authorization || "";
-  const ok = auth === `Bearer ${AUTH_TOKEN}`;
-  if (!ok) return res.status(401).json({ ok: false, error: "unauthorized" });
+  const token = auth.replace(/^Bearer\s+/i, "").trim(); // Extract token, handle extra spaces
+  
+  if (token !== AUTH_TOKEN) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
   next();
 }
 
@@ -464,12 +466,11 @@ function newCmdId() {
 }
 
 // Browser endpoint
-// Browser endpoint
 router.post("/start-car", async (req, res) => {
   // Check BOTH body password (from website) AND Authorization header (from ESP32)
   const bodyPassword = req.body.password;
   const auth = req.headers.authorization || "";
-  const headerToken = auth.replace("Bearer ", "");
+  const headerToken = auth.replace(/^Bearer\s+/i, "").trim();
   
   // Accept either authentication method
   const isAuthorized = (bodyPassword === process.env.ADMIN_UID) || 
@@ -497,14 +498,14 @@ router.post("/start-car", async (req, res) => {
   return res.json({ cmdId, ...result });
 });
 
-// Device asks “any command?”
+// Device asks "any command?"
 router.get("/device/next", requireAuth, (req, res) => {
   const deviceId = String(req.query.deviceId || "");
   if (!deviceId) return res.status(400).json({ cmd: null, error: "missing deviceId" });
-
+  
   const pending = pendingCmdByDevice.get(deviceId);
   if (!pending) return res.json({ cmd: null });
-
+  
   // Deliver once, but keep it queued until result comes back (safer)
   return res.json({ cmd: pending.cmd, cmdId: pending.cmdId });
 });
@@ -513,11 +514,11 @@ router.get("/device/next", requireAuth, (req, res) => {
 router.post("/device/result", requireAuth, (req, res) => {
   const { deviceId, cmdId, ok, message } = req.body || {};
   if (!deviceId || !cmdId) return res.status(400).json({ ok: false, error: "missing deviceId/cmdId" });
-
+  
   // clear the pending command if it matches
   const pending = pendingCmdByDevice.get(deviceId);
   if (pending && pending.cmdId === cmdId) pendingCmdByDevice.delete(deviceId);
-
+  
   // resolve browser waiter if present
   const waiter = waitersByCmdId.get(cmdId);
   if (waiter) {
@@ -525,13 +526,10 @@ router.post("/device/result", requireAuth, (req, res) => {
     waitersByCmdId.delete(cmdId);
     waiter.resolve({ ok: !!ok, message: message || "" });
   }
-
+  
   res.json({ ok: true });
 });
-
-
 // cellular car endpoints end
-
 
 router.post('/smartthings-webhook', (req, res) => {
   console.log('Received JSON:', req.body);
