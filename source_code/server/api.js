@@ -83,9 +83,9 @@
   }
 
   
-  const unlock = new AutoGpio(23, 'out');
-  const remoteStartButton = new AutoGpio(24, 'out');
-  const lock = new AutoGpio(25, 'out');
+  // const unlock = new AutoGpio(23, 'out');
+  // const remoteStartButton = new AutoGpio(24, 'out');
+  // const lock = new AutoGpio(25, 'out');
 
 // Helper function to press a button for a duration (ms)
 function pressButton(button, duration) {
@@ -100,53 +100,53 @@ function pressButton(button, duration) {
 
 
 // Remote Start Sequence
-async function remoteStart() {
-  console.log("Starting remote start sequence...");
+// async function remoteStart() {
+//   console.log("Starting remote start sequence...");
 
-  // Lock twice (300 ms each)
-  await pressButton(lock, 300);
-  await new Promise(r => setTimeout(r, 600));
-  await pressButton(lock, 300);
+//   // Lock twice (300 ms each)
+//   await pressButton(lock, 300);
+//   await new Promise(r => setTimeout(r, 600));
+//   await pressButton(lock, 300);
 
-  // Wait 500 ms
-  await new Promise(r => setTimeout(r, 500));
+//   // Wait 500 ms
+//   await new Promise(r => setTimeout(r, 500));
 
-  // Hold remote start for 5 seconds
-  await pressButton(remoteStartButton, 5000);
+//   // Hold remote start for 5 seconds
+//   await pressButton(remoteStartButton, 5000);
 
-  // Wait 500 ms
-  await new Promise(r => setTimeout(r, 500));
+//   // Wait 500 ms
+//   await new Promise(r => setTimeout(r, 500));
 
-  // Press unlock for 300 ms
-  await pressButton(unlock, 300);
+//   // Press unlock for 300 ms
+//   await pressButton(unlock, 300);
 
-  sendText("Car started remotely.", "Remote Start");
-  console.log("Remote start sequence complete.");
-}
+//   sendText("Car started remotely.", "Remote Start");
+//   console.log("Remote start sequence complete.");
+// }
 
-// Remote Start Sequence
-async function remoteStop() {
-  console.log("Starting remote stop sequence...");
+// // Remote Start Sequence
+// async function remoteStop() {
+//   console.log("Starting remote stop sequence...");
 
-  // Lock twice (300 ms each)
-  await pressButton(unlock, 300);
-  await new Promise(r => setTimeout(r, 600));
-  await pressButton(unlock, 300);
+//   // Lock twice (300 ms each)
+//   await pressButton(unlock, 300);
+//   await new Promise(r => setTimeout(r, 600));
+//   await pressButton(unlock, 300);
 
-  // Wait 500 ms
-  await new Promise(r => setTimeout(r, 500));
+//   // Wait 500 ms
+//   await new Promise(r => setTimeout(r, 500));
 
-  // Hold remote start for 5 seconds
-  await pressButton(remoteStartButton, 5000);
+//   // Hold remote start for 5 seconds
+//   await pressButton(remoteStartButton, 5000);
 
-  // Wait 500 ms
-  await new Promise(r => setTimeout(r, 500));
+//   // Wait 500 ms
+//   await new Promise(r => setTimeout(r, 500));
 
-  // Press unlock for 300 ms
-  await pressButton(lock, 300);
+//   // Press unlock for 300 ms
+//   await pressButton(lock, 300);
 
-  console.log("Remote stop sequence complete.");
-}
+//   console.log("Remote stop sequence complete.");
+// }
 
  // To determine sunset
 const lat = 41.722034;  // Wellsboro
@@ -446,8 +446,7 @@ async function fetchAstroData() {
 
 // cellular car endpoints
 
-// Keep these secret (use env vars in real life)
-const AUTH_TOKEN = process.env.CAR_TOKEN || "test";
+const AUTH_TOKEN = process.env.ADMIN_UID || "test";
 
 // In-memory queues (fine to start; later you can swap Redis)
 const pendingCmdByDevice = new Map();  // deviceId -> { cmdId, cmd, createdAt }
@@ -466,7 +465,12 @@ function newCmdId() {
 
 // Browser endpoint
 router.post("/start-car", async (req, res) => {
-  const deviceId = "CAR1"; // or pass from req.body if you want
+  if (req.body.password !== process.env.ADMIN_UID)
+  {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+
+  const deviceId = "SUBURBAN"; // or pass from req.body if you want
   const cmdId = newCmdId();
 
   // queue the command
@@ -1489,6 +1493,8 @@ async function sendMail(from, to, subject, text, password) {
       excludedFields.forEach(field => delete newObj[field]);
       return newObj;
     };
+
+    console.log(req.body.user_id)
 
     // Get the user
     User.findByIdAndUpdate(
