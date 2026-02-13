@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import axios from "./axios";
 import "bootstrap/dist/css/bootstrap.min.css";
-import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun, FaStarAndCrescent, FaCloudMoon, FaFan } from "react-icons/fa";
+import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun, FaStarAndCrescent, FaCloudMoon, FaFan, FaCar } from "react-icons/fa";
 
 export default function Lights() {
   const [devices, setDevices] = useState([]);
@@ -12,12 +12,18 @@ export default function Lights() {
   const [modalDevice, setModalDevice] = useState(null);
   const [modalLutronId, setModalLutronId] = useState("");
   const [modalOwnerId, setModalOwnerId] = useState("");
+  const [modalRoom, setModalRoom] = useState("");
   const [initedSettings, setInitedSettings] = useState(false);
 
   const [showLights, setShowLights] = useState(true);
   const [showAppliances, setShowAppliances] = useState(true);
   const [showSmartPlugs, setShowSmartPlugs] = useState(false);
   const [showWeather, setShowWeather] = useState(true);
+  const [expandedRooms, setExpandedRooms] = useState({});
+  
+  const [carStarting, setCarStarting] = useState(false);
+  const [carStartSuccess, setCarStartSuccess] = useState(false);
+  const [carStartMessage, setCarStartMessage] = useState("");
 
   const POLL_INTERVAL = 3000
 
@@ -26,7 +32,7 @@ export default function Lights() {
   const [pausePollingUntil, setPausePollingUntil] = useState(0);
 
   const fetchDevices = useCallback(async () => {
-    // Don’t start if paused
+    // Don't start if paused
     if (Date.now() < pausePollingUntil) return;
 
     // Cancel any ongoing request before starting a new one
@@ -52,14 +58,10 @@ export default function Lights() {
     }
   }, [pausePollingUntil]);
 
-function handleUserChange() {
-   currentFetchController.current?.abort();
-
-  pausePolling();
-}
-
-  // Fetch devices every 5 seconds
-  
+  function handleUserChange() {
+    currentFetchController.current?.abort();
+    pausePolling();
+  }
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -75,8 +77,7 @@ function handleUserChange() {
   }, [fetchDevices, pausePollingUntil]);
 
   // Skip a poll so our changes dont get overwritten
-  function pausePolling()
-  {
+  function pausePolling() {
     setPausePollingUntil(Date.now() + 1000);
   }
 
@@ -143,7 +144,6 @@ function handleUserChange() {
   };
 
   const SunsetDisplay = () => {
-  
     return (
       <div style={styles.wrapper}>
         <div style={styles.headerWrapper}>
@@ -176,6 +176,36 @@ function handleUserChange() {
     fetchUsers();
   }, [fetchDevices, fetchSettings, fetchUsers]);
 
+  // Start car function
+  const startCar = async () => {
+    setCarStarting(true);
+    setCarStartSuccess(false);
+    setCarStartMessage("");
+
+    try {
+      const response = await axios.post(`/start-car`, { password: localStorage.getItem("token") });
+      console.log(response)
+      
+      if (response.data.ok) {
+        setCarStartSuccess(true);
+        setCarStartMessage(response.data.message || "Car started successfully!");
+        
+        // Reset success animation after 5 seconds
+        setTimeout(() => {
+          setCarStartSuccess(false);
+          setCarStartMessage("");
+        }, 5000);
+      } else {
+        setCarStartMessage(response.data.message || "Failed to start car");
+      }
+    } catch (error) {
+      console.error("Error starting car:", error);
+      setCarStartMessage("Error: Could not communicate with car");
+    } finally {
+      setCarStarting(false);
+    }
+  };
+
   // Initialize settings.lights once after devices & settings are loaded
   useEffect(() => {
     if (!loading && settings && devices.length && !initedSettings) {
@@ -193,7 +223,8 @@ function handleUserChange() {
               deviceId: d.deviceId,
               label: d.label,
               lutronId: existing[d.deviceId]?.lutronId || "",
-              owner: existing[d.deviceId]?.owner || ""
+              owner: existing[d.deviceId]?.owner || "",
+              room: existing[d.deviceId]?.room || "Uncategorized"
             };
           }
         });
@@ -213,8 +244,6 @@ function handleUserChange() {
           const isFan = device.name.toLowerCase().includes("fan");
           const isPlug = device.name.toLowerCase().includes("c2c-switch");
           const main = device.status?.components?.main || {};
-
-      
     
           return {
             ...device,
@@ -257,7 +286,6 @@ function handleUserChange() {
 
   // Slider UI immediate update
   const handleSliderChange = (deviceId, level) => {
-
     setDevices((devices) =>
       devices.map((device) =>
         device.deviceId === deviceId
@@ -269,7 +297,6 @@ function handleUserChange() {
                   ...device.status.components,
                   main: {
                     ...device.status.components.main,
-                    
                     switch: { switch: { value: Number(level) > 0 ? "on" : "off" } },
                     ...(device.name.toLowerCase().includes("fan")
                     ? { fanSpeed: { fanSpeed: { value: Number(level) } } }
@@ -295,8 +322,10 @@ function handleUserChange() {
     setModalDevice(deviceId);
     setModalLutronId(light.lutronId ?? "");
     setModalOwnerId(light.owner ?? "");
+    setModalRoom(light.room ?? "Uncategorized");
     setShowModal(true);
   };
+  
   const saveSettings = () => {
     const updated = {
       ...settings.lights,
@@ -304,6 +333,7 @@ function handleUserChange() {
         ...settings.lights[modalDevice],
         lutronId: modalLutronId,
         owner: modalOwnerId,
+        room: modalRoom,
       },
     };
     updateSetting("lights", updated);
@@ -327,6 +357,17 @@ function handleUserChange() {
       d.name?.toLowerCase().startsWith("c2c") &&
       !d.name.toLowerCase().includes("switch")
   );
+  
+  // Group lights by room
+  const lightsByRoom = lightsDevices.reduce((acc, device) => {
+    const room = settings.lights?.[device.deviceId]?.room || "Uncategorized";
+    if (!acc[room]) {
+      acc[room] = [];
+    }
+    acc[room].push(device);
+    return acc;
+  }, {});
+
   const appliancesDevices = devices.filter(
     (d) =>
       d.deviceTypeName && d.deviceTypeName.toLowerCase().includes("samsung")
@@ -347,138 +388,256 @@ function handleUserChange() {
         <div>
           <h2 style={styles.sectionTitle}>{title}</h2>
           {count > 0 && (
-          <p style={styles.deviceCount}>{count} devices</p>
-
+            <p style={styles.deviceCount}>{count} devices</p>
           )}
         </div>
       </div>
       <div style={styles.sectionHeaderRight}>
-        {/* <span style={styles.toggleText}>{isExpanded ? 'Hide' : 'Show'}</span> */}
         {isExpanded ? <FaChevronUp style={styles.chevron} /> : <FaChevronDown style={styles.chevron} />}
       </div>
     </div>
   );
 
+  const RoomHeader = ({ room, count, isExpanded, onClick }) => (
+    <div className="room-header" style={styles.roomHeader} onClick={onClick}>
+      <div style={styles.roomHeaderLeft}>
+        <h3 style={styles.roomTitle}>{room}</h3>
+        <span style={styles.roomCount}>{count} {count === 1 ? 'light' : 'lights'}</span>
+      </div>
+      <div style={styles.roomHeaderRight}>
+        {isExpanded ? <FaChevronUp style={styles.chevronSmall} /> : <FaChevronDown style={styles.chevronSmall} />}
+      </div>
+    </div>
+  );
+
+  const LightCard = ({ device }) => {
+    const mainStatus = device.status?.components?.main || {};
+    const isOn = mainStatus.switch?.switch?.value === "on" || (mainStatus.switchLevel?.level?.value > 0);
+    const isOffline = mainStatus.healthCheck?.["DeviceWatch-DeviceStatus"]?.value === "offline";
+    const brightness = mainStatus.switchLevel?.level?.value || 0;
+
+    const speedLabels = ['Off', 'Low', 'Medium', 'High', 'Max'];
+    const speedValue = mainStatus.fanSpeed?.fanSpeed?.value || 0;
+    const speed = speedLabels[speedValue] ?? 'Unknown';
+    const isFan = device.name.toLowerCase().includes("fan");
+
+    return (
+      <div key={device.deviceId} style={styles.deviceCardWrapper}>
+        <div style={{
+          ...styles.deviceCard,
+          ...(isOn ? styles.deviceCardActive : {}),
+          ...(isOffline ? styles.deviceCardOffline : {})
+        }}>
+          
+          <button
+            className="settings-button"
+            style={styles.settingsButton}
+            onClick={() => openSettings(device.deviceId)}
+          >
+            <FaCog />
+          </button>
+
+          <div style={styles.cardContent}>
+            <div style={styles.deviceHeader}>
+              <div style={styles.deviceInfo}>
+                <div style={{
+                  ...styles.deviceIcon,
+                  ...(isOn ? styles.deviceIconActive : {})
+                }}
+                onClick={() => updateDeviceState(device.deviceId, isOn ? "off" : "on", (isFan ? speedValue : brightness || 100))}>
+                  {isFan && <FaFan />}
+                  {!isFan && <FaLightbulb />}
+                </div>
+                <div>
+                  <h3 style={styles.deviceName}>{device.label}</h3>
+                  <p style={styles.deviceStatus}>
+                    {isOffline ? 'Offline' : isOn ? (isFan ? `${speed} speed` : `${brightness}% brightness`) : 'Off'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {(mainStatus.switchLevel || mainStatus.fanSpeed) && (
+              <div style={styles.sliderContainer}>
+                <div style={styles.sliderHeader}>
+                  <span style={styles.sliderLabel}>{isFan ? "Speed" : "Brightness"}</span>
+                  <span style={styles.sliderValue}>{isFan ? `${speed}` : `${brightness}%`}</span>
+                </div>
+                <input
+                  type="range"
+                  style={{
+                    ...styles.slider,
+                    background: `linear-gradient(to right, #fbbf24 0%, #fbbf24 ${isFan ? speedValue*25 : brightness}%, #e5e7eb ${isFan ? speedValue*25 : brightness}%, #e5e7eb 100%)`
+                  }}
+                  min="0"
+                  max={isFan ? "4" : "100"}
+                  value={isFan ? speedValue : brightness}
+                  onChange={(e) => handleSliderChange(device.deviceId, e.target.value)}
+                  onMouseUp={(e) => handleBrightnessChange(device.deviceId, e.target.value)}
+                  onTouchEnd={(e) => handleBrightnessChange(device.deviceId, e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'}}>
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        
+        @keyframes pulse {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.02); }
+        }
+        
+        @keyframes takeoff {
+          0% {
+            transform: translateX(0) translateY(0) rotate(0deg) scale(1);
+            opacity: 1;
+          }
+          30% {
+            transform: translateX(20px) translateY(-10px) rotate(-15deg) scale(1.1);
+          }
+          100% {
+            transform: translateX(200px) translateY(-100px) rotate(-25deg) scale(0.5);
+            opacity: 0;
+          }
+        }
+        
+        @keyframes slideDown {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        
+        .car-start-button:hover:not(:disabled) {
+          transform: translateY(-2px);
+          box-shadow: 0 15px 40px rgba(239, 68, 68, 0.5);
+        }
+        
+        .car-start-button:active:not(:disabled) {
+          transform: translateY(0);
+        }
+        
+        .device-card-wrapper:hover .settings-button {
+          opacity: 1;
+        }
+        
+        .settings-button:hover {
+          background: #e2e8f0;
+          color: #1e293b;
+        }
+        
+        .modal-close-button:hover {
+          background: rgba(255, 255, 255, 0.3);
+        }
+        
+        input:focus, select:focus {
+          border-color: #3b82f6;
+          box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        
+        .cancel-button:hover {
+          background: #cbd5e1;
+        }
+        
+        .save-button:hover {
+          background: #2563eb;
+        }
+        
+        .plug-toggle:hover:not(:disabled) {
+          transform: scale(1.05);
+        }
+        
+        .section-header:hover {
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .room-header:hover {
+          background: #f8fafc;
+        }
+      `}</style>
+      
       <div style={styles.content}>
         <div style={styles.header}>
-          {/* <h1 style={styles.subtitle}>Smart Home</h1> */}
-          {/* <p style={styles.subtitle}>Peter & Meghan</p> */}
-          {/* <StargazingDisplay></StargazingDisplay> */}
         </div>
 
-        {/* Lights Section */}
-        <div style = {{display: "flex", gap: 10}}>
-
-        <div style = {{flex: 1}}>
-        <SectionHeader 
-          title="Lights" 
-          isExpanded={showLights} 
-          onClick={() => setShowLights(!showLights)}
-          icon={FaLightbulb}
-          count={lightsDevices.length}
-         
-        />
+        {/* Lights Section with Car Button */}
+        <div style={{display: "flex", gap: 10, marginBottom: "1.5rem"}}>
+          <div style={{flex: 1}}>
+            <SectionHeader 
+              title="Lights" 
+              isExpanded={showLights} 
+              onClick={() => setShowLights(!showLights)}
+              icon={FaLightbulb}
+              count={lightsDevices.length}
+            />
+          </div>
+          
+          {/* Car Start Button */}
+          <div style={styles.carButtonContainer}>
+            <button
+              className="car-start-button"
+              style={{
+                ...styles.carStartButton,
+                ...(carStarting ? styles.carStartButtonLoading : {}),
+                ...(carStartSuccess ? styles.carStartButtonSuccess : {})
+              }}
+              onClick={startCar}
+              disabled={carStarting}
+            >
+              <div style={{
+                ...styles.carIconWrapper,
+                ...(carStartSuccess ? styles.carIconTakeoff : {})
+              }}>
+                <FaCar style={styles.carIcon} />
+              </div>
+              <span style={styles.carButtonText}>
+                {carStarting ? "Starting..." : carStartSuccess ? "Started!" : "Start Car"}
+              </span>
+            </button>
+            {carStartMessage && (
+              <div style={{
+                ...styles.carMessage,
+                ...(carStartSuccess ? styles.carMessageSuccess : styles.carMessageError)
+              }}>
+                {carStartMessage}
+              </div>
+            )}
+          </div>
         </div>
-        {/* <StargazingDisplay></StargazingDisplay> */}
-
-        </div>
-
-        
-        
         
         {showLights && (
-          <div style={styles.deviceGrid}>
-            {lightsDevices.map((device) => {
-              const mainStatus = device.status?.components?.main || {};
-              const isOn = mainStatus.switch?.switch?.value === "on" || (mainStatus.switchLevel?.level?.value > 0);
-              const isOffline = mainStatus.healthCheck?.["DeviceWatch-DeviceStatus"]?.value === "offline";
-              const brightness = mainStatus.switchLevel?.level?.value || 0;
-
-              const speedLabels = ['Off', 'Low', 'Medium', 'High', 'Max'];
-
-              const speedValue = mainStatus.fanSpeed?.fanSpeed?.value || 0;
-              const speed = speedLabels[speedValue] ?? 'Unknown';
-              const isFan = device.name.toLowerCase().includes("fan")
-
-              return (
-                <div key={device.deviceId} style={styles.deviceCardWrapper}>
-                  <div style={{
-                    ...styles.deviceCard,
-                    ...(isOn ? styles.deviceCardActive : {}),
-                    ...(isOffline ? styles.deviceCardOffline : {})
-                  }}>
-                    
-                    <button
-                    className="settings-button"
-                      style={styles.settingsButton}
-                      onClick={() => openSettings(device.deviceId)}
-                    >
-                      <FaCog />
-                    </button>
-
-                    <div style={styles.cardContent}>
-                      <div style={styles.deviceHeader}>
-                        <div style={styles.deviceInfo}>
-                          <div style={{
-                            ...styles.deviceIcon,
-                            ...(isOn ? styles.deviceIconActive : {})
-                          }}
-                          onClick={() => updateDeviceState(device.deviceId, isOn ? "off" : "on", (isFan? speedValue : brightness || 100))}>
-                            {isFan && <FaFan />}
-                            {!isFan && <FaLightbulb />}
-
-                          </div>
-                          <div>
-                            <h3 style={styles.deviceName}>{device.label}</h3>
-                            <p style={styles.deviceStatus}>
-                              { isOffline ? 'Offline' : isOn ? (isFan ? `${speed} speed` : `${brightness}% brightness`) : 'Off'}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* <button
-                      className="power-button"
-                        style={{
-                          ...styles.powerButton,
-                          ...(isOn ? styles.powerButtonOn : styles.powerButtonOff),
-                          ...(isOffline ? styles.powerButtonDisabled : {})
-                        }}
-                        onClick={() => updateDeviceState(device.deviceId, isOn ? "off" : "on", brightness || 100)}
-                        disabled={isOffline}
-                      >
-                        {isOn ? 'Turn Off' : 'Turn On'}
-                      </button> */}
-
-                      {(mainStatus.switchLevel || mainStatus.fanSpeed) && (
-                        <div style={styles.sliderContainer}>
-                          <div style={styles.sliderHeader}>
-                            <span style={styles.sliderLabel}>{isFan ? "Speed" : "Brightness"}</span>
-                            <span style={styles.sliderValue}>{isFan ? `${speed}` : `${brightness}%`}</span>
-                          </div>
-                          <input
-                            type="range"
-                            style={{
-                              ...styles.slider,
-                              background: `linear-gradient(to right, #fbbf24 0%, #fbbf24 ${isFan ? speedValue*25 : brightness}%, #e5e7eb ${isFan ? speedValue*25 : brightness}%, #e5e7eb 100%)`
-                            }}
-                            min="0"
-                            max= {isFan? "4" : "100"}
-                            // step={isFan? "25" : "1"}
-                            value={isFan ? speedValue : brightness}
-                            onChange={(e) => handleSliderChange(device.deviceId, e.target.value)}
-                            onMouseUp={(e) => handleBrightnessChange(device.deviceId, e.target.value)}
-                            onTouchEnd={(e) => handleBrightnessChange(device.deviceId, e.target.value)}
-                          />
-                        </div>
-                      )}
-                    </div>
+          <div style={{marginBottom: '3rem'}}>
+            {Object.entries(lightsByRoom).sort(([a], [b]) => a.localeCompare(b)).map(([room, roomDevices]) => (
+              <div key={room} style={styles.roomSection}>
+                <RoomHeader 
+                  room={room}
+                  count={roomDevices.length}
+                  isExpanded={expandedRooms[room] !== false}
+                  onClick={() => setExpandedRooms(prev => ({ ...prev, [room]: prev[room] === false }))}
+                />
+                {expandedRooms[room] !== false && (
+                  <div style={styles.deviceGrid}>
+                    {roomDevices.map(device => (
+                      <LightCard key={device.deviceId} device={device} />
+                    ))}
                   </div>
-                </div>
-              );
-            })}
+                )}
+              </div>
+            ))}
           </div>
         )}
 
@@ -538,20 +697,6 @@ function handleUserChange() {
                               </span>
                             </div>
                           )}
-                        
-                        {/* {device.deviceTypeName &&
-                          device.deviceTypeName.toLowerCase().includes("wash") &&
-                          mainStatus["samsungce.detergentState"] &&
-                          mainStatus["samsungce.detergentState"].remainingAmount?.value != null && (
-                            <div style={styles.statusRow}>
-                              <span style={styles.statusLabel}>Detergent</span>
-                              <span style={styles.statusValue}>
-                                {mainStatus["samsungce.detergentState"].remainingAmount.value}{" "}
-                                {mainStatus["samsungce.detergentState"].remainingAmount.unit}
-                              </span>
-                            </div>
-                          )
-                          } */}
                       </div>
                     </div>
                   </div>
@@ -561,21 +706,19 @@ function handleUserChange() {
           </div>
         )}
 
-<SectionHeader 
+        <SectionHeader 
           title="Weather" 
           isExpanded={showWeather} 
           onClick={() => setShowWeather(!showWeather)}
           icon={FaSun}
-         
         />
 
-      {showWeather && (
-          <div style={{...styles.deviceGrid, gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))'}}>
-            <SunsetDisplay></SunsetDisplay>
-
-            <StargazingDisplay></StargazingDisplay>
+        {showWeather && (
+          <div style={{...styles.deviceGrid, gridTemplateColumns: 'repeat(auto-fit, minmin(100px, 1fr))'}}>
+            <SunsetDisplay />
+            <StargazingDisplay />
           </div>
-      )}
+        )}
 
         {/* Smart Plugs Section */}
         <SectionHeader 
@@ -618,8 +761,7 @@ function handleUserChange() {
                         </div>
                         
                         <button
-                        className="plug-toggle"
-
+                          className="plug-toggle"
                           style={{
                             ...styles.plugToggle,
                             ...(!isOn ? styles.plugToggleOff : styles.plugToggleOn),
@@ -649,7 +791,7 @@ function handleUserChange() {
                 <div style={styles.modalHeaderContent}>
                   <h2 style={styles.modalTitle}>Light Settings</h2>
                   <button
-                  className="modal-close-button"
+                    className="modal-close-button"
                     style={styles.modalCloseButton}
                     onClick={() => setShowModal(false)}
                   >
@@ -659,6 +801,17 @@ function handleUserChange() {
               </div>
               
               <div style={styles.modalBody}>
+                <div style={styles.inputGroup}>
+                  <label style={styles.label}>Room</label>
+                  <input
+                    type="text"
+                    style={styles.input}
+                    value={modalRoom}
+                    onChange={(e) => setModalRoom(e.target.value)}
+                    placeholder="e.g., Living Room, Bedroom"
+                  />
+                </div>
+                
                 <div style={styles.inputGroup}>
                   <label style={styles.label}>Lutron ID</label>
                   <input
@@ -679,8 +832,7 @@ function handleUserChange() {
                   >
                     <option value="">— Select Owner —</option>
                     {users.map((u) => (
-                      <option key={u.name} value={u.name}> 
-                      {/* Use u.id above for value to store UID instead of string */}
+                      <option key={u.name} value={u.name}>
                         {u.name}
                       </option>
                     ))}
@@ -690,14 +842,14 @@ function handleUserChange() {
               
               <div style={styles.modalFooter}>
                 <button
-                className="cancel-button"
+                  className="cancel-button"
                   style={styles.cancelButton}
                   onClick={() => setShowModal(false)}
                 >
                   Cancel
                 </button>
                 <button
-                className="save-button"
+                  className="save-button"
                   style={styles.saveButton}
                   onClick={saveSettings}
                 >
@@ -713,11 +865,79 @@ function handleUserChange() {
 }
 
 const styles = {
-  
   content: {
     maxWidth: '1400px',
     margin: '0 auto',
     padding: '2rem'
+  },
+  carButtonContainer: {
+    position: 'relative',
+    minWidth: '200px'
+  },
+  carStartButton: {
+    width: '100%',
+    height: '100px',
+    background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+    border: 'none',
+    borderRadius: '12px',
+    boxShadow: '0 10px 30px rgba(239, 68, 68, 0.4)',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.5rem',
+    transition: 'all 0.3s ease',
+    position: 'relative',
+    overflow: 'hidden'
+  },
+  carStartButtonLoading: {
+    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+    boxShadow: '0 10px 30px rgba(245, 158, 11, 0.4)',
+    animation: 'pulse 1.5s ease-in-out infinite'
+  },
+  carStartButtonSuccess: {
+    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    boxShadow: '0 10px 30px rgba(16, 185, 129, 0.4)'
+  },
+  carIconWrapper: {
+    fontSize: '2rem',
+    color: 'white',
+    transition: 'all 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55)',
+    transform: 'translateX(0) rotate(0deg)'
+  },
+  carIconTakeoff: {
+    animation: 'takeoff 2.0s ease-out forwards'
+  },
+  carIcon: {
+    filter: 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2))'
+  },
+  carButtonText: {
+    color: 'white',
+    fontSize: '1rem',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em'
+  },
+  carMessage: {
+    position: 'absolute',
+    top: '110px',
+    left: '0',
+    right: '0',
+    textAlign: 'center',
+    fontSize: '0.875rem',
+    fontWeight: '500',
+    padding: '0.5rem',
+    borderRadius: '8px',
+    animation: 'slideDown 0.3s ease-out'
+  },
+  carMessageSuccess: {
+    color: '#059669',
+    background: '#d1fae5'
+  },
+  carMessageError: {
+    color: '#dc2626',
+    background: '#fee2e2'
   },
   loadingContainer: {
     minHeight: '100vh',
@@ -746,19 +966,6 @@ const styles = {
   },
   header: {
     textAlign: 'center',
-    // marginBottom: '3rem'
-  },
-  mainTitle: {
-    fontSize: '2.5rem',
-    fontWeight: 'bold',
-    color: '#1e293b',
-    marginBottom: '0.75rem',
-    margin: 0
-  },
-  subtitle: {
-    color: '#64748b',
-    fontSize: '1.125rem',
-    margin: 0
   },
   sectionHeader: {
     display: 'flex',
@@ -808,18 +1015,53 @@ const styles = {
     alignItems: 'center',
     gap: '0.75rem'
   },
-  toggleText: {
-    color: '#9ca3af',
-    fontWeight: '500'
-  },
   chevron: {
     color: '#9ca3af'
+  },
+  roomSection: {
+    marginBottom: '2rem'
+  },
+  roomHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '1rem 1.5rem',
+    background: 'white',
+    borderRadius: '8px',
+    border: '1px solid #e2e8f0',
+    cursor: 'pointer',
+    marginBottom: '1rem',
+    transition: 'all 0.2s ease'
+  },
+  roomHeaderLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '1rem'
+  },
+  roomTitle: {
+    fontSize: '1.125rem',
+    fontWeight: '600',
+    color: '#1e293b',
+    margin: 0
+  },
+  roomCount: {
+    fontSize: '0.875rem',
+    color: '#64748b',
+    fontWeight: '500'
+  },
+  roomHeaderRight: {
+    display: 'flex',
+    alignItems: 'center'
+  },
+  chevronSmall: {
+    color: '#9ca3af',
+    fontSize: '0.875rem'
   },
   deviceGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
     gap: '1.5rem',
-    marginBottom: '3rem'
+    marginBottom: '1.5rem'
   },
   deviceCardWrapper: {
     position: 'relative'
@@ -908,25 +1150,6 @@ const styles = {
     color: '#64748b',
     fontSize: '0.875rem',
     margin: 0
-  },
-  powerButton: {
-    width: '100%',
-    padding: '0.75rem 1rem',
-    borderRadius: '12px',
-    fontWeight: '500',
-    border: 'none',
-    cursor: 'pointer',
-    transition: 'all 0.3s ease',
-    fontSize: '1rem'
-  },
-  powerButtonOn: {
-    background: '#fbbf24',
-    color: 'white',
-    boxShadow: '0 10px 25px rgba(251, 191, 36, 0.3)'
-  },
-  powerButtonOff: {
-    background: '#f1f5f9',
-    color: '#64748b'
   },
   powerButtonDisabled: {
     cursor: 'not-allowed',
@@ -1045,152 +1268,152 @@ const styles = {
     color: 'white',
     cursor: 'pointer',
     fontSize: '1.25rem',
-   display: 'flex',
-   alignItems: 'center',
-   justifyContent: 'center',
-   transition: 'all 0.2s ease'
- },
- modalBody: {
-   padding: '1.5rem'
- },
- inputGroup: {
-   marginBottom: '1.5rem'
- },
- label: {
-   display: 'block',
-   fontSize: '0.875rem',
-   fontWeight: '600',
-   color: '#1e293b',
-   marginBottom: '0.5rem'
- },
- input: {
-   width: '100%',
-   padding: '0.75rem 1rem',
-   background: '#f8fafc',
-   border: '1px solid #e2e8f0',
-   borderRadius: '12px',
-   fontSize: '1rem',
-   outline: 'none',
-   transition: 'all 0.2s ease',
-   boxSizing: 'border-box'
- },
- select: {
-   width: '100%',
-   padding: '0.75rem 1rem',
-   background: '#f8fafc',
-   border: '1px solid #e2e8f0',
-   borderRadius: '12px',
-   fontSize: '1rem',
-   outline: 'none',
-   transition: 'all 0.2s ease',
-   boxSizing: 'border-box'
- },
- modalFooter: {
-   display: 'flex',
-   gap: '0.75rem',
-   padding: '1.5rem',
-   background: '#f8fafc'
- },
- cancelButton: {
-   flex: '1',
-   padding: '0.75rem 1rem',
-   background: '#e2e8f0',
-   color: '#1e293b',
-   border: 'none',
-   borderRadius: '12px',
-   fontWeight: '600',
-   cursor: 'pointer',
-   transition: 'all 0.2s ease'
- },
- saveButton: {
-   flex: '1',
-   padding: '0.75rem 1rem',
-   background: '#3b82f6',
-   color: 'white',
-   border: 'none',
-   borderRadius: '12px',
-   fontWeight: '600',
-   cursor: 'pointer',
-   transition: 'all 0.2s ease',
-   boxShadow: '0 10px 25px rgba(59, 130, 246, 0.3)'
- },
- wrapper: {
-  padding: '1.5rem',
-  background: 'white',
-  borderRadius: '12px',
-  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-  border: '1px solid #e2e8f0',
-  marginBottom: '1.5rem',
-  transition: 'all 0.2s ease',
-},
-headerWrapper: {
-  textAlign: 'center',
-},
-headerTitleText: {
-  fontSize: '1.5rem',
-  fontWeight: 300,
-  color: '#64748b',
-},
-timesIconRow: {
-  display: 'flex',
-  justifyContent: 'space-around',
-},
-timeIconSection: {
-  textAlign: 'center',
-},
-baseIconStyle: {
-  width: '48px',
-  height: '48px',
-  borderRadius: '12px',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: '#64748b',
-  fontSize: '1.5rem',
-},
-moonIconBackground: {
-  background: '#f3f0ff',
-},
-sunIconBackground: {
-  background: '#fef3c7',
-},
-timeTextStyle: {
-  color: '#64748b',
-  fontSize: '0.875rem',
-  fontWeight: 500,
-},
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'all 0.2s ease'
+  },
+  modalBody: {
+    padding: '1.5rem'
+  },
+  inputGroup: {
+    marginBottom: '1.5rem'
+  },
+  label: {
+    display: 'block',
+    fontSize: '0.875rem',
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: '0.5rem'
+  },
+  input: {
+    width: '100%',
+    padding: '0.75rem 1rem',
+    background: '#f8fafc',
+    border: '1px solid #e2e8f0',
+    borderRadius: '12px',
+    fontSize: '1rem',
+    outline: 'none',
+    transition: 'all 0.2s ease',
+    boxSizing: 'border-box'
+  },
+  select: {
+    width: '100%',
+    padding: '0.75rem 1rem',
+    background: '#f8fafc',
+    border: '1px solid #e2e8f0',
+    borderRadius: '12px',
+    fontSize: '1rem',
+    outline: 'none',
+    transition: 'all 0.2s ease',
+    boxSizing: 'border-box'
+  },
+  modalFooter: {
+    display: 'flex',
+    gap: '0.75rem',
+    padding: '1.5rem',
+    background: '#f8fafc'
+  },
+  cancelButton: {
+    flex: '1',
+    padding: '0.75rem 1rem',
+    background: '#e2e8f0',
+    color: '#1e293b',
+    border: 'none',
+    borderRadius: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease'
+  },
+  saveButton: {
+    flex: '1',
+    padding: '0.75rem 1rem',
+    background: '#3b82f6',
+    color: 'white',
+    border: 'none',
+    borderRadius: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    boxShadow: '0 10px 25px rgba(59, 130, 246, 0.3)'
+  },
+  wrapper: {
+    padding: '1.5rem',
+    background: 'white',
+    borderRadius: '12px',
+    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+    border: '1px solid #e2e8f0',
+    marginBottom: '1.5rem',
+    transition: 'all 0.2s ease',
+  },
+  headerWrapper: {
+    textAlign: 'center',
+  },
+  headerTitleText: {
+    fontSize: '1.5rem',
+    fontWeight: 300,
+    color: '#64748b',
+  },
+  timesIconRow: {
+    display: 'flex',
+    justifyContent: 'space-around',
+  },
+  timeIconSection: {
+    textAlign: 'center',
+  },
+  baseIconStyle: {
+    width: '48px',
+    height: '48px',
+    borderRadius: '12px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#64748b',
+    fontSize: '1.5rem',
+  },
+  moonIconBackground: {
+    background: '#f3f0ff',
+  },
+  sunIconBackground: {
+    background: '#fef3c7',
+  },
+  timeTextStyle: {
+    color: '#64748b',
+    fontSize: '0.875rem',
+    fontWeight: 500,
+  },
 };
 
 // Helper for appliances status formatting
 function formatOperatingState(operatingStateObj) {
- if (!operatingStateObj?.operatingState) return null;
- const { value, timestamp } = operatingStateObj.operatingState;
- const stateLower = value.toLowerCase();
+  if (!operatingStateObj?.operatingState) return null;
+  const { value, timestamp } = operatingStateObj.operatingState;
+  const stateLower = value.toLowerCase();
 
- if (stateLower === "finished" || stateLower === "ready") {
-   if (timestamp) {
-     const eventTime = new Date(timestamp.value || timestamp);
-     const now = new Date();
-     const isToday = eventTime.toDateString() === now.toDateString();
-     const timeString = eventTime.toLocaleTimeString([], {
-       hour: "2-digit",
-       minute: "2-digit",
-     });
-     return `Finished ${
-       isToday ? "" :  eventTime.toLocaleDateString().substring(0, eventTime.toLocaleDateString().indexOf("/", 3))
-     } @ ${timeString}`;
-   }
-   return "Finished";
- } else if (stateLower === "running") {
-   if (operatingStateObj.remainingTimeStr?.value) {
-     return `${
-       operatingStateObj.washerJobState?.value ||
-       operatingStateObj.dryerJobState?.value ||
-       "Running"
-     } – ${operatingStateObj.remainingTimeStr.value} remaining`;
-   }
-   return "Running";
- } else {
-   return value.charAt(0).toUpperCase() + value.slice(1);
- }
+  if (stateLower === "finished" || stateLower === "ready") {
+    if (timestamp) {
+      const eventTime = new Date(timestamp.value || timestamp);
+      const now = new Date();
+      const isToday = eventTime.toDateString() === now.toDateString();
+      const timeString = eventTime.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      return `Finished ${
+        isToday ? "" : eventTime.toLocaleDateString().substring(0, eventTime.toLocaleDateString().indexOf("/", 3))
+      } @ ${timeString}`;
+    }
+    return "Finished";
+  } else if (stateLower === "running") {
+    if (operatingStateObj.remainingTimeStr?.value) {
+      return `${
+        operatingStateObj.washerJobState?.value ||
+        operatingStateObj.dryerJobState?.value ||
+        "Running"
+      } – ${operatingStateObj.remainingTimeStr.value} remaining`;
+    }
+    return "Running";
+  } else {
+    return value.charAt(0).toUpperCase() + value.slice(1);
+  }
 }
