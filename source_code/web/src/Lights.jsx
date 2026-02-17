@@ -604,9 +604,9 @@ export default function Lights() {
               }}>
                 <FaCar style={styles.carIcon} />
               </div>
-              <span style={styles.carButtonText}>
+              {/* <span style={styles.carButtonText}>
                 {carStarting ? "Starting..." : carStartSuccess ? "Started!" : "Start Car"}
-              </span>
+              </span> */}
             </button>
             {carStartMessage && (
               <div style={{
