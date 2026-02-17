@@ -872,7 +872,6 @@ const styles = {
   },
   carButtonContainer: {
     position: 'relative',
-    minWidth: '200px'
   },
   carStartButton: {
     width: '100%',
