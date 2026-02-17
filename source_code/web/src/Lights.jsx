@@ -633,107 +633,114 @@ export default function Lights() {
         <div style={styles.header}>
         </div>
 
-        {/* Lights Section with Car Buttons */}
-        <div style={{display: "flex", gap: 10, marginBottom: "1.5rem"}}>
-          <div style={{flex: 1}}>
-            <SectionHeader 
-              title="Lights" 
-              isExpanded={showLights} 
-              onClick={() => setShowLights(!showLights)}
-              icon={FaLightbulb}
-              count={lightsDevices.length}
-            />
+        {/* Car Buttons Row - above lights */}
+        <div style={styles.carButtonsGroup}>
+          {/* Start Car Button */}
+          <div style={styles.carButtonContainer}>
+            <button
+              className="car-start-button"
+              style={{
+                ...styles.carActionButton,
+                ...styles.carStartButton,
+                ...(carStarting ? styles.carStartButtonLoading : {}),
+                ...(carStartSuccess ? styles.carStartButtonSuccess : {})
+              }}
+              onClick={startCar}
+              disabled={carStarting}
+              title="Start Car"
+            >
+              <div style={{
+                ...styles.carIconWrapper,
+                ...(carStartSuccess ? styles.carIconTakeoff : {})
+              }}>
+                <FaCar style={styles.carIcon} />
+              </div>
+              <span style={styles.carButtonText}>
+                {carStarting ? "Starting..." : carStartSuccess ? "Started!" : "Start Car"}
+              </span>
+            </button>
+            {carStartMessage && (
+              <div style={{
+                ...styles.carMessage,
+                ...(carStartSuccess ? styles.carMessageSuccess : styles.carMessageError)
+              }}>
+                {carStartMessage}
+              </div>
+            )}
           </div>
-          
-          {/* Car Buttons Group */}
-          <div style={styles.carButtonsGroup}>
-            {/* Start Car Button */}
-            <div style={styles.carButtonContainer}>
-              <button
-                className="car-start-button"
-                style={{
-                  ...styles.carActionButton,
-                  ...styles.carStartButton,
-                  ...(carStarting ? styles.carStartButtonLoading : {}),
-                  ...(carStartSuccess ? styles.carStartButtonSuccess : {})
-                }}
-                onClick={startCar}
-                disabled={carStarting}
-                title="Start Car"
-              >
-                <div style={{
-                  ...styles.carIconWrapper,
-                  ...(carStartSuccess ? styles.carIconTakeoff : {})
-                }}>
-                  <FaCar style={styles.carIcon} />
-                </div>
-              </button>
-              {carStartMessage && (
-                <div style={{
-                  ...styles.carMessage,
-                  ...(carStartSuccess ? styles.carMessageSuccess : styles.carMessageError)
-                }}>
-                  {carStartMessage}
-                </div>
-              )}
-            </div>
 
-            {/* Lock Car Button */}
-            <div style={styles.carButtonContainer}>
-              <button
-                className="car-lock-button"
-                style={{
-                  ...styles.carActionButton,
-                  ...styles.carLockButton,
-                  ...(carLocking ? styles.carLockButtonLoading : {}),
-                  ...(carLockSuccess ? styles.carLockButtonSuccess : {})
-                }}
-                onClick={lockCar}
-                disabled={carLocking}
-                title="Lock Car"
-              >
-                <div style={styles.carIconWrapper}>
-                  <FaLock style={styles.carIcon} />
-                </div>
-              </button>
-              {carLockMessage && (
-                <div style={{
-                  ...styles.carMessage,
-                  ...(carLockSuccess ? styles.carMessageSuccess : styles.carMessageError)
-                }}>
-                  {carLockMessage}
-                </div>
-              )}
-            </div>
-
-            {/* Unlock Car Button */}
-            <div style={styles.carButtonContainer}>
-              <button
-                className="car-unlock-button"
-                style={{
-                  ...styles.carActionButton,
-                  ...styles.carUnlockButton,
-                  ...(carUnlocking ? styles.carUnlockButtonLoading : {}),
-                  ...(carUnlockSuccess ? styles.carUnlockButtonSuccess : {})
-                }}
-                onClick={unlockCar}
-                disabled={carUnlocking}
-                title="Unlock Car"
-              >
-                <div style={styles.carIconWrapper}>
-                  <FaLockOpen style={styles.carIcon} />
-                </div>
-              </button>
-              {carUnlockMessage && (
-                <div style={{
-                  ...styles.carMessage,
-                  ...(carUnlockSuccess ? styles.carMessageSuccess : styles.carMessageError)
-                }}>
-                  {carUnlockMessage}
-                </div>
-              )}
-            </div>
+          {/* Lock Car Button */}
+          <div style={styles.carButtonContainer}>
+            <button
+              className="car-lock-button"
+              style={{
+                ...styles.carActionButton,
+                ...styles.carLockButton,
+                ...(carLocking ? styles.carLockButtonLoading : {}),
+                ...(carLockSuccess ? styles.carLockButtonSuccess : {})
+              }}
+              onClick={lockCar}
+              disabled={carLocking}
+              title="Lock Car"
+            >
+              <div style={styles.carIconWrapper}>
+                <FaLock style={styles.carIcon} />
+              </div>
+              <span style={styles.carButtonText}>
+                {carLocking ? "Locking..." : carLockSuccess ? "Locked!" : "Lock Car"}
+              </span>
+            </button>
+            {carLockMessage && (
+              <div style={{
+                ...styles.carMessage,
+                ...(carLockSuccess ? styles.carMessageSuccess : styles.carMessageError)
+              }}>
+                {carLockMessage}
+              </div>
+            )}
           </div>
+
+          {/* Unlock Car Button */}
+          <div style={styles.carButtonContainer}>
+            <button
+              className="car-unlock-button"
+              style={{
+                ...styles.carActionButton,
+                ...styles.carUnlockButton,
+                ...(carUnlocking ? styles.carUnlockButtonLoading : {}),
+                ...(carUnlockSuccess ? styles.carUnlockButtonSuccess : {})
+              }}
+              onClick={unlockCar}
+              disabled={carUnlocking}
+              title="Unlock Car"
+            >
+              <div style={styles.carIconWrapper}>
+                <FaLockOpen style={styles.carIcon} />
+              </div>
+              <span style={styles.carButtonText}>
+                {carUnlocking ? "Unlocking..." : carUnlockSuccess ? "Unlocked!" : "Unlock Car"}
+              </span>
+            </button>
+            {carUnlockMessage && (
+              <div style={{
+                ...styles.carMessage,
+                ...(carUnlockSuccess ? styles.carMessageSuccess : styles.carMessageError)
+              }}>
+                {carUnlockMessage}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Lights Section */}
+        <div style={{marginBottom: "1.5rem"}}>
+          <SectionHeader 
+            title="Lights" 
+            isExpanded={showLights} 
+            onClick={() => setShowLights(!showLights)}
+            icon={FaLightbulb}
+            count={lightsDevices.length}
+          />
         </div>
         
         {showLights && (
@@ -990,10 +997,11 @@ const styles = {
   carButtonsGroup: {
     display: 'flex',
     gap: '10px',
+    marginBottom: '1.5rem',
   },
   carButtonContainer: {
     position: 'relative',
-    width: '100px'
+    flex: 1,
   },
   // Base style shared by all car action buttons
   carActionButton: {
