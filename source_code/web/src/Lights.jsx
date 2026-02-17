@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import axios from "./axios";
 import "bootstrap/dist/css/bootstrap.min.css";
-import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun, FaStarAndCrescent, FaCloudMoon, FaFan, FaCar } from "react-icons/fa";
+import { FaCog, FaLightbulb, FaTv, FaPlug, FaChevronDown, FaChevronUp, FaPowerOff, FaMoon, FaSun, FaStarAndCrescent, FaCloudMoon, FaFan, FaCar, FaLock, FaLockOpen } from "react-icons/fa";
 
 export default function Lights() {
   const [devices, setDevices] = useState([]);
@@ -25,6 +25,14 @@ export default function Lights() {
   const [carStartSuccess, setCarStartSuccess] = useState(false);
   const [carStartMessage, setCarStartMessage] = useState("");
 
+  const [carLocking, setCarLocking] = useState(false);
+  const [carLockSuccess, setCarLockSuccess] = useState(false);
+  const [carLockMessage, setCarLockMessage] = useState("");
+
+  const [carUnlocking, setCarUnlocking] = useState(false);
+  const [carUnlockSuccess, setCarUnlockSuccess] = useState(false);
+  const [carUnlockMessage, setCarUnlockMessage] = useState("");
+
   const POLL_INTERVAL = 3000
 
   // Fetch devices
@@ -32,10 +40,8 @@ export default function Lights() {
   const [pausePollingUntil, setPausePollingUntil] = useState(0);
 
   const fetchDevices = useCallback(async () => {
-    // Don't start if paused
     if (Date.now() < pausePollingUntil) return;
 
-    // Cancel any ongoing request before starting a new one
     if (currentFetchController.current) {
       currentFetchController.current.abort();
     }
@@ -76,12 +82,10 @@ export default function Lights() {
     }
   }, [fetchDevices, pausePollingUntil]);
 
-  // Skip a poll so our changes dont get overwritten
   function pausePolling() {
     setPausePollingUntil(Date.now() + 1000);
   }
 
-  // Fetch settings
   const fetchSettings = useCallback(async () => {
     try {
       const { data } = await axios.get(`/settings`);
@@ -91,7 +95,6 @@ export default function Lights() {
     }
   }, []);
 
-  // Fetch users
   const fetchUsers = useCallback(async () => {
     try {
       const { data } = await axios.get(`/users`);
@@ -101,7 +104,6 @@ export default function Lights() {
     }
   }, []);
 
-  // Persist settings with stable callback
   const updateSetting = useCallback(
     async (key, value) => {
       try {
@@ -169,14 +171,13 @@ export default function Lights() {
     );
   };
 
-  // Initial load
   useEffect(() => {
     fetchDevices();
     fetchSettings();
     fetchUsers();
   }, [fetchDevices, fetchSettings, fetchUsers]);
 
-  // Start car function
+  // Start car
   const startCar = async () => {
     setCarStarting(true);
     setCarStartSuccess(false);
@@ -184,13 +185,9 @@ export default function Lights() {
 
     try {
       const response = await axios.post(`/start-car`, { password: localStorage.getItem("token") });
-      console.log(response)
-      
       if (response.data.ok) {
         setCarStartSuccess(true);
         setCarStartMessage(response.data.message || "Car started successfully!");
-        
-        // Reset success animation after 5 seconds
         setTimeout(() => {
           setCarStartSuccess(false);
           setCarStartMessage("");
@@ -203,6 +200,58 @@ export default function Lights() {
       setCarStartMessage("Error: Could not communicate with car");
     } finally {
       setCarStarting(false);
+    }
+  };
+
+  // Lock car
+  const lockCar = async () => {
+    setCarLocking(true);
+    setCarLockSuccess(false);
+    setCarLockMessage("");
+
+    try {
+      const response = await axios.post(`/lock-car`, { password: localStorage.getItem("token") });
+      if (response.data.ok) {
+        setCarLockSuccess(true);
+        setCarLockMessage(response.data.message || "Car locked!");
+        setTimeout(() => {
+          setCarLockSuccess(false);
+          setCarLockMessage("");
+        }, 5000);
+      } else {
+        setCarLockMessage(response.data.message || "Failed to lock car");
+      }
+    } catch (error) {
+      console.error("Error locking car:", error);
+      setCarLockMessage("Error: Could not communicate with car");
+    } finally {
+      setCarLocking(false);
+    }
+  };
+
+  // Unlock car
+  const unlockCar = async () => {
+    setCarUnlocking(true);
+    setCarUnlockSuccess(false);
+    setCarUnlockMessage("");
+
+    try {
+      const response = await axios.post(`/unlock-car`, { password: localStorage.getItem("token") });
+      if (response.data.ok) {
+        setCarUnlockSuccess(true);
+        setCarUnlockMessage(response.data.message || "Car unlocked!");
+        setTimeout(() => {
+          setCarUnlockSuccess(false);
+          setCarUnlockMessage("");
+        }, 5000);
+      } else {
+        setCarUnlockMessage(response.data.message || "Failed to unlock car");
+      }
+    } catch (error) {
+      console.error("Error unlocking car:", error);
+      setCarUnlockMessage("Error: Could not communicate with car");
+    } finally {
+      setCarUnlocking(false);
     }
   };
 
@@ -233,10 +282,8 @@ export default function Lights() {
     }
   }, [loading, settings, devices, initedSettings, updateSetting]);
 
-  // Optimistic Device state update
   const updateDeviceState = async (deviceId, on, level = null) => {
-    // Immediately update UI state
-    handleUserChange(); // Pause polling to avoid overwriting changes
+    handleUserChange();
 
     setDevices((devices) =>
       devices.map((device) => {
@@ -270,7 +317,6 @@ export default function Lights() {
       })
     );
 
-    // Fire the API call, no await to avoid UI blocking
     try {
       const payload = {
         devices: [deviceId],
@@ -284,7 +330,6 @@ export default function Lights() {
     }
   };
 
-  // Slider UI immediate update
   const handleSliderChange = (deviceId, level) => {
     setDevices((devices) =>
       devices.map((device) =>
@@ -311,12 +356,10 @@ export default function Lights() {
     );
   };
 
-  // Fire brightness update in background without blocking UI
   const handleBrightnessChange = (deviceId, level) => {
     updateDeviceState(deviceId, "on", Number(level));
   };
 
-  // Modal handlers
   const openSettings = (deviceId) => {
     const light = settings.lights?.[deviceId] || {};
     setModalDevice(deviceId);
@@ -351,14 +394,12 @@ export default function Lights() {
     );
   }
 
-  // Categorize devices
   const lightsDevices = devices.filter(
     (d) =>
       d.name?.toLowerCase().startsWith("c2c") &&
       !d.name.toLowerCase().includes("switch")
   );
   
-  // Group lights by room
   const lightsByRoom = lightsDevices.reduce((acc, device) => {
     const room = settings.lights?.[device.deviceId]?.room || "Uncategorized";
     if (!acc[room]) {
@@ -530,6 +571,24 @@ export default function Lights() {
         .car-start-button:active:not(:disabled) {
           transform: translateY(0);
         }
+
+        .car-lock-button:hover:not(:disabled) {
+          transform: translateY(-2px);
+          box-shadow: 0 15px 40px rgba(59, 130, 246, 0.5);
+        }
+
+        .car-lock-button:active:not(:disabled) {
+          transform: translateY(0);
+        }
+
+        .car-unlock-button:hover:not(:disabled) {
+          transform: translateY(-2px);
+          box-shadow: 0 15px 40px rgba(245, 158, 11, 0.5);
+        }
+
+        .car-unlock-button:active:not(:disabled) {
+          transform: translateY(0);
+        }
         
         .device-card-wrapper:hover .settings-button {
           opacity: 1;
@@ -574,7 +633,7 @@ export default function Lights() {
         <div style={styles.header}>
         </div>
 
-        {/* Lights Section with Car Button */}
+        {/* Lights Section with Car Buttons */}
         <div style={{display: "flex", gap: 10, marginBottom: "1.5rem"}}>
           <div style={{flex: 1}}>
             <SectionHeader 
@@ -586,36 +645,94 @@ export default function Lights() {
             />
           </div>
           
-          {/* Car Start Button */}
-          <div style={styles.carButtonContainer}>
-            <button
-              className="car-start-button"
-              style={{
-                ...styles.carStartButton,
-                ...(carStarting ? styles.carStartButtonLoading : {}),
-                ...(carStartSuccess ? styles.carStartButtonSuccess : {})
-              }}
-              onClick={startCar}
-              disabled={carStarting}
-            >
-              <div style={{
-                ...styles.carIconWrapper,
-                ...(carStartSuccess ? styles.carIconTakeoff : {})
-              }}>
-                <FaCar style={styles.carIcon} />
-              </div>
-              {/* <span style={styles.carButtonText}>
-                {carStarting ? "Starting..." : carStartSuccess ? "Started!" : "Start Car"}
-              </span> */}
-            </button>
-            {carStartMessage && (
-              <div style={{
-                ...styles.carMessage,
-                ...(carStartSuccess ? styles.carMessageSuccess : styles.carMessageError)
-              }}>
-                {carStartMessage}
-              </div>
-            )}
+          {/* Car Buttons Group */}
+          <div style={styles.carButtonsGroup}>
+            {/* Start Car Button */}
+            <div style={styles.carButtonContainer}>
+              <button
+                className="car-start-button"
+                style={{
+                  ...styles.carActionButton,
+                  ...styles.carStartButton,
+                  ...(carStarting ? styles.carStartButtonLoading : {}),
+                  ...(carStartSuccess ? styles.carStartButtonSuccess : {})
+                }}
+                onClick={startCar}
+                disabled={carStarting}
+                title="Start Car"
+              >
+                <div style={{
+                  ...styles.carIconWrapper,
+                  ...(carStartSuccess ? styles.carIconTakeoff : {})
+                }}>
+                  <FaCar style={styles.carIcon} />
+                </div>
+              </button>
+              {carStartMessage && (
+                <div style={{
+                  ...styles.carMessage,
+                  ...(carStartSuccess ? styles.carMessageSuccess : styles.carMessageError)
+                }}>
+                  {carStartMessage}
+                </div>
+              )}
+            </div>
+
+            {/* Lock Car Button */}
+            <div style={styles.carButtonContainer}>
+              <button
+                className="car-lock-button"
+                style={{
+                  ...styles.carActionButton,
+                  ...styles.carLockButton,
+                  ...(carLocking ? styles.carLockButtonLoading : {}),
+                  ...(carLockSuccess ? styles.carLockButtonSuccess : {})
+                }}
+                onClick={lockCar}
+                disabled={carLocking}
+                title="Lock Car"
+              >
+                <div style={styles.carIconWrapper}>
+                  <FaLock style={styles.carIcon} />
+                </div>
+              </button>
+              {carLockMessage && (
+                <div style={{
+                  ...styles.carMessage,
+                  ...(carLockSuccess ? styles.carMessageSuccess : styles.carMessageError)
+                }}>
+                  {carLockMessage}
+                </div>
+              )}
+            </div>
+
+            {/* Unlock Car Button */}
+            <div style={styles.carButtonContainer}>
+              <button
+                className="car-unlock-button"
+                style={{
+                  ...styles.carActionButton,
+                  ...styles.carUnlockButton,
+                  ...(carUnlocking ? styles.carUnlockButtonLoading : {}),
+                  ...(carUnlockSuccess ? styles.carUnlockButtonSuccess : {})
+                }}
+                onClick={unlockCar}
+                disabled={carUnlocking}
+                title="Unlock Car"
+              >
+                <div style={styles.carIconWrapper}>
+                  <FaLockOpen style={styles.carIcon} />
+                </div>
+              </button>
+              {carUnlockMessage && (
+                <div style={{
+                  ...styles.carMessage,
+                  ...(carUnlockSuccess ? styles.carMessageSuccess : styles.carMessageError)
+                }}>
+                  {carUnlockMessage}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         
@@ -870,16 +987,20 @@ const styles = {
     margin: '0 auto',
     padding: '2rem'
   },
+  carButtonsGroup: {
+    display: 'flex',
+    gap: '10px',
+  },
   carButtonContainer: {
     position: 'relative',
+    width: '100px'
   },
-  carStartButton: {
+  // Base style shared by all car action buttons
+  carActionButton: {
     width: '100%',
     height: '100px',
-    background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
     border: 'none',
     borderRadius: '12px',
-    boxShadow: '0 10px 30px rgba(239, 68, 68, 0.4)',
     cursor: 'pointer',
     display: 'flex',
     flexDirection: 'column',
@@ -890,12 +1011,42 @@ const styles = {
     position: 'relative',
     overflow: 'hidden'
   },
+  carStartButton: {
+    background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+    boxShadow: '0 10px 30px rgba(239, 68, 68, 0.4)',
+  },
   carStartButtonLoading: {
     background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
     boxShadow: '0 10px 30px rgba(245, 158, 11, 0.4)',
     animation: 'pulse 1.5s ease-in-out infinite'
   },
   carStartButtonSuccess: {
+    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    boxShadow: '0 10px 30px rgba(16, 185, 129, 0.4)'
+  },
+  carLockButton: {
+    background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+    boxShadow: '0 10px 30px rgba(59, 130, 246, 0.4)',
+  },
+  carLockButtonLoading: {
+    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+    boxShadow: '0 10px 30px rgba(245, 158, 11, 0.4)',
+    animation: 'pulse 1.5s ease-in-out infinite'
+  },
+  carLockButtonSuccess: {
+    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    boxShadow: '0 10px 30px rgba(16, 185, 129, 0.4)'
+  },
+  carUnlockButton: {
+    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+    boxShadow: '0 10px 30px rgba(245, 158, 11, 0.4)',
+  },
+  carUnlockButtonLoading: {
+    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+    boxShadow: '0 10px 30px rgba(245, 158, 11, 0.4)',
+    animation: 'pulse 1.5s ease-in-out infinite'
+  },
+  carUnlockButtonSuccess: {
     background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
     boxShadow: '0 10px 30px rgba(16, 185, 129, 0.4)'
   },
@@ -911,24 +1062,20 @@ const styles = {
   carIcon: {
     filter: 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2))'
   },
-  carButtonText: {
-    color: 'white',
-    fontSize: '1rem',
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em'
-  },
   carMessage: {
     position: 'absolute',
     top: '110px',
     left: '0',
     right: '0',
     textAlign: 'center',
-    fontSize: '0.875rem',
+    fontSize: '0.75rem',
     fontWeight: '500',
-    padding: '0.5rem',
+    padding: '0.25rem 0.5rem',
     borderRadius: '8px',
-    animation: 'slideDown 0.3s ease-out'
+    animation: 'slideDown 0.3s ease-out',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis'
   },
   carMessageSuccess: {
     color: '#059669',
@@ -1383,7 +1530,6 @@ const styles = {
   },
 };
 
-// Helper for appliances status formatting
 function formatOperatingState(operatingStateObj) {
   if (!operatingStateObj?.operatingState) return null;
   const { value, timestamp } = operatingStateObj.operatingState;

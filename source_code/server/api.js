@@ -498,6 +498,48 @@ router.post("/start-car", async (req, res) => {
   return res.json({ cmdId, ...result });
 });
 
+// Helper to avoid duplicating logic
+async function queueDeviceCmd(req, res, cmd) {
+  const bodyPassword = req.body.password;
+  const auth = req.headers.authorization || "";
+  const headerToken = auth.replace(/^Bearer\s+/i, "").trim();
+
+  const isAuthorized =
+    bodyPassword === process.env.ADMIN_UID ||
+    headerToken === process.env.ADMIN_UID;
+
+  if (!isAuthorized) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+
+  const deviceId = "SUBURBAN";
+  const cmdId = newCmdId();
+
+  // queue the command (overwrite any previous pending command for this device)
+  pendingCmdByDevice.set(deviceId, { cmdId, cmd, createdAt: Date.now() });
+
+  // wait up to 35s for device result
+  const result = await new Promise((resolve) => {
+    const timeoutHandle = setTimeout(() => {
+      waitersByCmdId.delete(cmdId);
+      resolve({ ok: false, timeout: true, message: "Device did not respond in time." });
+    }, 35000);
+
+    waitersByCmdId.set(cmdId, { resolve, timeoutHandle });
+  });
+
+  return res.json({ cmdId, ...result });
+}
+
+router.post("/lock-car", async (req, res) => {
+  return queueDeviceCmd(req, res, "lock");
+});
+
+router.post("/unlock-car", async (req, res) => {
+  return queueDeviceCmd(req, res, "unlock");
+});
+
+
 // Device asks "any command?"
 router.get("/device/next", requireAuth, (req, res) => {
   const deviceId = String(req.query.deviceId || "");
