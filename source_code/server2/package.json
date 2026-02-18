@@ -1,6 +1,6 @@
 {
-  "name": "home-server",
-  "version": "1.0.0",
+  "name": "npx",
+  "version": "0.0.0",
   "private": true,
   "scripts": {
     "start": "nodemon server.js"
@@ -8,7 +8,6 @@
   "dependencies": {
     "axios": "^1.6.2",
     "bcrypt": "^5.1.1",
-    "body-parser": "^1.20.2",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",

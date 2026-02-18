@@ -160,7 +160,7 @@ async function getTempFAt7am(date) {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   const url = `https://api.open-meteo.com/v1/forecast` +
-    `?latitude=${LAT}&longitude=${LNG}` +
+    `?latitude=${lat}&longitude=${lng}` +
     `&hourly=temperature_2m` +
     `&temperature_unit=fahrenheit` +
     `&timezone=${encodeURIComponent(TZ)}` +
@@ -305,7 +305,9 @@ async function maybeStartCar(reasonTag) {
       return;
     }
     console.log(`[${now.toLocaleString()}] Conditions met (${reasonTag}). Temp ${tempF}°F. Starting car...`);
-    await remoteStart();
+    
+    // start car here once we can open the garage door accurately
+    // queueDeviceCmd(req, res, "start");
   } catch (err) {
     console.error(`[${now.toLocaleString()}] Error in maybeStartCar(${reasonTag}):`, err.message);
   }
@@ -467,35 +469,7 @@ function newCmdId() {
 
 // Browser endpoint
 router.post("/start-car", async (req, res) => {
-  // Check BOTH body password (from website) AND Authorization header (from ESP32)
-  const bodyPassword = req.body.password;
-  const auth = req.headers.authorization || "";
-  const headerToken = auth.replace(/^Bearer\s+/i, "").trim();
-  
-  // Accept either authentication method
-  const isAuthorized = (bodyPassword === process.env.ADMIN_UID) || 
-                       (headerToken === process.env.ADMIN_UID);
-  
-  if (!isAuthorized) {
-    return res.status(403).json({ ok: false, error: "forbidden" });
-  }
-  
-  const deviceId = "SUBURBAN";
-  const cmdId = newCmdId();
-  
-  // queue the command
-  pendingCmdByDevice.set(deviceId, { cmdId, cmd: "start", createdAt: Date.now() });
-  
-  // wait up to 35s for device result
-  const result = await new Promise((resolve) => {
-    const timeoutHandle = setTimeout(() => {
-      waitersByCmdId.delete(cmdId);
-      resolve({ ok: false, timeout: true, message: "Device did not respond in time." });
-    }, 35000);
-    waitersByCmdId.set(cmdId, { resolve, timeoutHandle });
-  });
-  
-  return res.json({ cmdId, ...result });
+  return queueDeviceCmd(req, res, "start");
 });
 
 // Helper to avoid duplicating logic
@@ -578,77 +552,6 @@ router.post('/smartthings-webhook', (req, res) => {
   // Process the even
   res.sendStatus(200); // Tell SmartThings you received it
 });
-
-// @DEPRECATED : car lock/unlock/start/stop via Alexa
-// router.post('/lock-car', async (req, res) => {
-//   // const val = await validatePassword(password);
-//   // if (!val) return;
-
-//   console.log("Alexa triggered remote lock intent, request body:", req.body);
-
-//   await lock.writeSync(1);
-//   setTimeout(() => lock.writeSync(0), 300);
-
-//   res.json({
-//     version: "1.0",
-//     response: {
-//       outputSpeech: {
-//         type: "PlainText",
-//         text: "Your Suburban is locking now."
-//       },
-//       shouldEndSession: true
-//     }
-//   });
-// }
-// );
-
-// router.post('/start-car', async (req, res) => {
-
-//   // const val = await validatePassword(password);
-//   // if (!val) return;
-
-//   console.log("Alexa triggered remote start intent, request body:", req.body);
-
-  
-
-//   res.json({
-//     version: "1.0",
-//     response: {
-//       outputSpeech: {
-//         type: "PlainText",
-//         text: "Your Suburban is starting now."
-//       },
-//       shouldEndSession: true
-//     }
-//   });
-
-//   remoteStart();
-
-
-// });
-
-// router.post('/stop-car', async (req, res) => {
-
-//   // const val = await validatePassword(password);
-//   // if (!val) return;
-
-//   console.log("Alexa triggered remote stop intent, request body:", req.body);
-
- 
-
-//   res.json({
-//     version: "1.0",
-//     response: {
-//       outputSpeech: {
-//         type: "PlainText",
-//         text: "Your Suburban is stopping now."
-//       },
-//       shouldEndSession: true
-//     }
-//   });
-
-//   remoteStop(); 
-// });
 
 
 router.post('/log', (req, res) => {
