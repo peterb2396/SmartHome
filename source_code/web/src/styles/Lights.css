@@ -1,0 +1,188 @@
+.section-header {
+    cursor: pointer;
+    border-bottom: 2px solid #ccc;
+    padding-bottom: 5px;
+    font-weight: bold;
+    font-size: 1.4rem;
+  }
+  
+  .fade-in {
+    animation: fadeIn 0.4s ease-in-out;
+  }
+  
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  
+  .light-card {
+    border-radius: 10px;
+    transition: transform 0.2s ease, box-shadow 0.3s ease;
+  }
+  .light-card:hover {
+    transform: scale(1.03);
+    box-shadow: 0 6px 15px rgba(0,0,0,0.15);
+  }
+  
+  .light-on {
+    background: #eaf8ea;
+  }
+  .light-off {
+    background: #fdeaea;
+  }
+  
+  .brightness-slider {
+    width: 100%;
+    height: 6px; /* visible track thickness */
+    border-radius: 5px;
+    background: linear-gradient(90deg, #ff4d4d, #ffd700, #4caf50);
+    appearance: none;
+    outline: none;
+  }
+  
+  /* Add invisible grab padding via shadow or negative margin */
+  .brightness-slider::-webkit-slider-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #4caf50;
+    cursor: pointer;
+    appearance: none;
+    transition: transform 0.2s;
+    margin-top: -7px; /* centers thumb vertically with extra track height */
+  }
+  
+  /* Make the actual clickable area taller */
+  .brightness-slider::-webkit-slider-runnable-track {
+    height: 34px; /* clickable zone */
+    background: transparent; /* actual color is set on main slider */
+  }
+  
+  .brightness-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+  }
+  
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  
+  .section-header:hover {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  }
+  
+  .power-button:hover {
+    transform: translateY(-1px);
+  }
+  
+  .cancel-button:hover {
+    background: #d1d5db;
+  }
+  
+  .save-button:hover {
+    background: #2563eb;
+    transform: translateY(-1px);
+  }
+  
+  .modal-close-button:hover {
+    background: rgba(255, 255, 255, 0.3);
+  }
+  
+  .plug-toggle:hover {
+    transform: scale(1.05);
+  }
+  
+  /* Input focus styles */
+  input:focus, select:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  }
+  
+  /* Custom slider styles */
+  input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    height: 20px;
+    width: 20px;
+    border-radius: 50%;
+    background: #fbbf24;
+    cursor: pointer;
+    box-shadow: 0 4px 8px rgba(251, 191, 36, 0.3);
+    transition: all 0.2s ease-in-out;
+  }
+  
+  input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.1);
+    box-shadow: 0 6px 12px rgba(251, 191, 36, 0.4);
+  }
+  
+  input[type="range"]::-moz-range-thumb {
+    height: 20px;
+    width: 20px;
+    border-radius: 50%;
+    background: #fbbf24;
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 4px 8px rgba(251, 191, 36, 0.3);
+    transition: all 0.2s ease-in-out;
+  }
+  
+  input[type="range"]::-moz-range-thumb:hover {
+    transform: scale(1.1);
+    box-shadow: 0 6px 12px rgba(251, 191, 36, 0.4);
+  }
+
+  .dark-skies-container {
+  padding: 1.5rem;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e2e8f0;
+  margin-bottom: 1.5rem;
+  transition: all 0.2s ease;
+}
+
+.header {
+  text-align: center;
+}
+
+.header-title {
+  font-size: 1.5rem;
+  font-weight: 300;
+  color: #64748b;
+}
+
+.icons-times-container {
+  display: flex;
+  justify-content: space-around;
+}
+
+.section {
+  text-align: center;
+}
+
+.icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 1.5rem;
+}
+
+/* Specific background colors for moon and sun icons */
+.moon-icon {
+  background: #f3f0ff;
+}
+
+.sun-icon {
+  background: #fef3c7;
+}
+
+.time-text {
+  color: #64748b;
+  font-size: 0.875rem;
+  font-weight: 500;
+}

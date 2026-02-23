@@ -1,285 +1,156 @@
-import React, { useState, useEffect } from "react";
-import axios from "./axios"
-import CodeEntry from "./CodeEntry";
+import React, { useState } from "react";
+import { logOrReg, confirmDevice, resetPassword, setNewPassword } from "./api";
+import CodeEntry from "./components/CodeEntry";
 import "bootstrap/dist/css/bootstrap.min.css";
 
-export default function LoginScreen(props) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showCode, setShowCode] = useState(false);
-  const [loginInProgress, setLoginInProgress] = useState(false);
-  const [forgotPassword, setForgotPassword] = useState(false);
-  const [canResetPass, setCanResetPass] = useState(false);
-  const [resetCode, setResetCode] = useState("");
-  const [pass1, setPass1] = useState("");
-  const [pass2, setPass2] = useState("");
-  const [status, setStatus] = useState("");
-  const [deviceId, setDeviceId] = useState("");
+export default function Login({ login }) {
+  const [email,      setEmail]      = useState("");
+  const [password,   setPassword]   = useState("");
+  const [showCode,   setShowCode]   = useState(false);
+  const [inProgress, setInProgress] = useState(false);
+  const [forgotPass, setForgotPass] = useState(false);
+  const [canReset,   setCanReset]   = useState(false);
+  const [resetCode,  setResetCode]  = useState("");
+  const [pass1,      setPass1]      = useState("");
+  const [pass2,      setPass2]      = useState("");
+  const [status,     setStatus]     = useState("");
+  const deviceId = "webid";
 
+  const isValidEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 
-  useEffect(() => {
-    setDeviceId("webid");
-  }, []);
-
-  const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-
-  const toggleForgotPassword = () => {
-    setForgotPassword(!forgotPassword);
-  };
-
-  const onLogRegPress = (e) => {
+  const onSubmit = async (e) => {
     e.preventDefault();
-    setLoginInProgress(true);
+    setInProgress(true);
     setStatus("Checking credentials...");
-    axios
-      .post(`/log-or-reg`, {
-        email: email,
-        password: password,
-        device: deviceId,
-      })
-      .then((res) => {
-        setStatus("Logging in...");
-        props.login(res.data.token, true, res.data.new_account, res.data.new_user);
-      })
-      .catch((e) => {
-        setLoginInProgress(false);
-        handleLoginError(e);
-      });
-  };
-
-  const handleLoginError = (e) => {
-    console.log(e);
-    if (e.response) {
-      const { status } = e.response;
-      if (status === 400) {
-        setStatus("Incorrect password!");
-      } else if (status === 422) {
-        setStatus("Please enter the code sent to your email.");
-        setShowCode(true);
-      } else if (status === 404) {
-        setStatus("User not found!");
-      } else if (status === 401) {
-        setStatus("Not whitelisted!");
-      }
-       else {
-        setStatus("Error, please try again");
-      }
-    } else {
-      setStatus("Network error, please try again later.");
+    try {
+      const res = await logOrReg(email, password, deviceId);
+      setStatus("Logging in...");
+      login(res.data.token, true);
+    } catch (err) {
+      setInProgress(false);
+      const s = err.response?.status;
+      if (s === 400)      setStatus("Incorrect password!");
+      else if (s === 422) { setStatus("Enter the code sent to your email."); setShowCode(true); }
+      else if (s === 404) setStatus("User not found!");
+      else if (s === 401) setStatus("Not whitelisted!");
+      else                setStatus("Error, please try again.");
     }
   };
 
-  const sendResetPassCode = (e) => {
-    e.preventDefault();
-    setStatus("Sending code to email...");
-    axios
-      .post(`/resetPassword`, { email: email })
-      .then(() => {
-        setStatus("Code sent to your email. Enter it below.");
-        setShowCode(true);
-      })
-      .catch(() => {
-        setStatus("Error sending reset code. Please try again.");
-      });
+  const onConfirmCode = async (code) => {
+    try {
+      const res = await confirmDevice(email, code);
+      if (forgotPass) {
+        setResetCode(code);
+        setCanReset(true);
+        setShowCode(false);
+        setForgotPass(false);
+        setStatus("Choose a new password");
+      } else {
+        login(res.data.token, true);
+      }
+    } catch (err) {
+      const s = err.response?.status;
+      if (s === 401)      setStatus("Invalid code. Please try again.");
+      else if (s === 404) setStatus("User not found.");
+      else if (s === 429) setStatus("Too many incorrect attempts.");
+      else                setStatus("Invalid code.");
+      setShowCode(false);
+    }
   };
 
-  const resetPassword = (e) => {
+  const onSendReset = async (e) => {
     e.preventDefault();
-    if (pass1 !== pass2) {
-      setStatus("Passwords must match.");
-      return;
+    setStatus("Sending code...");
+    try {
+      await resetPassword(email);
+      setStatus("Code sent to your email.");
+      setShowCode(true);
+    } catch {
+      setStatus("Error sending reset code.");
     }
-    axios
-      .post(`/setNewPassword`, {
-        resetCode: resetCode,
-        pass: pass1,
-        email: email,
-      })
-      .then((res) => {
-        props.login(res.data.token, true, false, false);
-      })
-      .catch(() => {
-        setStatus("Error updating password");
-      });
+  };
+
+  const onResetPass = async (e) => {
+    e.preventDefault();
+    if (pass1 !== pass2) { setStatus("Passwords must match."); return; }
+    try {
+      const res = await setNewPassword(resetCode, pass1, email);
+      login(res.data.token, true);
+    } catch {
+      setStatus("Error updating password.");
+    }
   };
 
   const BackButton = ({ onClick }) => (
-    <img
-      src={`back.png`}
-      alt="Toggle Form"
-      style={{
-        position: "absolute",
-        top: "10px",
-        left: "10px",
-        zIndex: 1000,
-        width: "50px",
-        height: "50px",
-        cursor: "pointer",
-      }}
-      onClick={() => {
-        setStatus("");
-        onClick();
-      }}
-    />
+    <img src="back.png" alt="Back" onClick={() => { setStatus(""); onClick(); }}
+      style={{ position: "absolute", top: 10, left: 10, width: 50, height: 50, cursor: "pointer", zIndex: 1000 }} />
   );
 
-  if (showCode) {
-    return (
-      <div>
-        <BackButton onClick={() => setShowCode(false)} />
-        <CodeEntry
-          fulfilled={async (code) => {
-            axios.post(`/confirmDevice`, { email: email, code: code })
-            .then(async (res) => {
-              if (forgotPassword) {
-                setStatus("Choose a new password");
-                setResetCode(code);
-                setCanResetPass(true);
-                setShowCode(false);
-                setForgotPassword(false);
-              } else {
-                setStatus("Logging in...");
-                props.login(res.data.token, true, res.data.new_user, res.data.new_account);
-                if (res.data.new_user) {
-                  alert("Welcome to the app!");
-                }
-              }
-            })
-            .catch((e) => {
-              console.log(e);
-              if (e.response)
-              {
-                
-                const { status } = e.response;
-                if (status === 422)
-                {
-                    // code recieved
-                    return
-                }
-                if (status === 401) {
-                  setStatus("Invalid code. Please try again.");
-                }
-                else if (status === 404) {
-                  setStatus("User not found.");
-                }
-                else if (status === 429) {
-                    setStatus("Too many incorrect attempts.");
-                  }
-              }
-              else {
-              setStatus("Invalid code. Please try again.");
-
-              }
-              setShowCode(false);
-
-            });
-          }}
-          status={status}
-        />
+  const wrap = (children) => (
+    <div className="login-wrapper">
+      <div className="login-inner" style={{ position: "relative" }}>
+        {children}
       </div>
-    );
-  }
+    </div>
+  );
 
-  if (canResetPass) {
-    return (
-      <form onSubmit={resetPassword} style={{ display: "flex", flexDirection: "column" }}>
-        <BackButton onClick={() => setCanResetPass(false)} />
-        <h2 className="title">Reset Password</h2>
-        <div className="form-floating mb-3">
-          <input
-            id="floatingInput"
-            type="password"
-            className="form-control"
-            placeholder="New password"
-            value={pass1}
-            onChange={(e) => setPass1(e.target.value)}
-            required={true}
-          />
-          <label htmlFor="floatingInput">New Password</label>
+  if (showCode) return wrap(
+    <>
+      <BackButton onClick={() => setShowCode(false)} />
+      <CodeEntry fulfilled={onConfirmCode} status={status} />
+    </>
+  );
+
+  if (canReset) return wrap(
+    <form onSubmit={onResetPass} style={{ display: "flex", flexDirection: "column" }}>
+      <BackButton onClick={() => setCanReset(false)} />
+      <h2 className="title">Reset Password</h2>
+      {[["New Password", pass1, setPass1], ["Confirm Password", pass2, setPass2]].map(([lbl, val, set]) => (
+        <div key={lbl} className="form-floating mb-3">
+          <input type="password" className="form-control" placeholder={lbl}
+            value={val} onChange={e => set(e.target.value)} required />
+          <label>{lbl}</label>
         </div>
-        <div className="form-floating mb-3">
-          <input
-            id="floatingInput"
-            type="password"
-            className="form-control"
-            placeholder="Confirm password"
-            value={pass2}
-            onChange={(e) => setPass2(e.target.value)}
-            required={true}
-          />
-          <label htmlFor="floatingInput">Confirm Password</label>
-        </div>
-        <button className="btn btn-primary btn-block" type="submit">
-          Change Password
-        </button>
-        <p className="text-danger mt-3">{status}</p>
-      </form>
-    );
-  }
+      ))}
+      <button className="btn btn-primary btn-block" type="submit">Change Password</button>
+      <p className="text-danger mt-3">{status}</p>
+    </form>
+  );
 
-  if (forgotPassword) {
-    return (
-    <form onSubmit={sendResetPassCode} style={{ display: "flex", flexDirection: "column" }}>
-        <BackButton onClick={() => setForgotPassword(false)} />
-        <h2 class="title">Forgot Password</h2>
-     
-        <div class="form-floating mb-3">
-            <input 
-                id="floatingInput"
-                type="email"
-                class="form-control"
-                placeholder="Enter your email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required={true}
-            />
-            <label for="floatingInput">Email address</label>
-        </div>
+  if (forgotPass) return wrap(
+    <form onSubmit={onSendReset} style={{ display: "flex", flexDirection: "column" }}>
+      <BackButton onClick={() => setForgotPass(false)} />
+      <h2 className="title">Forgot Password</h2>
+      <div className="form-floating mb-3">
+        <input type="email" className="form-control" placeholder="Email"
+          value={email} onChange={e => setEmail(e.target.value)} required />
+        <label>Email address</label>
+      </div>
+      <button className="btn btn-primary btn-block" type="submit">Send Code</button>
+      <p className="text-danger mt-3">{status}</p>
+    </form>
+  );
 
-        <button className="btn btn-primary btn-block" onClick={sendResetPassCode}>
-          Send Code
-        </button>
-        <p className="text-danger mt-3">{status}</p>
-      </form>
-    );
-  }
-
-  return (
-    <form onSubmit={onLogRegPress} style={{ display: "flex", flexDirection: "column" }}>
+  return wrap(
+    <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column" }}>
       <h2 className="title">Login</h2>
       <div className="form-floating mb-3">
-        <input
-          id="floatingInput"
-          type="email"
-          className="form-control"
-          placeholder="Enter your email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required={true}
-        />
-        <label htmlFor="floatingInput">Email address</label>
+        <input type="email" className="form-control" placeholder="Email"
+          value={email} onChange={e => setEmail(e.target.value)} required />
+        <label>Email address</label>
       </div>
       <div className="form-floating mb-3">
-        <input
-          id="floatingInput"
-          type="password"
-          className="form-control"
-          placeholder="Enter your password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required={true}
-        />
-        <label htmlFor="floatingInput">Password</label>
+        <input type="password" className="form-control" placeholder="Password"
+          value={password} onChange={e => setPassword(e.target.value)} required />
+        <label>Password</label>
       </div>
-      <button
-        className="btn btn-primary btn-block"
-        type="submit"
-        disabled={!isValidEmail(email) || !password || loginInProgress}
-      >
-        {loginInProgress ? "Loading..." : "Login/Register"}
+      <button className="btn btn-primary btn-block" type="submit"
+        disabled={!isValidEmail(email) || !password || inProgress}>
+        {inProgress ? "Loading..." : "Login / Register"}
       </button>
       <p className="text-danger mt-3">{status}</p>
-      <button className="btn btn-link" type="button" onClick={toggleForgotPassword}>
+      <button className="btn btn-link" type="button" onClick={() => setForgotPass(true)}>
         Forgot Password?
       </button>
     </form>

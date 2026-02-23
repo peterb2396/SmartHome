@@ -1,0 +1,67 @@
+/* ── Reset & base ── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100vh;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+    "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.5;
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+}
+
+/* Login page centering — only when not inside the app shell */
+.login-wrapper {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.login-inner {
+  width: 100%;
+  max-width: 420px;
+  padding: 2rem;
+}
+
+.title {
+  font-weight: 100;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+/* Verification code input */
+.custom-styles {
+  --ReactInputVerificationCode-itemWidth: 2.5rem;
+  --ReactInputVerificationCode-itemHeight: 3.5rem;
+}
+.custom-styles .ReactInputVerificationCode__item {
+  position: relative;
+  color: #262626;
+  font-weight: 500;
+}
+.custom-styles .ReactInputVerificationCode__item,
+.custom-styles .ReactInputVerificationCode__item.is-active {
+  box-shadow: none;
+}
+.custom-styles .ReactInputVerificationCode__item:after {
+  content: "";
+  display: block;
+  position: absolute;
+  left: 0; bottom: 0; right: 0;
+  height: 2px;
+  background-color: #ebebeb;
+  transition: background-color 0.2s ease-out;
+}
+.custom-styles .ReactInputVerificationCode__item.is-active:after {
+  background-color: #046cde;
+}

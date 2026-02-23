@@ -1,40 +1,30 @@
-
-import React from 'react';
 import { Routes, Route } from "react-router-dom";
+import Nav      from "./Nav";
+import Lights   from "./pages/Lights";
+import Sensors  from "./pages/Sensors";
+import Cameras  from "./pages/Cameras";
+import Finance  from "./pages/Finance";
+import Settings from "./pages/Settings";
 
-import Nav from './Nav';
-// import Account from './Account';
-import Dashboard from './Dashboard';
-import Lights from './Lights';
-import Finance from './Finance';
-
-
-const MyRouter = ({host}) => {
-   
-    return (
-      <div style = {{display: "flex", flexDirection: "column", width: "100vw",
-        background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        height: "100vh",
-  overflowY: "auto", }}>
-    {/* Navbar section */}
-    
-    <Nav></Nav>
-      <Routes>
-          <Route index element={<Lights/>} />
-          <Route path="settings" element={<Dashboard/>} />
-          <Route path="finance" element={<Finance/>} />
-          {/* <Route path="account" element={<Account host = {host}/>} /> */}
-
-      </Routes>
-    
-      
-    
+export default function MyRouter() {
+  return (
+    <div style={{
+      display: "flex",
+      flexDirection: "column",
+      width: "100%",
+      minHeight: "100vh",
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    }}>
+      <Nav />
+      <div style={{ flex: 1, width: "100%" }}>
+        <Routes>
+          <Route index           element={<Lights   />} />
+          <Route path="sensors"  element={<Sensors  />} />
+          <Route path="cameras"  element={<Cameras  />} />
+          <Route path="finance"  element={<Finance  />} />
+          <Route path="settings" element={<Settings />} />
+        </Routes>
+      </div>
     </div>
-  
-
-    )
-
+  );
 }
-
-export default MyRouter;

@@ -1,156 +1,168 @@
-/**
- * ESP32 Attic Sensor Node
- * ─────────────────────────────────────────────────────────────────
- * Reads temperature, humidity, and any connected window/door sensors,
- * then POSTs a batch report to the home server every REPORT_INTERVAL_MS.
- *
- * Wiring (adjust pins to your setup):
- *   DHT22 data     → GPIO 4
- *   Window sensor  → GPIO 14 (magnetic reed switch, other leg to GND)
- *   Garage sensor  → GPIO 27 (magnetic reed switch, other leg to GND)
- *
- * Libraries required (install via Arduino Library Manager):
- *   - WiFi             (built-in ESP32)
- *   - HTTPClient       (built-in ESP32)
- *   - ArduinoJson      (by Benoit Blanchon)
- *   - DHT sensor library (by Adafruit)
- *   - Adafruit Unified Sensor
- */
+// /**
+//  * ESP32 Attic Sensor Node
+//  * ─────────────────────────────────────────────────────────────────
+//  * Reads sensors and POSTs a batch report to the home server every
+//  * REPORT_INTERVAL_MS milliseconds via POST /esp32/report.
+//  *
+//  * Add sensors by wiring them up and adding to buildSensors().
+//  *
+//  * ── Libraries (install via Arduino Library Manager) ──────────────
+//  *   WiFi              built-in ESP32
+//  *   HTTPClient        built-in ESP32
+//  *   ArduinoJson       by Benoit Blanchon  (v6.x)
+//  *   DHT sensor library  by Adafruit
+//  *   Adafruit Unified Sensor  by Adafruit
+//  *
+//  * ── Wiring ───────────────────────────────────────────────────────
+//  *   DHT22 data        → GPIO 4
+//  *   Window reed SW 1  → GPIO 14  (other leg to GND)
+//  *   Window reed SW 2  → GPIO 12  (other leg to GND)
+//  *   Garage reed SW    → GPIO 27  (other leg to GND, if wired here
+//  *                                 instead of directly to the Pi)
+//  *
+//  * Reed switch: closed (magnet present) = LOW = "closed"
+//  *              open   (no magnet)      = HIGH = "open"
+//  */
 
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
-#include "DHT.h"
+// #include <WiFi.h>
+// #include <HTTPClient.h>
+// #include <ArduinoJson.h>
+// #include "DHT.h"
 
-// ── Config ────────────────────────────────────────────────────────────────────
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASS     = "YOUR_WIFI_PASSWORD";
+// // ── Config — edit these ───────────────────────────────────────────
+// const char* WIFI_SSID          = "YOUR_WIFI_SSID";
+// const char* WIFI_PASS          = "YOUR_WIFI_PASSWORD";
+// const char* SERVER_URL         = "http://192.168.1.100:3001/esp32/report";  // local IP of Pi
+// const char* AUTH_TOKEN         = "YOUR_SENSOR_TOKEN";    // matches SENSOR_TOKEN in .env
+// const unsigned long REPORT_INTERVAL_MS = 30000;          // report every 30s
 
-// Your home server URL (local IP or dynamic DNS)
-const char* SERVER_URL    = "http://192.168.1.100:3001/esp32/report";
+// // ── Pin definitions ───────────────────────────────────────────────
+// #define DHT_PIN        4
+// #define DHT_TYPE       DHT22
 
-// Must match SENSOR_TOKEN or ADMIN_UID in your server .env
-const char* AUTH_TOKEN    = "YOUR_SENSOR_TOKEN";
+// // Reed switches — add as many as you have.
+// // Each entry: { gpio pin, sensor name sent to server }
+// struct ReedSwitch { int pin; const char* name; const char* location; };
 
-const unsigned long REPORT_INTERVAL_MS = 30000; // Report every 30 seconds
+// const ReedSwitch REED_SWITCHES[] = {
+//   { 14, "window-north",  "North attic window"  },
+//   { 12, "window-east",   "East attic window"   },
+//   // { 27, "garage",     "Garage door"          },  // only if NOT wired to Pi
+// };
+// const int NUM_REED = sizeof(REED_SWITCHES) / sizeof(REED_SWITCHES[0]);
 
-// ── Pin definitions ───────────────────────────────────────────────────────────
-#define DHT_PIN        4
-#define DHT_TYPE       DHT22
+// // ── Globals ───────────────────────────────────────────────────────
+// DHT dht(DHT_PIN, DHT_TYPE);
+// unsigned long lastReport = 0;
 
-#define WINDOW_PIN     14   // North window reed switch
-#define GARAGE_PIN     27   // Garage door reed switch
+// // ── Setup ─────────────────────────────────────────────────────────
+// void setup() {
+//   Serial.begin(115200);
+//   delay(100);
 
-// ── Globals ───────────────────────────────────────────────────────────────────
-DHT dht(DHT_PIN, DHT_TYPE);
-unsigned long lastReport = 0;
+//   dht.begin();
 
-// ── Setup ─────────────────────────────────────────────────────────────────────
-void setup() {
-  Serial.begin(115200);
-  delay(100);
+//   for (int i = 0; i < NUM_REED; i++) {
+//     pinMode(REED_SWITCHES[i].pin, INPUT_PULLUP);
+//   }
 
-  // Sensor pins — pulled up internally, sensor shorts to GND when closed
-  pinMode(WINDOW_PIN, INPUT_PULLUP);
-  pinMode(GARAGE_PIN, INPUT_PULLUP);
+//   Serial.println("[ESP32] Connecting to WiFi...");
+//   WiFi.begin(WIFI_SSID, WIFI_PASS);
+//   while (WiFi.status() != WL_CONNECTED) {
+//     delay(500);
+//     Serial.print(".");
+//   }
+//   Serial.printf("\n[ESP32] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+// }
 
-  dht.begin();
+// // ── Main loop ─────────────────────────────────────────────────────
+// void loop() {
+//   if (millis() - lastReport >= REPORT_INTERVAL_MS) {
+//     lastReport = millis();
+//     sendReport();
+//   }
+// }
 
-  Serial.println("[ESP32] Connecting to WiFi...");
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.printf("\n[ESP32] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
-}
+// // ── Build and POST the sensor report ─────────────────────────────
+// void sendReport() {
+//   if (WiFi.status() != WL_CONNECTED) {
+//     Serial.println("[ESP32] WiFi disconnected, skipping report.");
+//     WiFi.reconnect();
+//     return;
+//   }
 
-// ── Main loop ──────────────────────────────────────────────────────────────────
-void loop() {
-  unsigned long now = millis();
-  if (now - lastReport >= REPORT_INTERVAL_MS) {
-    lastReport = now;
-    sendReport();
-  }
-}
+//   // Read DHT22
+//   float tempF = dht.readTemperature(true);
+//   float tempC = dht.readTemperature(false);
+//   float humid = dht.readHumidity();
+//   bool  dhtOk = !isnan(tempF) && !isnan(humid);
 
-// ── Read sensors and POST to server ───────────────────────────────────────────
-void sendReport() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[ESP32] WiFi disconnected, skipping report.");
-    return;
-  }
+//   // Build JSON
+//   // {
+//   //   "auth": "TOKEN",
+//   //   "sensors": {
+//   //     "temp-attic":     { "value": 72.1, "unit": "F", "metadata": { "location": "attic" } },
+//   //     "humidity-attic": { "value": 55,   "unit": "%" },
+//   //     "window-north":   { "value": "open" },
+//   //     ...
+//   //   }
+//   // }
+//   StaticJsonDocument<1024> doc;
+//   doc["auth"] = AUTH_TOKEN;
 
-  // Read DHT22
-  float tempC  = dht.readTemperature();
-  float tempF  = dht.readTemperature(true);   // Fahrenheit
-  float humid  = dht.readHumidity();
+//   JsonObject sensorsObj = doc.createNestedObject("sensors");
 
-  bool dhtOk = !isnan(tempF) && !isnan(humid);
+//   // Temperature
+//   if (dhtOk) {
+//     JsonObject temp     = sensorsObj.createNestedObject("temp-attic");
+//     temp["value"]       = round(tempF * 10.0) / 10.0;
+//     temp["unit"]        = "F";
+//     JsonObject tempMeta = temp.createNestedObject("metadata");
+//     tempMeta["location"] = "attic";
+//     tempMeta["celsius"]  = round(tempC * 10.0) / 10.0;
 
-  // Read contact sensors (LOW = closed/normal, HIGH = open)
-  bool windowOpen = digitalRead(WINDOW_PIN) == HIGH;
-  bool garageOpen = digitalRead(GARAGE_PIN) == HIGH;
+//     JsonObject hum      = sensorsObj.createNestedObject("humidity-attic");
+//     hum["value"]        = round(humid * 10.0) / 10.0;
+//     hum["unit"]         = "%";
+//     JsonObject humMeta  = hum.createNestedObject("metadata");
+//     humMeta["location"] = "attic";
+//   } else {
+//     Serial.println("[ESP32] DHT22 read failed.");
+//   }
 
-  // Build JSON payload
-  // Each key under "sensors" becomes a named sensor on the server.
-  // Use descriptive names — they appear in GET /sensors/:name
-  StaticJsonDocument<512> doc;
-  JsonObject sensors = doc.createNestedObject("sensors");
+//   // Reed switches
+//   for (int i = 0; i < NUM_REED; i++) {
+//     bool isOpen = digitalRead(REED_SWITCHES[i].pin) == HIGH;
 
-  doc["auth"] = AUTH_TOKEN;
+//     JsonObject sw      = sensorsObj.createNestedObject(REED_SWITCHES[i].name);
+//     sw["value"]        = isOpen ? "open" : "closed";
+//     JsonObject swMeta  = sw.createNestedObject("metadata");
+//     swMeta["location"] = REED_SWITCHES[i].location;
+//     swMeta["source"]   = "esp32";
+//   }
 
-  if (dhtOk) {
-    JsonObject temp = sensors.createNestedObject("temp-attic");
-    temp["value"] = tempF;
-    temp["unit"]  = "F";
-    JsonObject tempMeta = temp.createNestedObject("metadata");
-    tempMeta["location"] = "attic";
-    tempMeta["celsius"]  = tempC;
+//   // Serialize and send
+//   String body;
+//   serializeJson(doc, body);
 
-    JsonObject hum = sensors.createNestedObject("humidity-attic");
-    hum["value"] = humid;
-    hum["unit"]  = "%";
-    JsonObject humMeta = hum.createNestedObject("metadata");
-    humMeta["location"] = "attic";
-  } else {
-    Serial.println("[ESP32] DHT read failed.");
-  }
+//   Serial.printf("[ESP32] Reporting — temp: %.1f°F  hum: %.0f%%\n",
+//     dhtOk ? tempF : 0.0, dhtOk ? humid : 0.0);
+//   for (int i = 0; i < NUM_REED; i++) {
+//     Serial.printf("  %s: %s\n",
+//       REED_SWITCHES[i].name,
+//       digitalRead(REED_SWITCHES[i].pin) == HIGH ? "OPEN" : "closed");
+//   }
 
-  // Window sensor
-  JsonObject win = sensors.createNestedObject("window-north");
-  win["value"] = windowOpen ? "open" : "closed";
-  JsonObject winMeta = win.createNestedObject("metadata");
-  winMeta["location"] = "north bedroom";
+//   HTTPClient http;
+//   http.begin(SERVER_URL);
+//   http.addHeader("Content-Type", "application/json");
+//   http.addHeader("Authorization", String("Bearer ") + AUTH_TOKEN);
 
-  // Garage door sensor
-  JsonObject garage = sensors.createNestedObject("garage");
-  garage["value"] = garageOpen ? "open" : "closed";
-  JsonObject garageMeta = garage.createNestedObject("metadata");
-  garageMeta["location"] = "main garage";
-
-  // Serialize
-  String body;
-  serializeJson(doc, body);
-
-  Serial.printf("[ESP32] Reporting: temp=%.1f°F hum=%.0f%% window=%s garage=%s\n",
-    dhtOk ? tempF : 0.0,
-    dhtOk ? humid : 0.0,
-    windowOpen ? "OPEN" : "closed",
-    garageOpen ? "OPEN" : "closed"
-  );
-
-  // POST to server
-  HTTPClient http;
-  http.begin(SERVER_URL);
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("Authorization", String("Bearer ") + AUTH_TOKEN);
-
-  int code = http.POST(body);
-  if (code > 0) {
-    Serial.printf("[ESP32] Server responded: %d\n", code);
-  } else {
-    Serial.printf("[ESP32] HTTP error: %s\n", http.errorToString(code).c_str());
-  }
-  http.end();
-}
+//   int code = http.POST(body);
+//   if (code > 0) {
+//     Serial.printf("[ESP32] Server: HTTP %d\n", code);
+//   } else {
+//     Serial.printf("[ESP32] HTTP error: %s\n", http.errorToString(code).c_str());
+//   }
+//   http.end();
+// }
