@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const primary = axios.create({ baseURL: `https://smarthome153.onrender.com` });
+const primary = axios.create({ baseURL: `https://server.153home.online` });
 const backup  = axios.create({ baseURL: `https://smarthome153.onrender.com` });
 
 primary.interceptors.response.use(

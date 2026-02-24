@@ -23,7 +23,7 @@ function CarButton({ label, icon: Icon, onClick, busy, success, message, color, 
         }}>
         <Icon style={{ fontSize: "1.5rem", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.2))" }} />
         <span style={{ fontSize: "0.8rem", fontWeight: 600, letterSpacing: "0.03em" }}>
-          {busy ? `${label.replace("Car", "")}ing...` : success ? "Done!" : label}
+          {busy ? `${label.replace(" Car", "")}ing...` : success ? "Done!" : label}
         </span>
       </button>
       {message && (
@@ -50,10 +50,10 @@ export default function CarControls({ start, lock, unlock }) {
         @keyframes slideDown { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
       `}</style>
       <div style={{ display: "flex", gap: 10, marginBottom: "1.5rem" }}>
-        <CarButton label="Start Car"  icon={FaCar}      color={["#ef4444","#dc2626"]} {...start}  />
-        <CarButton label="Lock Car"   icon={FaLock}     color={["#3b82f6","#2563eb"]} {...lock}   />
-        <CarButton label="Unlock Car" icon={FaLockOpen} color={["#f59e0b","#d97706"]} {...unlock} />
-      </div>
+         <CarButton label="Start Car"  icon={FaCar}      color={["#ef4444","#dc2626"]} {...start}  onClick={start.execute}  />
+                <CarButton label="Lock Car"   icon={FaLock}     color={["#3b82f6","#2563eb"]} {...lock}   onClick={lock.execute}   />
+                <CarButton label="Unlock Car" icon={FaLockOpen} color={["#f59e0b","#d97706"]} {...unlock} onClick={unlock.execute} />
+              </div>
     </>
   );
 }

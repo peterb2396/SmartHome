@@ -14,6 +14,7 @@ function useCarAction(apiFn) {
       const { data } = await apiFn();
       setSuccess(!!data.ok);
       setMessage(data.message || (data.ok ? "Done!" : "Failed"));
+      console.log(data);
     } catch {
       setMessage("Could not communicate with car");
     } finally {
