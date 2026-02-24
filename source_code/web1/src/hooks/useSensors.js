@@ -1,26 +1,23 @@
 import { useState, useEffect, useCallback } from "react";
-import { getAllSensors, getGarageStatus, triggerGarage, getCarStatus } from "../api";
+import { getAllSensors, getGarageStatus, triggerGarage } from "../api";
 
-const SENSOR_POLL_MS = 15000;
+const SENSOR_POLL_MS = 15000; // sensors change slowly, poll every 15s
 
 export function useSensors() {
-  const [sensors,     setSensors]     = useState({});
-  const [garage,      setGarage]      = useState(null);
-  const [carStatus,   setCarStatus]   = useState(null);  // { value: "on"|"off"|"unknown", updatedAt }
-  const [loading,     setLoading]     = useState(true);
+  const [sensors, setSensors]     = useState({});
+  const [garage,  setGarage]      = useState(null);
+  const [loading, setLoading]     = useState(true);
   const [triggerBusy, setTriggerBusy] = useState(false);
   const [triggerMsg,  setTriggerMsg]  = useState("");
 
   const fetchAll = useCallback(async () => {
     try {
-      const [sensorsRes, garageRes, carRes] = await Promise.all([
+      const [sensorsRes, garageRes] = await Promise.all([
         getAllSensors(),
         getGarageStatus(),
-        getCarStatus(),
       ]);
       setSensors(sensorsRes.data);
       setGarage(garageRes.data);
-      setCarStatus(carRes.data);
     } catch (e) {
       console.error("useSensors:", e);
     } finally {
@@ -41,11 +38,12 @@ export function useSensors() {
       const { data } = await triggerGarage();
       if (data.ok) {
         setTriggerMsg("Signal sent!");
+        // Re-fetch garage status after a brief delay
         setTimeout(fetchAll, 1500);
       } else {
         setTriggerMsg(data.reason || "Failed");
       }
-    } catch {
+    } catch (e) {
       setTriggerMsg("Error communicating with server");
     } finally {
       setTriggerBusy(false);
@@ -53,9 +51,5 @@ export function useSensors() {
     }
   }, [fetchAll]);
 
-  return {
-    sensors, garage, carStatus, loading,
-    triggerGarageDoor, triggerBusy, triggerMsg,
-    refetch: fetchAll,
-  };
+  return { sensors, garage, loading, triggerGarageDoor, triggerBusy, triggerMsg, refetch: fetchAll };
 }

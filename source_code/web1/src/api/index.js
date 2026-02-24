@@ -24,10 +24,9 @@ export const arrive = (who) => api.post("/arrive", { who, password: token() });
 export const leave  = (who) => api.post("/leave",  { who, password: token() });
 
 // ── Car ──────────────────────────────────────────────────────────────────────
-export const startCar    = () => api.post("/car/start",  { password: token() });
-export const lockCar     = () => api.post("/car/lock",   { password: token() });
-export const unlockCar   = () => api.post("/car/unlock", { password: token() });
-export const getCarStatus = () => api.get("/car/status");
+export const startCar  = () => api.post("/car/start",  { password: token() });
+export const lockCar   = () => api.post("/car/lock",   { password: token() });
+export const unlockCar = () => api.post("/car/unlock", { password: token() });
 
 // ── Sensors ──────────────────────────────────────────────────────────────────
 export const getAllSensors = () => api.get("/sensors");

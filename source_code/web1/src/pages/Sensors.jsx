@@ -1,4 +1,4 @@
-import { FaThermometerHalf, FaTint, FaWindowMaximize, FaWarehouse, FaWifi, FaSync, FaCar } from "react-icons/fa";
+import { FaThermometerHalf, FaTint, FaWindowMaximize, FaWarehouse, FaWifi, FaSync } from "react-icons/fa";
 import { useSensors } from "../hooks/useSensors";
 import { formatRelativeTime } from "../utils";
 import Spinner from "../components/Spinner";
@@ -23,9 +23,6 @@ function categorizeSensors(sensors) {
   CATEGORIES.forEach(c => { result[c.key] = []; });
 
   for (const [name, data] of Object.entries(sensors)) {
-    // Skip vehicle-suburban — rendered in VehicleCard
-    if (name === "vehicle-suburban") continue;
-
     let matched = false;
     for (const cat of CATEGORIES) {
       if (cat.prefix && matchesCategory(name, cat.prefix)) {
@@ -39,7 +36,8 @@ function categorizeSensors(sensors) {
   return result;
 }
 
-// ── Status badge ──────────────────────────────────────────────────────────────
+// ── Sub-components ────────────────────────────────────────────────────────────
+
 function StatusBadge({ value }) {
   const open   = typeof value === "string" && value.toLowerCase() === "open";
   const closed = typeof value === "string" && value.toLowerCase() === "closed";
@@ -63,7 +61,6 @@ function StatusBadge({ value }) {
   );
 }
 
-// ── Sensor row ────────────────────────────────────────────────────────────────
 function SensorRow({ sensor }) {
   const isNumeric = typeof sensor.value === "number";
   const label = sensor.metadata?.location || sensor.name
@@ -93,81 +90,8 @@ function SensorRow({ sensor }) {
   );
 }
 
-// ── Vehicle card ──────────────────────────────────────────────────────────────
-function VehicleCard({ carStatus }) {
-  const isOn      = carStatus?.value === "on";
-  const isUnknown = !carStatus || carStatus.value === "unknown";
-
-  const accentColor   = isOn ? "#10b981" : "#64748b";
-  const bgGradient    = isOn
-    ? "linear-gradient(135deg, #f0fdf4, white)"
-    : "linear-gradient(135deg, #f8fafc, white)";
-  const borderColor   = isOn ? "#bbf7d0" : "#e2e8f0";
-  const iconBg        = isOn ? "#10b981" : "#94a3b8";
-  const iconShadow    = isOn ? "0 6px 18px rgba(16,185,129,0.35)" : "none";
-
-  return (
-    <div style={{
-      background: bgGradient,
-      border: `1px solid ${borderColor}`,
-      borderRadius: 14,
-      padding: "1.5rem",
-      marginBottom: "1.5rem",
-      transition: "all 0.3s",
-    }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
-          <div style={{
-            width: 52, height: 52, borderRadius: 12, display: "flex",
-            alignItems: "center", justifyContent: "center", fontSize: "1.4rem",
-            background: iconBg, color: "white", boxShadow: iconShadow,
-            transition: "all 0.3s",
-          }}>
-            <FaCar />
-          </div>
-          <div>
-            <h3 style={{ margin: 0, fontWeight: 700, color: "#1e293b" }}>Suburban</h3>
-            <p style={{ margin: 0, fontSize: "0.8rem", color: "#94a3b8" }}>
-              {isUnknown
-                ? "No data yet — car will report on next poll"
-                : `Last updated ${formatRelativeTime(carStatus.updatedAt)}`
-              }
-            </p>
-          </div>
-        </div>
-
-        {/* Status badge */}
-        <div style={{ textAlign: "right" }}>
-          {isUnknown ? (
-            <span style={{ color: "#94a3b8", fontWeight: 600, fontSize: "0.9rem" }}>Unknown</span>
-          ) : (
-            <span style={{
-              padding: "6px 16px", borderRadius: 20, fontSize: "0.85rem", fontWeight: 700,
-              background: isOn ? "#d1fae5" : "#f1f5f9",
-              color:      isOn ? "#065f46" : "#475569",
-              border:     `1px solid ${isOn ? "#6ee7b7" : "#e2e8f0"}`,
-              display: "flex", alignItems: "center", gap: 6,
-            }}>
-              {/* Pulsing dot when engine is on */}
-              {isOn && (
-                <span style={{
-                  width: 8, height: 8, borderRadius: "50%",
-                  background: "#10b981", display: "inline-block",
-                  animation: "enginePulse 1.4s ease-in-out infinite",
-                }} />
-              )}
-              {isOn ? "ENGINE ON" : "ENGINE OFF"}
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Garage card ───────────────────────────────────────────────────────────────
 function GarageCard({ garage, onTrigger, triggerBusy, triggerMsg }) {
-  const isOpen    = garage?.value?.toLowerCase() === "open";
+  const isOpen   = garage?.value?.toLowerCase() === "open";
   const isUnknown = !garage || garage.value === "unknown";
 
   return (
@@ -195,6 +119,7 @@ function GarageCard({ garage, onTrigger, triggerBusy, triggerMsg }) {
             </p>
           </div>
         </div>
+
         <div style={{ textAlign: "right" }}>
           {isUnknown
             ? <span style={{ color: "#94a3b8", fontWeight: 600 }}>Unknown</span>
@@ -229,7 +154,6 @@ function GarageCard({ garage, onTrigger, triggerBusy, triggerMsg }) {
   );
 }
 
-// ── Category card ─────────────────────────────────────────────────────────────
 function CategoryCard({ category, sensors: list }) {
   if (list.length === 0) return null;
   const Icon = category.icon;
@@ -241,7 +165,8 @@ function CategoryCard({ category, sensors: list }) {
     }}>
       <div style={{
         display: "flex", alignItems: "center", gap: "0.85rem",
-        padding: "1rem 1.25rem", borderBottom: "1px solid #f1f5f9",
+        padding: "1rem 1.25rem",
+        borderBottom: "1px solid #f1f5f9",
         background: `${category.color}0a`,
       }}>
         <div style={{
@@ -266,26 +191,19 @@ function CategoryCard({ category, sensors: list }) {
 }
 
 // ── Main Sensors page ─────────────────────────────────────────────────────────
+
 export default function Sensors() {
-  const {
-    sensors, garage, carStatus, loading,
-    triggerGarageDoor, triggerBusy, triggerMsg, refetch,
-  } = useSensors();
+  const { sensors, garage, loading, triggerGarageDoor, triggerBusy, triggerMsg, refetch } = useSensors();
 
   if (loading) return <Spinner message="Loading sensors..." />;
 
-  const categorized = categorizeSensors(sensors);
-  // Don't count vehicle-suburban in "any sensor" check
-  const sensorCount = Object.keys(sensors).filter(k => k !== "vehicle-suburban").length;
+  // Remove garage from the generic sensor grid — it has its own card
+  const { garage: _garageList, ...restSensors } = categorizeSensors(sensors);
+  const categorized = categorizeSensors(restSensors);
+  const hasAnySensor = Object.values(sensors).length > 0;
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "1.5rem" }}>
-      <style>{`
-        @keyframes enginePulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50%       { opacity: 0.4; transform: scale(0.85); }
-        }
-      `}</style>
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.5rem" }}>
@@ -306,10 +224,7 @@ export default function Sensors() {
         </button>
       </div>
 
-      {/* Vehicle status card */}
-      <VehicleCard carStatus={carStatus} />
-
-      {/* Garage door card */}
+      {/* Garage — always shown, even if status unknown */}
       <GarageCard
         garage={garage}
         onTrigger={triggerGarageDoor}
@@ -318,7 +233,7 @@ export default function Sensors() {
       />
 
       {/* Other sensor categories */}
-      {sensorCount === 0 && (
+      {!hasAnySensor && (
         <div style={{
           textAlign: "center", padding: "3rem", color: "#94a3b8",
           background: "white", borderRadius: 14, border: "1px solid #e2e8f0",
@@ -326,7 +241,7 @@ export default function Sensors() {
           <FaWifi style={{ fontSize: "2.5rem", marginBottom: "0.75rem", opacity: 0.4 }} />
           <p style={{ fontWeight: 600, margin: 0 }}>No sensor data yet</p>
           <p style={{ fontSize: "0.85rem", margin: "4px 0 0" }}>
-            Sensors will appear once the Pi GPIO or ESP32 starts reporting.
+            Sensors will appear here once the Pi GPIO or ESP32 starts reporting.
           </p>
         </div>
       )}
