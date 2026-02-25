@@ -33,7 +33,7 @@ async function sendMail(from, to, subject, text, password) {
  * @param {string} title
  */
 function sendPush(msg, title) {
-  const key = process.env.BARK_DEVICE_KEY || process.env.barkDeviceKey;
+  const key = process.env.BARK_DEVICE_KEY
   if (!key) return;
   axios.post(`https://api.day.app/${key}`, {
     title,

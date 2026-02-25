@@ -39,8 +39,9 @@ const GpioDriver = (() => {
 
 const pins = [];
 
+// Need to add 512 to the BCM number to get the correct /sys/class/gpio pin on Raspberry Pi
 function createPin(bcmNumber, ...args) {
-  const pin = new GpioDriver(bcmNumber, ...args);
+  const pin = new GpioDriver(bcmNumber + 512, ...args);
   pins.push(pin);
   return pin;
 }

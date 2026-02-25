@@ -22,6 +22,7 @@ const router       = require('express').Router();
 const vehicleQueue = require('../services/vehicleQueue');
 const lightsSvc    = require('../services/lights');
 const sensors      = require('../services/sensorStore');
+const { sendPush } = require('../services/mail');
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 async function handleCarCommand(req, res, cmd) {
@@ -34,6 +35,9 @@ async function handleCarCommand(req, res, cmd) {
     await lightsSvc.validatePassword(password);
 
   if (!authorized) return res.status(403).json({ ok: false, error: 'Forbidden' });
+
+  // Send push notification
+  sendPush(`Car command: ${cmd}`, 'Suburban');
 
   const result = await vehicleQueue.queueCommand('SUBURBAN', cmd);
   res.json(result);
