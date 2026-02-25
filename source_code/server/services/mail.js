@@ -32,15 +32,24 @@ async function sendMail(from, to, subject, text, password) {
  * @param {string} msg
  * @param {string} title
  */
-function sendPush(msg, title) {
-  const key = process.env.BARK_DEVICE_KEY
+async function sendPush(msg, title = "Alert") {
+  const key = process.env.BARK_DEVICE_KEY;
   if (!key) return;
-  axios.post(`https://api.day.app/${key}`, {
-    title,
-    body: msg,
-    group: 'home',
-    sound: 'minuet',
-  }).catch(err => console.error('[Push] Error:', err.message));
+
+  const url =
+    `https://api.day.app/${key}/` +
+    `${encodeURIComponent(title)}/` +
+    `${encodeURIComponent(msg)}`;
+
+  try {
+    const res = await axios.get(url, {
+      params: { group: "home", sound: "minuet" },
+      timeout: 8000,
+    });
+    console.log("[Push] Bark response:", res.data);
+  } catch (err) {
+    console.error("[Push] Error:", err.response?.data || err.message);
+  }
 }
 
 module.exports = { sendMail, sendPush };
