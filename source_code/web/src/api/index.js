@@ -33,6 +33,13 @@ export const getCarStatus = () => api.get("/car/status");
 export const getAllSensors = () => api.get("/sensors");
 export const getSensor    = (name) => api.get(`/sensors/${name}`);
 
+// ── Thermostat ───────────────────────────────────────────────────────────────
+export const getThermostat     = () => api.get("/thermostat");
+export const setThermostatZone = (id, body) => api.post(`/thermostat/zone/${id}`, body);
+export const setZoneSchedule   = (id, schedule) => api.post(`/thermostat/zone/${id}/schedule`, { schedule });
+export const setThermostatMode = (mode) => api.post("/thermostat/mode", { mode });
+export const setThermostatRates = (rates) => api.post("/thermostat/rates", rates);
+
 // ── Garage ───────────────────────────────────────────────────────────────────
 export const getGarageStatus  = () => api.get("/garage/status");
 export const triggerGarage    = (duration) =>

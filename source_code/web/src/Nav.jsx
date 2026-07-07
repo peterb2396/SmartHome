@@ -5,6 +5,7 @@ const LINKS = [
   { to: "/sensors", label: "Sensors"  },
   { to: "/cameras", label: "Cameras"  },
   { to: "/finance", label: "Finance"  },
+  { to: "/thermostat", label: "Thermostat" },
   { to: "/settings",label: "Settings" },
 ];
 
