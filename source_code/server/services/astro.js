@@ -51,7 +51,12 @@ function isAfterSunset() {
 }
 
 // ── Weather helper ──────────────────────────────────────────────────────────────
-async function getTempFAt7am(date) {
+/**
+ * Fetch the full day's hourly forecast.
+ * @param {Date} date
+ * @returns {Promise<{times:string[], temps:number[]}>}
+ */
+async function getHourlyForecast(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
@@ -64,8 +69,17 @@ async function getTempFAt7am(date) {
 
   // Hard 10s timeout — this is a background job, never let it hang
   const { data } = await axios.get(url, { timeout: 10000 });
-  const times = data?.hourly?.time || [];
-  const temps = data?.hourly?.temperature_2m || [];
+  return {
+    times: data?.hourly?.time || [],
+    temps: data?.hourly?.temperature_2m || [],
+  };
+}
+
+async function getTempFAt7am(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const { times, temps } = await getHourlyForecast(date);
   const target = `${y}-${m}-${d}T07:00`;
   const idx = times.indexOf(target);
   if (idx === -1) throw new Error(`No 07:00 reading for ${target}`);
@@ -167,4 +181,4 @@ async function init() {
   schedulePing();
 }
 
-module.exports = { init, fetchAstroData, isAfterSunset, getTempFAt7am, LAT, LNG, TZ };
+module.exports = { init, fetchAstroData, isAfterSunset, getTempFAt7am, getHourlyForecast, LAT, LNG, TZ };

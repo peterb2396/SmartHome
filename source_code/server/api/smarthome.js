@@ -42,6 +42,7 @@ const lightsSvc   = require('../services/lights');
 const tuya        = require('../services/tuya');
 const gpioDrv     = require('../services/gpio');
 const sensors     = require('../services/sensorStore');
+const thermostatSvc = require('../services/thermostat');
 
 // ── Auth helper for sensor/device endpoints ──────────────────────────────────
 function isSensorAuthorized(req) {
@@ -166,6 +167,11 @@ router.post('/sensors/:name', (req, res) => {
  *
  * All values land in the same sensorStore as Pi GPIO readings.
  * Read them back with GET /sensors/<name> or GET /sensors.
+ *
+ * The response includes `relays` — the desired ON/OFF state for any
+ * relay outputs wired to this node (e.g. zone dampers/valves for
+ * attic-side thermostat zones). All decision logic runs on the server;
+ * the node just applies whatever it's told on its next check-in.
  */
 router.post('/esp32/report', (req, res) => {
   if (!isSensorAuthorized(req)) {
@@ -182,7 +188,12 @@ router.post('/esp32/report', (req, res) => {
   const names = Object.keys(payload);
   console.log(`[ESP32] Received ${names.length} sensor(s): ${names.join(', ')}`);
 
-  res.json({ ok: true, received: names.length, timestamp: new Date().toISOString() });
+  res.json({
+    ok: true,
+    received: names.length,
+    timestamp: new Date().toISOString(),
+    relays: thermostatSvc.getAtticRelayCommands(),
+  });
 });
 
 /**

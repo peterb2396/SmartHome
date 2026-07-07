@@ -1,10 +1,19 @@
 /**
- * ESP32 Attic Sensor Node
+ * ESP32 Attic Node
  * ─────────────────────────────────────────────────────────────────
- * Reads sensors and POSTs a batch report to the home server every
- * REPORT_INTERVAL_MS milliseconds via POST /esp32/report.
+ * Pure I/O transport for anything wired upstairs (too far to run
+ * direct GPIO back to the basement Pi). ALL decision logic — what
+ * temperature a zone should be, whether a relay should be on — lives
+ * on the main server. This node just:
+ *   1. Reads sensors and POSTs a batch report to /esp32/report
+ *   2. Reads the `relays` object in the server's JSON response and
+ *      applies those ON/OFF states to its output pins
  *
- * Add sensors by wiring them up and adding to buildSensors().
+ * No inbound connection to this node is required — everything flows
+ * through the existing report/response cycle, every REPORT_INTERVAL_MS.
+ *
+ * Add sensors/relays by wiring them up and adding a row to
+ * TEMP_SENSORS / REED_SWITCHES / RELAY_OUTPUTS below.
  *
  * ── Libraries (install via Arduino Library Manager) ──────────────
  *   WiFi              built-in ESP32
@@ -14,11 +23,12 @@
  *   Adafruit Unified Sensor  by Adafruit
  *
  * ── Wiring ───────────────────────────────────────────────────────
- *   DHT22 data        → GPIO 4
- *   Window reed SW 1  → GPIO 14  (other leg to GND)
- *   Window reed SW 2  → GPIO 12  (other leg to GND)
- *   Garage reed SW    → GPIO 27  (other leg to GND, if wired here
- *                                 instead of directly to the Pi)
+ *   DHT22 #1 data (Primary Suite) → GPIO 4
+ *   DHT22 #2 data (Upstairs)      → GPIO 16
+ *   Window reed SW 1              → GPIO 14  (other leg to GND)
+ *   Window reed SW 2              → GPIO 12  (other leg to GND)
+ *   Zone relay — Primary Suite    → GPIO 25  (damper/zone-valve call-for-heat)
+ *   Zone relay — Upstairs         → GPIO 33
  *
  * Reed switch: closed (magnet present) = LOW = "closed"
  *              open   (no magnet)      = HIGH = "open"
@@ -34,25 +44,34 @@ const char* WIFI_SSID          = "YOUR_WIFI_SSID";
 const char* WIFI_PASS          = "YOUR_WIFI_PASSWORD";
 const char* SERVER_URL         = "http://192.168.1.100:3001/esp32/report";  // local IP of Pi
 const char* AUTH_TOKEN         = "YOUR_SENSOR_TOKEN";    // matches SENSOR_TOKEN in .env
-const unsigned long REPORT_INTERVAL_MS = 30000;          // report every 30s
+const unsigned long REPORT_INTERVAL_MS = 15000;          // report every 15s
 
-// ── Pin definitions ───────────────────────────────────────────────
-#define DHT_PIN        4
-#define DHT_TYPE       DHT22
+// ── Temperature/humidity sensors — one zone's DHT22 per entry ────
+struct TempSensor { int pin; const char* tempName; const char* humidityName; const char* location; };
 
-// Reed switches — add as many as you have.
-// Each entry: { gpio pin, sensor name sent to server }
+DHT dhtPrimarySuite(4, DHT22);
+DHT dhtUpstairs(16, DHT22);
+
+// ── Reed switches — add as many as you have ───────────────────────
 struct ReedSwitch { int pin; const char* name; const char* location; };
 
 const ReedSwitch REED_SWITCHES[] = {
-  { 14, "window-north",  "North attic window"  },
-  { 12, "window-east",   "East attic window"   },
-  // { 27, "garage",     "Garage door"          },  // only if NOT wired to Pi
+  { 14, "window-primary-suite", "Primary Suite window" },
+  { 12, "window-upstairs",      "Upstairs window"       },
 };
 const int NUM_REED = sizeof(REED_SWITCHES) / sizeof(REED_SWITCHES[0]);
 
+// ── Relay outputs — names MUST match `relayName` in thermostat.js's
+//    ZONES config for any zone with node: 'attic' ────────────────
+struct RelayOutput { int pin; const char* name; };
+
+const RelayOutput RELAY_OUTPUTS[] = {
+  { 25, "zone-primary-suite" },
+  { 33, "zone-upstairs"      },
+};
+const int NUM_RELAYS = sizeof(RELAY_OUTPUTS) / sizeof(RELAY_OUTPUTS[0]);
+
 // ── Globals ───────────────────────────────────────────────────────
-DHT dht(DHT_PIN, DHT_TYPE);
 unsigned long lastReport = 0;
 
 // ── Setup ─────────────────────────────────────────────────────────
@@ -60,10 +79,15 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  dht.begin();
+  dhtPrimarySuite.begin();
+  dhtUpstairs.begin();
 
   for (int i = 0; i < NUM_REED; i++) {
     pinMode(REED_SWITCHES[i].pin, INPUT_PULLUP);
+  }
+  for (int i = 0; i < NUM_RELAYS; i++) {
+    pinMode(RELAY_OUTPUTS[i].pin, OUTPUT);
+    digitalWrite(RELAY_OUTPUTS[i].pin, LOW);
   }
 
   Serial.println("[ESP32] Connecting to WiFi...");
@@ -83,7 +107,18 @@ void loop() {
   }
 }
 
-// ── Build and POST the sensor report ─────────────────────────────
+// ── Apply relay commands received from the server ────────────────
+void applyRelayCommands(JsonObject relays) {
+  for (int i = 0; i < NUM_RELAYS; i++) {
+    if (relays.containsKey(RELAY_OUTPUTS[i].name)) {
+      bool on = relays[RELAY_OUTPUTS[i].name];
+      digitalWrite(RELAY_OUTPUTS[i].pin, on ? HIGH : LOW);
+      Serial.printf("  relay %s -> %s\n", RELAY_OUTPUTS[i].name, on ? "ON" : "off");
+    }
+  }
+}
+
+// ── Build and POST the sensor report, apply the relay response ───
 void sendReport() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[ESP32] WiFi disconnected, skipping report.");
@@ -91,67 +126,56 @@ void sendReport() {
     return;
   }
 
-  // Read DHT22
-  float tempF = dht.readTemperature(true);
-  float tempC = dht.readTemperature(false);
-  float humid = dht.readHumidity();
-  bool  dhtOk = !isnan(tempF) && !isnan(humid);
-
-  // Build JSON
-  // {
-  //   "auth": "TOKEN",
-  //   "sensors": {
-  //     "temp-attic":     { "value": 72.1, "unit": "F", "metadata": { "location": "attic" } },
-  //     "humidity-attic": { "value": 55,   "unit": "%" },
-  //     "window-north":   { "value": "open" },
-  //     ...
-  //   }
-  // }
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<1536> doc;
   doc["auth"] = AUTH_TOKEN;
-
   JsonObject sensorsObj = doc.createNestedObject("sensors");
 
-  // Temperature
-  if (dhtOk) {
-    JsonObject temp     = sensorsObj.createNestedObject("temp-attic");
-    temp["value"]       = round(tempF * 10.0) / 10.0;
-    temp["unit"]        = "F";
-    JsonObject tempMeta = temp.createNestedObject("metadata");
-    tempMeta["location"] = "attic";
-    tempMeta["celsius"]  = round(tempC * 10.0) / 10.0;
+  // Primary Suite DHT22
+  float tPS = dhtPrimarySuite.readTemperature(true);
+  float hPS = dhtPrimarySuite.readHumidity();
+  if (!isnan(tPS) && !isnan(hPS)) {
+    JsonObject temp = sensorsObj.createNestedObject("temp-primary-suite");
+    temp["value"] = round(tPS * 10.0) / 10.0;
+    temp["unit"] = "F";
+    temp.createNestedObject("metadata")["location"] = "Primary Suite";
 
-    JsonObject hum      = sensorsObj.createNestedObject("humidity-attic");
-    hum["value"]        = round(humid * 10.0) / 10.0;
-    hum["unit"]         = "%";
-    JsonObject humMeta  = hum.createNestedObject("metadata");
-    humMeta["location"] = "attic";
+    JsonObject hum = sensorsObj.createNestedObject("humidity-primary-suite");
+    hum["value"] = round(hPS * 10.0) / 10.0;
+    hum["unit"] = "%";
   } else {
-    Serial.println("[ESP32] DHT22 read failed.");
+    Serial.println("[ESP32] Primary Suite DHT22 read failed.");
+  }
+
+  // Upstairs DHT22
+  float tUp = dhtUpstairs.readTemperature(true);
+  float hUp = dhtUpstairs.readHumidity();
+  if (!isnan(tUp) && !isnan(hUp)) {
+    JsonObject temp = sensorsObj.createNestedObject("temp-upstairs");
+    temp["value"] = round(tUp * 10.0) / 10.0;
+    temp["unit"] = "F";
+    temp.createNestedObject("metadata")["location"] = "Upstairs";
+
+    JsonObject hum = sensorsObj.createNestedObject("humidity-upstairs");
+    hum["value"] = round(hUp * 10.0) / 10.0;
+    hum["unit"] = "%";
+  } else {
+    Serial.println("[ESP32] Upstairs DHT22 read failed.");
   }
 
   // Reed switches
   for (int i = 0; i < NUM_REED; i++) {
     bool isOpen = digitalRead(REED_SWITCHES[i].pin) == HIGH;
-
-    JsonObject sw      = sensorsObj.createNestedObject(REED_SWITCHES[i].name);
-    sw["value"]        = isOpen ? "open" : "closed";
-    JsonObject swMeta  = sw.createNestedObject("metadata");
+    JsonObject sw = sensorsObj.createNestedObject(REED_SWITCHES[i].name);
+    sw["value"] = isOpen ? "open" : "closed";
+    JsonObject swMeta = sw.createNestedObject("metadata");
     swMeta["location"] = REED_SWITCHES[i].location;
-    swMeta["source"]   = "esp32";
+    swMeta["source"] = "esp32";
   }
 
-  // Serialize and send
   String body;
   serializeJson(doc, body);
 
-  Serial.printf("[ESP32] Reporting — temp: %.1f°F  hum: %.0f%%\n",
-    dhtOk ? tempF : 0.0, dhtOk ? humid : 0.0);
-  for (int i = 0; i < NUM_REED; i++) {
-    Serial.printf("  %s: %s\n",
-      REED_SWITCHES[i].name,
-      digitalRead(REED_SWITCHES[i].pin) == HIGH ? "OPEN" : "closed");
-  }
+  Serial.printf("[ESP32] Reporting — Primary Suite: %.1f°F  Upstairs: %.1f°F\n", tPS, tUp);
 
   HTTPClient http;
   http.begin(SERVER_URL);
@@ -161,6 +185,15 @@ void sendReport() {
   int code = http.POST(body);
   if (code > 0) {
     Serial.printf("[ESP32] Server: HTTP %d\n", code);
+    String respBody = http.getString();
+
+    StaticJsonDocument<512> respDoc;
+    DeserializationError err = deserializeJson(respDoc, respBody);
+    if (!err && respDoc.containsKey("relays")) {
+      applyRelayCommands(respDoc["relays"].as<JsonObject>());
+    } else if (err) {
+      Serial.printf("[ESP32] Response parse error: %s\n", err.c_str());
+    }
   } else {
     Serial.printf("[ESP32] HTTP error: %s\n", http.errorToString(code).c_str());
   }
