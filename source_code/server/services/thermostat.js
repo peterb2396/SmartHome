@@ -13,12 +13,19 @@
  *                       only equipment that can cool, so cooling never goes
  *                       through the Gas/Electric/Air heat-source selection.
  *
- * Each zone has exactly one dial: a target temperature. There's no
- * heat/cool/off mode to pick — every zone is always actively regulated
- * toward its target: heat comes on below it, cooling comes on above it.
- * That single rule already covers the 60-75°F freeze/mold safety floor and
- * ceiling too (target is clamped into that range), so there's no separate
- * "off, but still safety-protected" state to reason about.
+ * Each zone has one dial (a target temperature) and one on/off switch —
+ * no separate heat/cool/off mode to pick, heat vs. cool is always decided
+ * automatically by comparing current temp to target.
+ *
+ *   on:  follows the zone's weekly schedule by default. Manually nudging
+ *        the target (dial drag, +/-) creates a temporary hold that lasts
+ *        until the next scheduled block change, then reverts to whatever
+ *        that block specifies. See resolveTarget()/currentBlockKey().
+ *   off: no comfort call at all — the zone drifts to whatever temperature
+ *        it naturally settles at.
+ *
+ * The 60-75°F freeze/mold safety floor and ceiling apply UNCONDITIONALLY
+ * either way — off does not mean unprotected. See updateSafetyState().
  *
  * Wiring:
  *   node: 'basement' → relay wired directly to this Pi (gpio.js createPin)
@@ -85,9 +92,10 @@ const DEFAULT_SETTINGS = {
   // so it only gets selected when gas and/or air are marked unavailable
   // (e.g. mid-service). See setAvailability()/pickAvailableSource() below.
   available: { gas: true, electric: true, air: true },
-  // Just a target — always actively maintained (heat below it, cool above
-  // it, see tick()). No on/off/mode to set.
-  zones: Object.fromEntries(ZONES.map(z => [z.id, { target: 68, schedule: [] }])),
+  // on: whether comfort control is active for this zone (safety floor/
+  // ceiling apply either way). override: a manual target that holds until
+  // the schedule moves into a different block — see resolveTarget().
+  zones: Object.fromEntries(ZONES.map(z => [z.id, { on: true, target: 68, schedule: [], override: null }])),
 };
 
 // ── Heat pump COP curve (efficiency drops as it gets colder outside) ────────
@@ -151,14 +159,39 @@ async function saveSettings(next) {
 }
 
 // ── Schedule resolution ──────────────────────────────────────────────────────
-function resolveTarget(zoneSettings, now) {
+// A stable identity for "whichever schedule block is active right now" (or
+// null if none is) — used to detect when we've crossed into a different
+// block, which is when a manual override expires. Content-based rather than
+// an array index, so it survives the blocks being reordered.
+function currentBlockKey(schedule, now) {
+  const b = matchingBlock(schedule, now);
+  return b ? `${b.day}|${b.start}|${b.end}` : null;
+}
+
+function matchingBlock(schedule, now) {
   const dow = now.day();
   const hm = now.format('HH:mm');
-  const matches = (zoneSettings.schedule || []).filter(
+  const matches = (schedule || []).filter(
     b => (b.day === dow || b.day === 'all') && hm >= b.start && hm < b.end
   );
-  if (matches.length) return matches[matches.length - 1].target;
-  return zoneSettings.target ?? 68;
+  return matches.length ? matches[matches.length - 1] : null;
+}
+
+// The target actually in effect right now: a manual override (if one is set
+// AND we're still within the same block-window it was set in), else
+// whatever the schedule says for this moment, else the zone's base target.
+function resolveTarget(zoneSettings, now) {
+  const key = currentBlockKey(zoneSettings.schedule, now);
+  if (zoneSettings.override && zoneSettings.override.untilBlockKey === key) {
+    return zoneSettings.override.target;
+  }
+  const block = matchingBlock(zoneSettings.schedule, now);
+  return block ? block.target : (zoneSettings.target ?? 68);
+}
+
+function isOverridden(zoneSettings, now) {
+  const key = currentBlockKey(zoneSettings.schedule, now);
+  return !!(zoneSettings.override && zoneSettings.override.untilBlockKey === key);
 }
 
 function windowsOpenForZone(zone) {
@@ -214,11 +247,12 @@ function tick() {
   const settings = getSettings();
   const now = moment();
 
-  // Pass 1: per-zone desired heat/cool calls. Every zone is always actively
-  // regulated toward its target — heat below it, cool above it — there's no
-  // on/off/mode to gate this. The hard safety floor/ceiling is a backstop
-  // on top: it wins outright if comfort control alone somehow isn't keeping
-  // the zone inside 60-75°F (see updateSafetyState()).
+  // Pass 1: per-zone desired heat/cool calls. Comfort control (target ±
+  // deadband, heat below / cool above) only runs while the zone is on; off
+  // just stops steering it, it doesn't disable the zone. The hard safety
+  // floor/ceiling is a backstop on top of ALL of this — it wins outright
+  // regardless of on/off if the zone somehow ends up outside 60-75°F
+  // (see updateSafetyState()).
   for (const zone of ZONES) {
     const zs = settings.zones[zone.id];
     const rt = runtime[zone.id];
@@ -236,15 +270,21 @@ function tick() {
       continue;
     }
 
-    const target = resolveTarget(zs, now);
+    let heatCall = false;
+    let coolCall = false;
 
-    let heatCall = rt.calling;
-    if (!rt.calling && currentTemp < target - DEADBAND_F) heatCall = true;
-    else if (rt.calling && currentTemp >= target + DEADBAND_F) heatCall = false;
+    if (zs.on) {
+      const target = resolveTarget(zs, now);
+      heatCall = rt.calling;
+      if (!rt.calling && currentTemp < target - DEADBAND_F) heatCall = true;
+      else if (rt.calling && currentTemp >= target + DEADBAND_F) heatCall = false;
 
-    let coolCall = rt.coolCalling;
-    if (!rt.coolCalling && currentTemp > target + DEADBAND_F) coolCall = true;
-    else if (rt.coolCalling && currentTemp <= target - DEADBAND_F) coolCall = false;
+      coolCall = rt.coolCalling;
+      if (!rt.coolCalling && currentTemp > target + DEADBAND_F) coolCall = true;
+      else if (rt.coolCalling && currentTemp <= target - DEADBAND_F) coolCall = false;
+    }
+    // zs.on === false -> no comfort call; let it drift. The safety check
+    // below is still live regardless.
 
     // Safety wins outright over the comfort band above.
     if (rt.safety === 'below-min') { heatCall = true; coolCall = false; }
@@ -393,13 +433,22 @@ async function runCostDecision() {
 }
 
 // ── Public mutation API (used by routes) ────────────────────────────────────
-async function setZone(zoneId, { target }) {
+async function setZone(zoneId, { target, on }) {
   const settings = getSettings();
   if (!settings.zones[zoneId]) throw new Error(`Unknown zone ${zoneId}`);
   const zs = { ...settings.zones[zoneId] };
+  if (typeof on === 'boolean') zs.on = on;
   // Hard-clamped — the 60-75°F range is a safety limit, not just a default,
   // so it can't be bypassed via a target that's set outside it either.
-  if (typeof target === 'number') zs.target = clampToSafetyRange(target);
+  if (typeof target === 'number') {
+    const clamped = clampToSafetyRange(target);
+    zs.target = clamped;
+    // Manually nudging the target creates a hold tied to whichever
+    // schedule block (or gap between blocks) is active right now — it
+    // stops applying as soon as we move into a different one. See
+    // resolveTarget().
+    zs.override = { target: clamped, untilBlockKey: currentBlockKey(zs.schedule, moment()) };
+  }
   const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
   await saveSettings(next);
   return next;
@@ -409,7 +458,8 @@ async function setZoneSchedule(zoneId, schedule) {
   const settings = getSettings();
   if (!settings.zones[zoneId]) throw new Error(`Unknown zone ${zoneId}`);
   const clamped = schedule.map(b => ({ ...b, target: clampToSafetyRange(b.target) }));
-  const zs = { ...settings.zones[zoneId], schedule: clamped };
+  // A freshly-saved schedule invalidates any pending hold from the old one.
+  const zs = { ...settings.zones[zoneId], schedule: clamped, override: null };
   const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
   await saveSettings(next);
   return next;
@@ -489,10 +539,15 @@ function getState() {
       const hasReading = typeof reading?.value === 'number';
       const stale = hasReading && reading.stale;
       const rt = runtime[zone.id];
+      const now = moment();
       return {
         id: zone.id,
         label: zone.label,
-        target: zs.target,
+        on: zs.on,
+        // The currently-effective target — schedule block, manual hold, or
+        // base fallback, whichever applies right now (see resolveTarget()).
+        target: resolveTarget(zs, now),
+        overridden: isOverridden(zs, now),
         schedule: zs.schedule,
         currentTemp: hasReading ? reading.value : null,
         updatedAt: reading?.updatedAt ?? null,

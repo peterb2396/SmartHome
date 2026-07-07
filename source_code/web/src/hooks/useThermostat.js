@@ -31,7 +31,7 @@ function defaultState() {
     safetyRange: { min: 60, max: 75 },
     crossover: null,
     zones: ZONE_DEFAULTS.map(({ id, label }) => ({
-      id, label, target: 68, schedule: [],
+      id, label, on: true, target: 68, schedule: [], overridden: false,
       currentTemp: null, updatedAt: null, sensorOk: false,
       calling: false, coolCalling: false, safety: "normal", windowOpen: false,
     })),
@@ -141,8 +141,13 @@ export function useThermostat() {
   }, [applyState, pausePolling]);
 
   const setTarget = useCallback((zoneId, target) => runMutation(
-    prev => prev && { ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, target } : z) },
+    prev => prev && { ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, target, overridden: true } : z) },
     () => setThermostatZone(zoneId, { target })
+  ), [runMutation]);
+
+  const toggleZone = useCallback((zoneId, on) => runMutation(
+    prev => prev && { ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, on } : z) },
+    () => setThermostatZone(zoneId, { on })
   ), [runMutation]);
 
   const saveSchedule = useCallback((zoneId, schedule) => runMutation(
@@ -190,7 +195,7 @@ export function useThermostat() {
 
   return {
     state, loading, error, offline,
-    setTarget, saveSchedule, setMode, setRates, setAvailability,
+    setTarget, toggleZone, saveSchedule, setMode, setRates, setAvailability,
     refetch: fetchState,
   };
 }

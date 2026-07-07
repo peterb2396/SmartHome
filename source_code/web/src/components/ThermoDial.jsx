@@ -32,13 +32,11 @@ function angleToValue(angleDeg, min, max) {
 }
 
 /**
- * Circular speedometer-style dial for one HVAC zone. Every zone is always
- * actively regulated toward its target — there's no on/off/mode — so the
- * dial is always "live"; only the status text changes (Heating/Cooling/Idle,
- * or a safety override). The target can be set via the +/- buttons or by
- * dragging anywhere along the arc.
+ * Circular speedometer-style dial for one HVAC zone. The target can be set
+ * via the +/- buttons or by dragging anywhere along the arc.
  * @param {number|null} current  Live temperature, or null if no sensor data yet.
  * @param {number} target        Target/setpoint temperature.
+ * @param {boolean} on            Whether the zone is on (dimmed when off, unless a safety override is active).
  * @param {boolean} calling       Whether the zone is actively calling for heat.
  * @param {boolean} coolCalling   Whether the zone is actively calling for cooling.
  * @param {'normal'|'below-min'|'above-max'} safety  Hard-limit override state.
@@ -46,7 +44,7 @@ function angleToValue(angleDeg, min, max) {
  * @param {(value:number)=>void} onCommit  Called with the new target once a drag ends (or a tap).
  */
 export default function ThermoDial({
-  current, target, calling, coolCalling, safety = "normal", onStep, onCommit,
+  current, target, on = true, calling, coolCalling, safety = "normal", onStep, onCommit,
   min = 60, max = 75, size = 200,
 }) {
   const cx = size / 2, cy = size / 2, r = size / 2 - 14;
@@ -54,6 +52,9 @@ export default function ThermoDial({
   const svgRef = useRef(null);
   const [dragValue, setDragValue] = useState(null); // non-null while actively dragging
 
+  // A safety override runs the equipment even if the zone is nominally
+  // "off" — the dial should visually reflect that it's actually active.
+  const active = on || safety !== "normal";
   const displayTarget = dragValue ?? target;
 
   // Ring-only hit zone — ignores taps near the center (the temperature
@@ -103,6 +104,8 @@ export default function ThermoDial({
     statusText = "Freeze Protection"; statusColor = "#ef4444";
   } else if (safety === "above-max") {
     statusText = "Safety Cooling"; statusColor = "#3b82f6";
+  } else if (!on) {
+    statusText = "Off"; statusColor = "#94a3b8";
   } else {
     statusText = coolCalling ? "Cooling" : calling ? "Heating" : "Idle";
     statusColor = coolCalling ? "#3b82f6" : calling ? "#ef4444" : "#22c55e";
@@ -128,16 +131,16 @@ export default function ThermoDial({
             </linearGradient>
           </defs>
 
-          <path d={trackPath} fill="none" stroke="#e2e8f0" strokeWidth={14} strokeLinecap="round" />
+          <path d={trackPath} fill="none" stroke={active ? "#e2e8f0" : "#e5e7eb"} strokeWidth={14} strokeLinecap="round" />
 
           {current != null && (
-            <path d={fillPath} fill="none" stroke={`url(#${gradId})`} strokeWidth={14} strokeLinecap="round"
+            <path d={fillPath} fill="none" stroke={active ? `url(#${gradId})` : "#cbd5e1"} strokeWidth={14} strokeLinecap="round"
               style={{ transition: dragValue == null ? "d 0.4s ease" : "none" }} />
           )}
 
           {/* Target marker — bigger + no transition while actively dragging, so it tracks the pointer exactly */}
           <circle cx={targetPoint.x} cy={targetPoint.y} r={dragValue != null ? 11 : 9}
-            fill="white" stroke="#1e293b" strokeWidth={3}
+            fill="white" stroke={active ? "#1e293b" : "#94a3b8"} strokeWidth={3}
             style={{ transition: dragValue == null ? "cx 0.15s, cy 0.15s" : "none" }} />
         </svg>
 
@@ -145,7 +148,7 @@ export default function ThermoDial({
           position: "absolute", inset: 0, display: "flex", flexDirection: "column",
           alignItems: "center", justifyContent: "center", pointerEvents: "none",
         }}>
-          <div style={{ fontSize: size * 0.19, fontWeight: 700, color: "#1e293b", lineHeight: 1 }}>
+          <div style={{ fontSize: size * 0.19, fontWeight: 700, color: active ? "#1e293b" : "#9ca3af", lineHeight: 1 }}>
             {Math.round(displayTarget)}°
           </div>
           <div style={{ fontSize: size * 0.075, color: "#94a3b8", marginTop: 4 }}>

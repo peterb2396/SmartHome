@@ -8,7 +8,7 @@ import RatesModal    from "../components/RatesModal";
 import Spinner       from "../components/Spinner";
 
 export default function Thermostat() {
-  const { state, loading, error, offline, setTarget, saveSchedule, setMode, setAvailability, setRates, refetch } = useThermostat();
+  const { state, loading, error, offline, setTarget, toggleZone, saveSchedule, setMode, setAvailability, setRates, refetch } = useThermostat();
   const [scheduleZoneId, setScheduleZoneId] = useState(null);
   const [showRates, setShowRates] = useState(false);
 
@@ -108,6 +108,7 @@ export default function Thermostat() {
             key={zone.id}
             zone={zone}
             onStep={setTarget}
+            onToggle={toggleZone}
             onOpenSchedule={setScheduleZoneId}
           />
         ))}

@@ -2,7 +2,7 @@
  * Thermostat Routes
  * ─────────────────────────────────────────────────────────────────
  * GET  /thermostat                 — full state (zones, mode, rates, last cost decision)
- * POST /thermostat/zone/:id        — { target } set the zone's desired temperature
+ * POST /thermostat/zone/:id        — { target?, on? } set desired temp and/or on/off
  * POST /thermostat/zone/:id/schedule — { schedule } weekly grid for one zone
  * POST /thermostat/mode            — { mode: 'auto'|'gas'|'electric'|'air' }
  * POST /thermostat/rates           — { gasPricePerTherm?, elecPricePerKwh?, gasAfue? }
@@ -24,8 +24,8 @@ router.get('/thermostat', (req, res) => {
 
 router.post('/thermostat/zone/:id', async (req, res) => {
   try {
-    const { target } = req.body;
-    await thermostatSvc.setZone(req.params.id, { target });
+    const { target, on } = req.body;
+    await thermostatSvc.setZone(req.params.id, { target, on });
     res.json({ ok: true, state: thermostatSvc.getState() });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
