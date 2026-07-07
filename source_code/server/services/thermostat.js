@@ -99,12 +99,41 @@ const DEFAULT_SETTINGS = {
 };
 
 // ── Heat pump COP curve (efficiency drops as it gets colder outside) ────────
+// Real manufacturer data — ACiQ 48K Central Ducted Air Handler (AHD) +
+// 48K Standard Condenser (EHPD), 208-230V, from the extended heating
+// performance table (heating capacity in BTU/hr, power input in kW),
+// read at the 70°F indoor DB column (the middle of that table and a
+// reasonable stand-in for a typical thermostat setpoint) and converted via
+// COP = (BTU/hr ÷ 3412.142 BTU/hr-per-kW) ÷ kW input. Replace this array if
+// you swap equipment or want to derive it from a different indoor design
+// temp — everything else (interpolation, extrapolation past the ends)
+// works the same regardless of how many points are here.
+//
+// Note this unit's real curve is NOT flat above ~47°F the way a generic
+// assumption might guess — it keeps getting more efficient into the mid-60s
+// — and it holds up much better in deep cold (COP ~1.6 at -13°F) than a
+// naive "efficiency craters below freezing" guess would suggest. Sorted
+// warmest-to-coldest to match copForOutdoorTemp()'s clamping logic.
 const COP_CURVE = [
-  { temp: 47, cop: 3.2 },
-  { temp: 35, cop: 2.6 },
-  { temp: 17, cop: 2.0 },
-  { temp: 5,  cop: 1.5 },
-  { temp: -10, cop: 1.1 },
+  { temp: 64.4, cop: 4.36 },
+  { temp: 62,   cop: 4.15 },
+  { temp: 59,   cop: 3.88 },
+  { temp: 57,   cop: 3.72 },
+  { temp: 52,   cop: 3.39 },
+  { temp: 47,   cop: 3.12 },
+  { temp: 44.6, cop: 2.90 },
+  { temp: 42,   cop: 2.75 },
+  { temp: 37,   cop: 2.34 },
+  { temp: 35,   cop: 2.17 },
+  { temp: 32,   cop: 2.15 },
+  { temp: 27,   cop: 2.13 },
+  { temp: 22,   cop: 2.11 },
+  { temp: 17,   cop: 2.10 },
+  { temp: 14,   cop: 2.08 },
+  { temp: 5,    cop: 2.04 },
+  { temp: 0,    cop: 1.90 },
+  { temp: -4,   cop: 1.78 },
+  { temp: -13,  cop: 1.63 },
 ];
 
 function copForOutdoorTemp(tempF) {
@@ -403,9 +432,9 @@ function costPerUnit(source, avgOutdoorTempF, rates) {
 // so it's recomputed live in getState() — always current with whatever the
 // user just saved in the rates modal, nothing to cache or go stale.
 //
-// The COP curve only has real data from -10°F to 47°F (heat pumps plateau
-// above 47°F and typically don't run at all much below -10°F). When the
-// true crossover falls outside that range, we still report a number by
+// The COP curve only has real data from -13°F to 64.4°F (the manufacturer's
+// tested operating range for this unit). When the true crossover falls
+// outside that range, we still report a number by
 // extending the line through the two nearest curve points — flagged via
 // `outOfRange` so the UI can caveat it as extrapolated — rather than
 // collapsing to a flat "always cheaper" the moment the real crossover walks
@@ -447,7 +476,7 @@ function computeCrossover(rates) {
     warmerIsCheaper: 'air',
     colderIsCheaper: 'gas',
     outOfRange,   // null | 'above' | 'below' — whether tempF is extrapolated past the modeled range
-    modelEdge,    // the modeled boundary (47 or -10) when outOfRange is set, else null
+    modelEdge,    // the modeled boundary (64.4 or -13) when outOfRange is set, else null
   };
 }
 
