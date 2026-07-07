@@ -2,10 +2,17 @@
  * Thermostat Routes
  * ─────────────────────────────────────────────────────────────────
  * GET  /thermostat                 — full state (zones, mode, rates, last cost decision)
- * POST /thermostat/zone/:id        — { on?, target? } manual control
+ * POST /thermostat/zone/:id        — { target } set the zone's desired temperature
  * POST /thermostat/zone/:id/schedule — { schedule } weekly grid for one zone
  * POST /thermostat/mode            — { mode: 'auto'|'gas'|'electric'|'air' }
  * POST /thermostat/rates           — { gasPricePerTherm?, elecPricePerKwh?, gasAfue? }
+ * POST /thermostat/availability    — { source: 'gas'|'electric'|'air', available: boolean }
+ *
+ * Every mutation responds with the same `state` shape as GET /thermostat
+ * (not the raw settings blob) so the frontend can apply it directly as the
+ * new source of truth instead of firing a separate GET right after — that
+ * extra round-trip was racing with the optimistic update and causing the
+ * UI to visibly flicker back to the old value before catching up.
  */
 
 const router = require('express').Router();
@@ -17,9 +24,9 @@ router.get('/thermostat', (req, res) => {
 
 router.post('/thermostat/zone/:id', async (req, res) => {
   try {
-    const { on, target } = req.body;
-    const settings = await thermostatSvc.setZone(req.params.id, { on, target });
-    res.json({ ok: true, settings });
+    const { target } = req.body;
+    await thermostatSvc.setZone(req.params.id, { target });
+    res.json({ ok: true, state: thermostatSvc.getState() });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
   }
@@ -31,8 +38,8 @@ router.post('/thermostat/zone/:id/schedule', async (req, res) => {
     if (!Array.isArray(schedule)) {
       return res.status(400).json({ ok: false, error: 'schedule must be an array' });
     }
-    const settings = await thermostatSvc.setZoneSchedule(req.params.id, schedule);
-    res.json({ ok: true, settings });
+    await thermostatSvc.setZoneSchedule(req.params.id, schedule);
+    res.json({ ok: true, state: thermostatSvc.getState() });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
   }
@@ -40,8 +47,8 @@ router.post('/thermostat/zone/:id/schedule', async (req, res) => {
 
 router.post('/thermostat/mode', async (req, res) => {
   try {
-    const settings = await thermostatSvc.setMode(req.body.mode);
-    res.json({ ok: true, settings });
+    await thermostatSvc.setMode(req.body.mode);
+    res.json({ ok: true, state: thermostatSvc.getState() });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
   }
@@ -49,8 +56,21 @@ router.post('/thermostat/mode', async (req, res) => {
 
 router.post('/thermostat/rates', async (req, res) => {
   try {
-    const settings = await thermostatSvc.setRates(req.body);
-    res.json({ ok: true, settings });
+    await thermostatSvc.setRates(req.body);
+    res.json({ ok: true, state: thermostatSvc.getState() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+router.post('/thermostat/availability', async (req, res) => {
+  try {
+    const { source, available } = req.body;
+    if (typeof available !== 'boolean') {
+      return res.status(400).json({ ok: false, error: 'available must be a boolean' });
+    }
+    await thermostatSvc.setAvailability(source, available);
+    res.json({ ok: true, state: thermostatSvc.getState() });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
   }

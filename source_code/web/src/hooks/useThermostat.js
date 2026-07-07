@@ -28,9 +28,12 @@ function defaultState() {
     mode: "auto", activeSource: "gas", lastDecision: null,
     rates: { gasPricePerTherm: 1.5, elecPricePerKwh: 0.15, gasAfue: 0.85 },
     available: { gas: true, electric: true, air: true },
+    safetyRange: { min: 60, max: 75 },
+    crossover: null,
     zones: ZONE_DEFAULTS.map(({ id, label }) => ({
-      id, label, on: false, target: 68, schedule: [],
-      currentTemp: null, updatedAt: null, sensorOk: false, calling: false, windowOpen: false,
+      id, label, target: 68, schedule: [],
+      currentTemp: null, updatedAt: null, sensorOk: false,
+      calling: false, coolCalling: false, safety: "normal", windowOpen: false,
     })),
   };
 }
@@ -47,6 +50,12 @@ function loadLocalState() {
 
 function saveLocalState(state) {
   try { localStorage.setItem(LOCAL_KEY, JSON.stringify(state)); } catch {}
+}
+
+// A 200 with an unexpected shape (wrong route, proxy oddity, etc.) is just
+// as dangerous as a network error — callers should treat it the same way.
+function isValidState(data) {
+  return !!data && Array.isArray(data.zones);
 }
 
 export function useThermostat() {
@@ -67,17 +76,10 @@ export function useThermostat() {
     });
   }, []);
 
-  // Unguarded — always hits the server. Used for the initial load and for
-  // reconciling right after a mutation (we WANT fresh data at that point).
   const fetchState = useCallback(async () => {
     try {
       const { data } = await getThermostat();
-      // A 200 with an unexpected shape (wrong route, proxy oddity, etc.) is
-      // just as dangerous as a network error — treat it the same way rather
-      // than handing the page something it'll crash trying to render.
-      if (!data || !Array.isArray(data.zones)) {
-        throw new Error("Unexpected response from thermostat service");
-      }
+      if (!isValidState(data)) throw new Error("Unexpected response from thermostat service");
       applyState(data);
       setOffline(false);
       setError(null);
@@ -113,78 +115,63 @@ export function useThermostat() {
     return () => clearInterval(id);
   }, [fetchState]);
 
-  const toggleZone = useCallback(async (zoneId, on) => {
+  // Runs a mutation: applies an optimistic update immediately, then either
+  // adopts the server's confirmed state (on success) or just leaves the
+  // optimistic state in place (on failure/offline) — it does NOT re-fetch
+  // afterward. That extra round-trip used to race the optimistic update:
+  // occasionally the GET would land with slightly stale data and the UI
+  // would visibly flicker back to the old value before "catching up" a
+  // moment later. The mutation response already carries the fresh state,
+  // so there's nothing left to reconcile.
+  const runMutation = useCallback(async (optimisticUpdater, apiCall) => {
     pausePolling();
-    applyState(prev => prev && { ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, on } : z) });
+    applyState(optimisticUpdater);
     try {
-      await setThermostatZone(zoneId, { on });
+      const { data } = await apiCall();
+      if (data?.ok && isValidState(data.state)) {
+        applyState(data.state);
+        setOffline(false);
+        setError(null);
+      }
     } catch (e) {
-      console.warn("toggleZone: backend unreachable, kept local change:", e.message);
-    } finally {
-      fetchState();
+      console.warn("thermostat mutation: backend unreachable, kept local change:", e.message);
+      setError(e.message || "Unable to reach the thermostat service");
+      setOffline(true);
     }
-  }, [applyState, pausePolling, fetchState]);
+  }, [applyState, pausePolling]);
 
-  const setTarget = useCallback(async (zoneId, target) => {
-    pausePolling();
-    applyState(prev => prev && { ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, target } : z) });
-    try {
-      await setThermostatZone(zoneId, { target });
-    } catch (e) {
-      console.warn("setTarget: backend unreachable, kept local change:", e.message);
-    } finally {
-      fetchState();
-    }
-  }, [applyState, pausePolling, fetchState]);
+  const setTarget = useCallback((zoneId, target) => runMutation(
+    prev => prev && { ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, target } : z) },
+    () => setThermostatZone(zoneId, { target })
+  ), [runMutation]);
 
-  const saveSchedule = useCallback(async (zoneId, schedule) => {
-    pausePolling();
-    applyState(prev => prev && { ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, schedule } : z) });
-    try {
-      await apiSetZoneSchedule(zoneId, schedule);
-    } catch (e) {
-      console.warn("saveSchedule: backend unreachable, kept local change:", e.message);
-    } finally {
-      fetchState();
-    }
-  }, [applyState, pausePolling, fetchState]);
+  const saveSchedule = useCallback((zoneId, schedule) => runMutation(
+    prev => prev && { ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, schedule } : z) },
+    () => apiSetZoneSchedule(zoneId, schedule)
+  ), [runMutation]);
 
-  const setMode = useCallback(async (mode) => {
-    pausePolling();
-    applyState(prev => {
+  const setMode = useCallback((mode) => runMutation(
+    prev => {
       if (!prev) return prev;
       if (mode !== "auto" && prev.available?.[mode] === false) {
         console.warn(`setMode: ${mode} is marked as being serviced, ignoring`);
         return prev;
       }
       return { ...prev, mode, activeSource: mode === "auto" ? prev.activeSource : mode };
-    });
-    try {
-      await setThermostatMode(mode);
-    } catch (e) {
-      console.warn("setMode: backend unreachable, kept local change:", e.message);
-    } finally {
-      fetchState();
-    }
-  }, [applyState, pausePolling, fetchState]);
+    },
+    () => setThermostatMode(mode)
+  ), [runMutation]);
 
-  const setRates = useCallback(async (rates) => {
-    applyState(prev => prev && { ...prev, rates: { ...prev.rates, ...rates } });
-    try {
-      await setThermostatRates(rates);
-    } catch (e) {
-      console.warn("setRates: backend unreachable, kept local change:", e.message);
-    } finally {
-      fetchState();
-    }
-  }, [applyState, fetchState]);
+  const setRates = useCallback((rates) => runMutation(
+    prev => prev && { ...prev, rates: { ...prev.rates, ...rates } },
+    () => setThermostatRates(rates)
+  ), [runMutation]);
 
   // Mark a heat source as being serviced / back in service. Mirrors the
   // backend's immediate-failover behavior so local-only mode (backend
   // unreachable) behaves the same as talking to the real server.
-  const setAvailability = useCallback(async (source, available) => {
-    pausePolling();
-    applyState(prev => {
+  const setAvailability = useCallback((source, available) => runMutation(
+    prev => {
       if (!prev) return prev;
       const nextAvailable = { ...prev.available, [source]: available };
       let next = { ...prev, available: nextAvailable };
@@ -197,19 +184,13 @@ export function useThermostat() {
         next = { ...next, mode: "auto", activeSource: replacement ?? prev.activeSource };
       }
       return next;
-    });
-    try {
-      await setThermostatAvailability(source, available);
-    } catch (e) {
-      console.warn("setAvailability: backend unreachable, kept local change:", e.message);
-    } finally {
-      fetchState();
-    }
-  }, [applyState, pausePolling, fetchState]);
+    },
+    () => setThermostatAvailability(source, available)
+  ), [runMutation]);
 
   return {
     state, loading, error, offline,
-    toggleZone, setTarget, saveSchedule, setMode, setRates, setAvailability,
+    setTarget, saveSchedule, setMode, setRates, setAvailability,
     refetch: fetchState,
   };
 }

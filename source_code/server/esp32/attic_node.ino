@@ -44,7 +44,7 @@ const char* WIFI_SSID          = "YOUR_WIFI_SSID";
 const char* WIFI_PASS          = "YOUR_WIFI_PASSWORD";
 const char* SERVER_URL         = "http://192.168.1.100:3001/esp32/report";  // local IP of Pi
 const char* AUTH_TOKEN         = "YOUR_SENSOR_TOKEN";    // matches SENSOR_TOKEN in .env
-const unsigned long REPORT_INTERVAL_MS = 15000;          // report every 15s
+const unsigned long REPORT_INTERVAL_MS = 60000;           // report every 60s — matches the whole-house "gather every sensor at least once a minute" cadence
 
 // ── Temperature/humidity sensors — one zone's DHT22 per entry ────
 struct TempSensor { int pin; const char* tempName; const char* humidityName; const char* location; };

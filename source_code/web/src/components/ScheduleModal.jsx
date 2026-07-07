@@ -56,6 +56,10 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
         </div>
 
         <div style={{ padding: "1.5rem", overflowY: "auto", flex: 1 }}>
+          <p style={{ color: "#94a3b8", fontSize: "0.8rem", marginTop: 0 }}>
+            Targets are limited to 60–75°F. This zone will also never be allowed to drop below 60°F or
+            rise above 75°F even outside these blocks — that's a hard safety limit, not a schedule setting.
+          </p>
           {blocks.length === 0 && (
             <p style={{ color: "#94a3b8", fontSize: "0.9rem" }}>
               No schedule blocks yet — this zone will just hold its manual target. Add a block below.
@@ -73,7 +77,8 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
               <input type="time" value={b.start} onChange={e => updateBlock(i, { start: e.target.value })} style={{ ...inputStyle, flex: "1.2", minWidth: 118 }} />
               <span style={{ color: "#94a3b8" }}>–</span>
               <input type="time" value={b.end} onChange={e => updateBlock(i, { end: e.target.value })} style={{ ...inputStyle, flex: "1.2", minWidth: 118 }} />
-              <input type="number" value={b.target} onChange={e => updateBlock(i, { target: Number(e.target.value) })}
+              <input type="number" min={60} max={75} value={b.target}
+                onChange={e => updateBlock(i, { target: Math.min(75, Math.max(60, Number(e.target.value) || 60)) })}
                 style={{ ...inputStyle, flex: "0.6", textAlign: "center" }} />
               <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>°F</span>
               <button onClick={() => removeBlock(i)} style={{

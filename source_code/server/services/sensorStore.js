@@ -5,10 +5,26 @@
  * where they came from (Pi GPIO, ESP32 WiFi report, etc.)
  *
  * Both gpio.js and smarthome.js import this — they share the same object.
+ *
+ * Freshness: every sensor (window, temp, whatever) is expected to report
+ * at least once a minute — the attic ESP32 batches a report every 60s
+ * (attic_node.ino), and gpio.js re-confirms every Pi-wired reed switch on
+ * the same 60s cadence on top of its interrupt-driven watch(). STALE_MS
+ * gives a few missed cycles of grace before a reading is flagged stale, so
+ * routine jitter doesn't false-positive. Anything consuming sensor data —
+ * the general /sensors views AND the thermostat's safety-range check —
+ * reads through get()/getAll() and gets the same `stale` flag for free.
  */
+
+const STALE_MS = 3 * 60 * 1000; // 3 minutes — a few missed 60s cycles' grace
 
 // { [name]: { value, unit, metadata, updatedAt } }
 const store = {};
+
+function withStaleness(reading) {
+  if (!reading) return reading;
+  return { ...reading, stale: (Date.now() - new Date(reading.updatedAt).getTime()) > STALE_MS };
+}
 
 /**
  * Write a sensor reading.
@@ -27,23 +43,24 @@ function set(name, value, unit = null, metadata = {}) {
 }
 
 /**
- * Read one sensor.
+ * Read one sensor. Includes a computed `stale` flag (see STALE_MS above).
  * @param {string} name
- * @returns {{ value, unit, metadata, updatedAt } | null}
+ * @returns {{ value, unit, metadata, updatedAt, stale } | null}
  */
 function get(name) {
-  return store[name] ?? null;
+  return withStaleness(store[name]) ?? null;
 }
 
 /**
- * Read all sensors, optionally filtered by name prefix.
+ * Read all sensors, optionally filtered by name prefix. Each reading
+ * includes a computed `stale` flag.
  * @param {string} [prefix]  e.g. "window" returns all window-* sensors
  */
 function getAll(prefix = '') {
-  if (!prefix) return { ...store };
-  return Object.fromEntries(
-    Object.entries(store).filter(([k]) => k.startsWith(prefix))
-  );
+  const entries = prefix
+    ? Object.entries(store).filter(([k]) => k.startsWith(prefix))
+    : Object.entries(store);
+  return Object.fromEntries(entries.map(([k, v]) => [k, withStaleness(v)]));
 }
 
 /**
@@ -62,4 +79,14 @@ function setBulk(sensors) {
   }
 }
 
-module.exports = { set, get, getAll, setBulk };
+/**
+ * Whether a sensor is missing entirely or hasn't reported recently.
+ * @param {string} name
+ */
+function isStale(name) {
+  const reading = store[name];
+  if (!reading) return true;
+  return (Date.now() - new Date(reading.updatedAt).getTime()) > STALE_MS;
+}
+
+module.exports = { set, get, getAll, setBulk, isStale, STALE_MS };

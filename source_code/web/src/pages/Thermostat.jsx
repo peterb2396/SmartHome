@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { FaExclamationTriangle } from "react-icons/fa";
+import { FaExclamationTriangle, FaCog } from "react-icons/fa";
 import { useThermostat } from "../hooks/useThermostat";
 import ZoneCard      from "../components/ZoneCard";
 import ModeToggle    from "../components/ModeToggle";
 import ScheduleModal from "../components/ScheduleModal";
+import RatesModal    from "../components/RatesModal";
 import Spinner       from "../components/Spinner";
 
 export default function Thermostat() {
-  const { state, loading, error, offline, toggleZone, setTarget, saveSchedule, setMode, setAvailability, refetch } = useThermostat();
+  const { state, loading, error, offline, setTarget, saveSchedule, setMode, setAvailability, setRates, refetch } = useThermostat();
   const [scheduleZoneId, setScheduleZoneId] = useState(null);
+  const [showRates, setShowRates] = useState(false);
 
   if (loading) return <Spinner message="Loading thermostat..." />;
 
@@ -44,7 +46,16 @@ export default function Thermostat() {
 
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto", padding: "1.5rem" }}>
-      <h1 style={{ fontSize: "1.4rem", fontWeight: 700, color: "#1e293b", margin: "0 0 1rem" }}>Thermostat</h1>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "0 0 1rem" }}>
+        <h1 style={{ fontSize: "1.4rem", fontWeight: 700, color: "#1e293b", margin: 0 }}>Thermostat</h1>
+        <button onClick={() => setShowRates(true)} aria-label="Utility rate settings" title="Utility rate settings" style={{
+          width: 34, height: 34, borderRadius: "50%", border: "none",
+          background: "white", boxShadow: "0 1px 3px rgba(0,0,0,0.1)", color: "#64748b",
+          display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "0.95rem",
+        }}>
+          <FaCog />
+        </button>
+      </div>
 
       {offline && (
         <div style={{
@@ -72,7 +83,7 @@ export default function Thermostat() {
         }}>
           <FaExclamationTriangle />
           Not receiving data from: {unresponsiveZones.map(z => z.label).join(", ")}
-          {" "}{unresponsiveZones.length === 1 ? "sensor" : "sensors"}. Those zones won't call for heat until the hardware is wired up.
+          {" "}{unresponsiveZones.length === 1 ? "sensor" : "sensors"}. Those zones won't call for heat or cooling until the hardware is wired up.
         </div>
       )}
 
@@ -82,6 +93,7 @@ export default function Thermostat() {
           activeSource={state.activeSource}
           lastDecision={state.lastDecision}
           available={state.available}
+          crossover={state.crossover}
           onSetMode={setMode}
           onSetAvailability={setAvailability}
         />
@@ -95,7 +107,6 @@ export default function Thermostat() {
           <ZoneCard
             key={zone.id}
             zone={zone}
-            onToggle={toggleZone}
             onStep={setTarget}
             onOpenSchedule={setScheduleZoneId}
           />
@@ -107,6 +118,14 @@ export default function Thermostat() {
           zone={scheduleZone}
           onClose={() => setScheduleZoneId(null)}
           onSave={saveSchedule}
+        />
+      )}
+
+      {showRates && (
+        <RatesModal
+          rates={state.rates}
+          onClose={() => setShowRates(false)}
+          onSave={setRates}
         />
       )}
     </div>

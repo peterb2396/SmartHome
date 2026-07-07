@@ -17,6 +17,15 @@
  *   Open  (magnet absent)   = HIGH = "open"
  *
  * Add or remove sensors in the REED_SWITCHES config array below.
+ *
+ * Freshness: watch() is interrupt-driven and normally reports the instant
+ * something changes, but cheap contacts can bounce or miss an edge. Every
+ * reed switch also gets an explicit re-read once a minute (REFRESH_MS
+ * below) regardless of whether watch() has fired — this is the Pi side of
+ * the "gather every sensor in the house at least once a minute" contract;
+ * the attic ESP32 node does the equivalent on its own report timer
+ * (attic_node.ino). Both feed the same sensorStore, which is what the
+ * thermostat's safety-range check and the general sensor views both read.
  */
 
 const sensors = require('./sensorStore');
@@ -60,6 +69,9 @@ const REED_SWITCHES = [
   // { name: 'window-office', pin: 19, location: 'Office window' },
 ];
 
+const REFRESH_MS = 60000; // once-a-minute redundant re-read, see file header
+const activeReedSwitches = []; // { name, pin, bcmPin, location } — for the periodic refresh
+
 // ── Main init ────────────────────────────────────────────────────────────────
 function init() {
   if (process.platform !== 'linux' || process.env.DISABLE_GPIO) {
@@ -72,6 +84,8 @@ function init() {
   setupPIR();
   setupReedSwitches();
   setupGarageRelay();
+
+  setInterval(refreshReedSwitches, REFRESH_MS);
 }
 
 // ── PIR motion sensor ────────────────────────────────────────────────────────
@@ -131,7 +145,22 @@ function setupReedSwitch(name, bcmPin, location) {
     console.log(`[GPIO] ${name}: ${status}`);
   });
 
+  activeReedSwitches.push({ name, pin, bcmPin, location, toStatus });
   console.log(`[GPIO] Reed switch "${name}" watching on GPIO ${bcmPin}.`);
+}
+
+// Once-a-minute redundant confirmation on top of watch() — see file header.
+// Same sensors.set() call watch() makes; a no-op if nothing changed, and a
+// caught-up correction if an edge was ever missed.
+function refreshReedSwitches() {
+  for (const { name, pin, bcmPin, location, toStatus } of activeReedSwitches) {
+    try {
+      const status = toStatus(pin.readSync());
+      sensors.set(name, status, null, { location, source: 'gpio', pin: bcmPin });
+    } catch (e) {
+      console.warn(`[GPIO] Refresh failed for ${name}:`, e.message);
+    }
+  }
 }
 
 // ── Garage door relay ────────────────────────────────────────────────────────
