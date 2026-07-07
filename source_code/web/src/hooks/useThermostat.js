@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getThermostat, setThermostatZone, setZoneSchedule as apiSetZoneSchedule,
-  setThermostatMode, setThermostatRates,
+  setThermostatMode, setThermostatRates, setThermostatAvailability,
 } from "../api";
 
 const POLL_MS = 15000;
@@ -19,10 +19,15 @@ const ZONE_DEFAULTS = [
   { id: "downstairs",    label: "Downstairs" },
 ];
 
+// Same "electric is a manual backup, not a cost competitor" priority the
+// backend uses when it doesn't have cost data yet to pick a replacement from.
+const FALLBACK_PRIORITY = ["gas", "air", "electric"];
+
 function defaultState() {
   return {
     mode: "auto", activeSource: "gas", lastDecision: null,
     rates: { gasPricePerTherm: 1.5, elecPricePerKwh: 0.15, gasAfue: 0.85 },
+    available: { gas: true, electric: true, air: true },
     zones: ZONE_DEFAULTS.map(({ id, label }) => ({
       id, label, on: false, target: 68, schedule: [],
       currentTemp: null, updatedAt: null, sensorOk: false, calling: false, windowOpen: false,
@@ -67,6 +72,12 @@ export function useThermostat() {
   const fetchState = useCallback(async () => {
     try {
       const { data } = await getThermostat();
+      // A 200 with an unexpected shape (wrong route, proxy oddity, etc.) is
+      // just as dangerous as a network error — treat it the same way rather
+      // than handing the page something it'll crash trying to render.
+      if (!data || !Array.isArray(data.zones)) {
+        throw new Error("Unexpected response from thermostat service");
+      }
       applyState(data);
       setOffline(false);
       setError(null);
@@ -140,7 +151,14 @@ export function useThermostat() {
 
   const setMode = useCallback(async (mode) => {
     pausePolling();
-    applyState(prev => prev && { ...prev, mode, activeSource: mode === "auto" ? prev.activeSource : mode });
+    applyState(prev => {
+      if (!prev) return prev;
+      if (mode !== "auto" && prev.available?.[mode] === false) {
+        console.warn(`setMode: ${mode} is marked as being serviced, ignoring`);
+        return prev;
+      }
+      return { ...prev, mode, activeSource: mode === "auto" ? prev.activeSource : mode };
+    });
     try {
       await setThermostatMode(mode);
     } catch (e) {
@@ -161,9 +179,37 @@ export function useThermostat() {
     }
   }, [applyState, fetchState]);
 
+  // Mark a heat source as being serviced / back in service. Mirrors the
+  // backend's immediate-failover behavior so local-only mode (backend
+  // unreachable) behaves the same as talking to the real server.
+  const setAvailability = useCallback(async (source, available) => {
+    pausePolling();
+    applyState(prev => {
+      if (!prev) return prev;
+      const nextAvailable = { ...prev.available, [source]: available };
+      let next = { ...prev, available: nextAvailable };
+      if (!available && (prev.mode === source || prev.activeSource === source)) {
+        const costs = prev.lastDecision?.costs;
+        const eligible = Object.keys(nextAvailable).filter(s => nextAvailable[s] !== false);
+        const replacement = costs
+          ? eligible.sort((a, b) => costs[a] - costs[b])[0]
+          : FALLBACK_PRIORITY.find(s => eligible.includes(s));
+        next = { ...next, mode: "auto", activeSource: replacement ?? prev.activeSource };
+      }
+      return next;
+    });
+    try {
+      await setThermostatAvailability(source, available);
+    } catch (e) {
+      console.warn("setAvailability: backend unreachable, kept local change:", e.message);
+    } finally {
+      fetchState();
+    }
+  }, [applyState, pausePolling, fetchState]);
+
   return {
     state, loading, error, offline,
-    toggleZone, setTarget, saveSchedule, setMode, setRates,
+    toggleZone, setTarget, saveSchedule, setMode, setRates, setAvailability,
     refetch: fetchState,
   };
 }

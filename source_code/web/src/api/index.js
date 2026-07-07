@@ -39,6 +39,7 @@ export const setThermostatZone = (id, body) => api.post(`/thermostat/zone/${id}`
 export const setZoneSchedule   = (id, schedule) => api.post(`/thermostat/zone/${id}/schedule`, { schedule });
 export const setThermostatMode = (mode) => api.post("/thermostat/mode", { mode });
 export const setThermostatRates = (rates) => api.post("/thermostat/rates", rates);
+export const setThermostatAvailability = (source, available) => api.post("/thermostat/availability", { source, available });
 
 // ── Garage ───────────────────────────────────────────────────────────────────
 export const getGarageStatus  = () => api.get("/garage/status");

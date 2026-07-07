@@ -10,6 +10,7 @@ function CarButton({ label, icon: Icon, onClick, busy, success, message, color, 
   return (
     <div style={{ flex: 1, position: "relative" }}>
       <button
+        className="car-btn"
         onClick={onClick}
         disabled={busy}
         style={{
@@ -48,8 +49,13 @@ export default function CarControls({ start, lock, unlock }) {
       <style>{`
         @keyframes pulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.02); } }
         @keyframes slideDown { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
+        @media (max-width: 480px) {
+          .car-btn { height: 72px !important; gap: 4px !important; }
+          .car-btn svg { font-size: 1.2rem !important; }
+          .car-btn span { font-size: 0.7rem !important; }
+        }
       `}</style>
-      <div style={{ display: "flex", gap: 10, marginBottom: "1.5rem" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: "1.5rem" }}>
          <CarButton label="Start Car"  icon={FaCar}      color={["#ef4444","#dc2626"]} {...start}  onClick={start.execute}  />
                 <CarButton label="Lock Car"   icon={FaLock}     color={["#3b82f6","#2563eb"]} {...lock}   onClick={lock.execute}   />
                 <CarButton label="Unlock Car" icon={FaLockOpen} color={["#f59e0b","#d97706"]} {...unlock} onClick={unlock.execute} />

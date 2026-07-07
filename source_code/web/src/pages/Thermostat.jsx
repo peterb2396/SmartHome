@@ -7,7 +7,7 @@ import ScheduleModal from "../components/ScheduleModal";
 import Spinner       from "../components/Spinner";
 
 export default function Thermostat() {
-  const { state, loading, error, offline, toggleZone, setTarget, saveSchedule, setMode, refetch } = useThermostat();
+  const { state, loading, error, offline, toggleZone, setTarget, saveSchedule, setMode, setAvailability, refetch } = useThermostat();
   const [scheduleZoneId, setScheduleZoneId] = useState(null);
 
   if (loading) return <Spinner message="Loading thermostat..." />;
@@ -81,7 +81,9 @@ export default function Thermostat() {
           mode={state.mode}
           activeSource={state.activeSource}
           lastDecision={state.lastDecision}
+          available={state.available}
           onSetMode={setMode}
+          onSetAvailability={setAvailability}
         />
       </div>
 

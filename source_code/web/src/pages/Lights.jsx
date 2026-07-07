@@ -91,12 +91,16 @@ export default function Lights() {
   if (loading) return <Spinner message="Loading your smart home..." />;
 
   return (
-    <div style={{ maxWidth: 1400, margin: "0 auto", padding: "1.5rem" }}>
+    <div className="lights-page" style={{ maxWidth: 1400, margin: "0 auto", padding: "1.5rem" }}>
       <style>{`
         .device-card-wrapper:hover .settings-button { opacity: 1 !important; }
         .settings-button:hover { background: #e2e8f0 !important; color: #1e293b !important; }
         .section-header:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.12) !important; }
         input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:#fbbf24; cursor:pointer; box-shadow:0 2px 6px rgba(251,191,36,0.4); }
+        @media (max-width: 640px) {
+          .lights-page { padding: 0.85rem !important; }
+          .section-header { height: auto !important; padding: 0.85rem 1rem !important; }
+        }
       `}</style>
 
       {/* Car controls */}

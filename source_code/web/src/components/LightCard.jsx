@@ -29,7 +29,7 @@ export default function LightCard({ device, onToggle, onPreview, onCommit, onSet
           position: "absolute", top: 12, right: 12, width: 34, height: 34,
           background: "#f1f5f9", border: "none", borderRadius: "50%",
           display: "flex", alignItems: "center", justifyContent: "center",
-          cursor: "pointer", color: "#94a3b8", opacity: 0, transition: "opacity 0.2s",
+          cursor: "pointer", color: "#94a3b8", opacity: 0.5, transition: "opacity 0.2s",
           fontSize: "0.85rem",
         }}>
           <FaCog />
