@@ -122,18 +122,16 @@ export default function ModeToggle({ mode, activeSource, lastDecision, available
           fontSize: "0.78rem", color: "#334155", background: "#f8fafc",
           border: "1px solid #e2e8f0", borderRadius: 10, padding: "0.5rem 0.7rem",
         }}>
-          {crossover.tempF != null ? (
-            <>
-              <strong>Crossover: {crossover.tempF}°F</strong> at your current rates — above it,{" "}
-              <strong>{SOURCE_LABEL[crossover.warmerIsCheaper]}</strong> is cheaper; below it,{" "}
-              <strong>{SOURCE_LABEL[crossover.colderIsCheaper]}</strong> is cheaper.
-            </>
-          ) : (
-            <>
-              <strong>{SOURCE_LABEL[crossover.warmerIsCheaper]}</strong> is cheaper than{" "}
-              {crossover.warmerIsCheaper === "gas" ? SOURCE_LABEL.air : SOURCE_LABEL.gas} at every outdoor
-              temperature, at your current rates — there's no crossover to watch for.
-            </>
+          <strong>Crossover: {crossover.tempF}°F</strong> at your current rates — above it,{" "}
+          <strong>{SOURCE_LABEL[crossover.warmerIsCheaper]}</strong> is cheaper; below it,{" "}
+          <strong>{SOURCE_LABEL[crossover.colderIsCheaper]}</strong> is cheaper.
+          {crossover.outOfRange && (
+            <div style={{ marginTop: 4, color: "#94a3b8" }}>
+              This is past the {crossover.outOfRange === "above" ? "warmest" : "coldest"} weather this model
+              covers ({crossover.modelEdge}°F, where the heat pump's real-world efficiency{" "}
+              {crossover.outOfRange === "above" ? "plateaus" : "bottoms out"}) — treat it as an estimate, not a
+              precise number.
+            </div>
           )}
         </div>
       )}

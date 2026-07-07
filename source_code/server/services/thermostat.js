@@ -20,7 +20,7 @@
  *   on:  follows the zone's weekly schedule by default. Manually nudging
  *        the target (dial drag, +/-) creates a temporary hold that lasts
  *        until the next scheduled block change, then reverts to whatever
- *        that block specifies. See resolveTarget()/currentBlockKey().
+ *        that block specifies. See resolveTarget()/nextBoundary().
  *   off: no comfort call at all — the zone drifts to whatever temperature
  *        it naturally settles at.
  *
@@ -80,8 +80,8 @@ const COOL_MODE_RELAY_PIN = 19; // basement Pi, BCM pin — placeholder, edit to
 
 const DEFAULT_SETTINGS = {
   mode: 'auto',            // 'auto' | 'gas' | 'electric' | 'air'
-  activeSource: 'gas',     // resolved source currently in use
-  lastDecision: null,      // { date, costs, avgOutdoorTempF, cheapest }
+  // activeSource is intentionally NOT stored — see resolveActiveSource().
+  lastDecision: null,      // { date, costs, avgOutdoorTempF, cheapest } — informational only
   rates: {
     gasPricePerTherm: 1.50,  // $/therm
     elecPricePerKwh: 0.15,   // $/kWh
@@ -159,15 +159,6 @@ async function saveSettings(next) {
 }
 
 // ── Schedule resolution ──────────────────────────────────────────────────────
-// A stable identity for "whichever schedule block is active right now" (or
-// null if none is) — used to detect when we've crossed into a different
-// block, which is when a manual override expires. Content-based rather than
-// an array index, so it survives the blocks being reordered.
-function currentBlockKey(schedule, now) {
-  const b = matchingBlock(schedule, now);
-  return b ? `${b.day}|${b.start}|${b.end}` : null;
-}
-
 function matchingBlock(schedule, now) {
   const dow = now.day();
   const hm = now.format('HH:mm');
@@ -177,21 +168,59 @@ function matchingBlock(schedule, now) {
   return matches.length ? matches[matches.length - 1] : null;
 }
 
-// The target actually in effect right now: a manual override (if one is set
-// AND we're still within the same block-window it was set in), else
-// whatever the schedule says for this moment, else the zone's base target.
-function resolveTarget(zoneSettings, now) {
-  const key = currentBlockKey(zoneSettings.schedule, now);
-  if (zoneSettings.override && zoneSettings.override.untilBlockKey === key) {
-    return zoneSettings.override.target;
+// When does "right now" — whichever block (or gap between blocks) we're
+// currently in — end? A manual hold created now should last exactly until
+// this absolute moment, then release. Returns an ISO string, or null if the
+// schedule has no blocks at all (nothing to hand off to, ever — hold stands
+// until manually changed again).
+//
+// This MUST be an absolute timestamp rather than a "which block/gap is this"
+// identity — a gap has no distinguishing features of its own (any gap looks
+// like any other gap), so identity-based comparison would let a hold set
+// during one gap silently reactivate during a LATER, unrelated gap once
+// enough real time had passed for it to roll around again. An absolute
+// expiry moment can only ever be crossed once, since time only moves forward.
+function nextBoundary(schedule, now) {
+  const active = matchingBlock(schedule, now);
+  if (active) {
+    const [hh, mm] = active.end.split(':').map(Number);
+    return moment(now).hours(hh).minutes(mm).seconds(0).milliseconds(0).toISOString();
   }
+  // In a gap — find the soonest upcoming block start, scanning up to a week
+  // ahead (covers day-specific blocks that haven't come around yet).
+  let soonest = null;
+  for (let dayOffset = 0; dayOffset <= 7; dayOffset++) {
+    const day = moment(now).add(dayOffset, 'days');
+    const dow = day.day();
+    for (const b of (schedule || [])) {
+      if (b.day !== 'all' && b.day !== dow) continue;
+      const [hh, mm] = b.start.split(':').map(Number);
+      const startMoment = moment(day).hours(hh).minutes(mm).seconds(0).milliseconds(0);
+      if (startMoment.isAfter(now) && (!soonest || startMoment.isBefore(soonest))) {
+        soonest = startMoment;
+      }
+    }
+  }
+  return soonest ? soonest.toISOString() : null;
+}
+
+function overrideActive(zoneSettings, now) {
+  const ov = zoneSettings.override;
+  if (!ov) return false;
+  return !ov.untilTime || moment(now).isBefore(ov.untilTime);
+}
+
+// The target actually in effect right now: a manual hold (if one is set and
+// hasn't reached its expiry moment yet), else whatever the schedule says for
+// this moment, else the zone's base target.
+function resolveTarget(zoneSettings, now) {
+  if (overrideActive(zoneSettings, now)) return zoneSettings.override.target;
   const block = matchingBlock(zoneSettings.schedule, now);
   return block ? block.target : (zoneSettings.target ?? 68);
 }
 
 function isOverridden(zoneSettings, now) {
-  const key = currentBlockKey(zoneSettings.schedule, now);
-  return !!(zoneSettings.override && zoneSettings.override.untilBlockKey === key);
+  return overrideActive(zoneSettings, now);
 }
 
 function windowsOpenForZone(zone) {
@@ -253,6 +282,14 @@ function tick() {
   // floor/ceiling is a backstop on top of ALL of this — it wins outright
   // regardless of on/off if the zone somehow ends up outside 60-75°F
   // (see updateSafetyState()).
+  //
+  // Important: resolveTarget()'s result is NEVER written back to the base
+  // `target` here. A schedule block is a purely temporary window — it must
+  // have zero lasting effect on the base value, so that once it ends (and
+  // no other block immediately follows), the zone reverts to whatever the
+  // base was before the block ever started. Only an explicit manual change
+  // (setZone) is allowed to update the base — see its comment for why a
+  // manual hold is different (it's meant to persist as the new baseline).
   for (const zone of ZONES) {
     const zs = settings.zones[zone.id];
     const rt = runtime[zone.id];
@@ -307,8 +344,9 @@ function tick() {
   // and cool at once — if any zone needs safety cooling, that wins, and
   // zone dampers that would only be open for an "air"-sourced heat call
   // stay closed this tick rather than get cold air pushed into them.
+  const activeSource = resolveActiveSource(settings);
   const anyCooling = ZONES.some(z => runtime[z.id].coolCalling);
-  const airHandlesHeat = settings.activeSource === 'air';
+  const airHandlesHeat = activeSource === 'air';
 
   for (const zone of ZONES) {
     const rt = runtime[zone.id];
@@ -316,7 +354,7 @@ function tick() {
     writeZoneRelay(zone, (rt.calling && !heatSuppressed) || rt.coolCalling);
   }
 
-  drivePlantRelays(settings, anyCooling, airHandlesHeat);
+  drivePlantRelays(settings, activeSource, anyCooling);
 }
 
 function writeZoneRelay(zone, on) {
@@ -327,8 +365,9 @@ function writeZoneRelay(zone, on) {
   }
 }
 
-function drivePlantRelays(settings, anyCooling, airHandlesHeat) {
+function drivePlantRelays(settings, activeSource, anyCooling) {
   const anyHeatCalling = ZONES.some(z => runtime[z.id].calling);
+  const airHandlesHeat = activeSource === 'air';
 
   for (const source of Object.keys(PLANT_RELAYS)) {
     let on;
@@ -339,7 +378,7 @@ function drivePlantRelays(settings, anyCooling, airHandlesHeat) {
       // this is the one place actual heating hardware gets switched on.
       on = (anyCooling || wantsHeatViaAir) && settings.available.air !== false;
     } else {
-      on = anyHeatCalling && settings.activeSource === source && settings.available[source] !== false;
+      on = anyHeatCalling && activeSource === source && settings.available[source] !== false;
     }
     plantPins[source]?.writeSync(on ? 1 : 0);
   }
@@ -363,28 +402,53 @@ function costPerUnit(source, avgOutdoorTempF, rates) {
 // wins. Purely a function of the configured rates (not the day's forecast),
 // so it's recomputed live in getState() — always current with whatever the
 // user just saved in the rates modal, nothing to cache or go stale.
+//
+// The COP curve only has real data from -10°F to 47°F (heat pumps plateau
+// above 47°F and typically don't run at all much below -10°F). When the
+// true crossover falls outside that range, we still report a number by
+// extending the line through the two nearest curve points — flagged via
+// `outOfRange` so the UI can caveat it as extrapolated — rather than
+// collapsing to a flat "always cheaper" the moment the real crossover walks
+// past the edge of the modeled data. A cent of difference in gas price can
+// legitimately push the crossover from 46.8°F to 51°F; it shouldn't look
+// like the number vanished, just that it's now off the edge of the chart.
 function computeCrossover(rates) {
   const gasCost = costPerUnit('gas', null, rates);
   const targetCop = rates.elecPricePerKwh / gasCost;
-  const best = COP_CURVE[0];                      // warmest point -> highest COP -> air cheapest here
-  const worst = COP_CURVE[COP_CURVE.length - 1];   // coldest point -> lowest COP -> air priciest here
+  const best = COP_CURVE[0];                      // warmest modeled point -> highest COP -> air cheapest here
+  const worst = COP_CURVE[COP_CURVE.length - 1];   // coldest modeled point -> lowest COP -> air priciest here
 
-  if (targetCop <= worst.cop) {
-    return { tempF: null, warmerIsCheaper: 'air', colderIsCheaper: 'air' }; // air wins even at its worst
-  }
+  const lerpTemp = (a, b, cop) => {
+    const frac = (a.cop - cop) / (a.cop - b.cop);
+    return a.temp - frac * (a.temp - b.temp);
+  };
+
+  let tempF, outOfRange = null, modelEdge = null;
   if (targetCop >= best.cop) {
-    return { tempF: null, warmerIsCheaper: 'gas', colderIsCheaper: 'gas' }; // gas wins even at air's best
-  }
-  for (let i = 0; i < COP_CURVE.length - 1; i++) {
-    const a = COP_CURVE[i], b = COP_CURVE[i + 1];
-    if (targetCop <= a.cop && targetCop >= b.cop) {
-      const frac = (a.cop - targetCop) / (a.cop - b.cop);
-      const tempF = a.temp - frac * (a.temp - b.temp);
-      return { tempF: Math.round(tempF * 10) / 10, warmerIsCheaper: 'air', colderIsCheaper: 'gas' };
+    tempF = lerpTemp(COP_CURVE[0], COP_CURVE[1], targetCop);
+    outOfRange = 'above';
+    modelEdge = best.temp;
+  } else if (targetCop <= worst.cop) {
+    tempF = lerpTemp(COP_CURVE[COP_CURVE.length - 2], COP_CURVE[COP_CURVE.length - 1], targetCop);
+    outOfRange = 'below';
+    modelEdge = worst.temp;
+  } else {
+    for (let i = 0; i < COP_CURVE.length - 1; i++) {
+      const a = COP_CURVE[i], b = COP_CURVE[i + 1];
+      if (targetCop <= a.cop && targetCop >= b.cop) {
+        tempF = lerpTemp(a, b, targetCop);
+        break;
+      }
     }
   }
-  /* istanbul ignore next -- unreachable given the two bounds checked above */
-  return { tempF: null, warmerIsCheaper: 'air', colderIsCheaper: 'gas' };
+
+  return {
+    tempF: Math.round(tempF * 10) / 10,
+    warmerIsCheaper: 'air',
+    colderIsCheaper: 'gas',
+    outOfRange,   // null | 'above' | 'below' — whether tempF is extrapolated past the modeled range
+    modelEdge,    // the modeled boundary (47 or -10) when outOfRange is set, else null
+  };
 }
 
 // Cheapest source among those not marked unavailable. Electric is the
@@ -396,6 +460,30 @@ function pickAvailableSource(costs, available) {
   return eligible.sort((a, b) => costs[a] - costs[b])[0];
 }
 
+// Which source is actually driving heat right now. In 'auto' mode this is
+// NOT a cached/persisted value — it's recomputed on every call from the
+// current rates and the last known daily forecast average, so changing a
+// rate (or marking a source unavailable) takes effect immediately and
+// can't get stuck waiting on an async decision job that may not have run
+// (or may have failed, e.g. a flaky weather API call). Only the outdoor
+// temperature average is actually weather-dependent and needs a network
+// call — that's refreshed once a day by runCostDecision(); the cost
+// comparison itself is pure arithmetic and cheap enough to redo every time.
+function resolveActiveSource(settings) {
+  if (settings.mode !== 'auto') return settings.mode;
+  const avgOutdoorTempF = settings.lastDecision?.avgOutdoorTempF ?? 40;
+  const costs = {
+    gas: costPerUnit('gas', avgOutdoorTempF, settings.rates),
+    electric: costPerUnit('electric', avgOutdoorTempF, settings.rates),
+    air: costPerUnit('air', avgOutdoorTempF, settings.rates),
+  };
+  return pickAvailableSource(costs, settings.available) ?? 'gas';
+}
+
+// Refreshes the one genuinely weather-dependent input — today's average
+// forecast temperature — and stores a same-moment cost snapshot purely for
+// the "Auto-selected for {date}..." display line. Does NOT decide
+// activeSource; that's resolveActiveSource()'s job, computed live.
 async function runCostDecision() {
   const settings = getSettings();
   const today = new Date();
@@ -413,11 +501,10 @@ async function runCostDecision() {
       electric: costPerUnit('electric', avgOutdoorTempF, settings.rates),
       air: costPerUnit('air', avgOutdoorTempF, settings.rates),
     };
-    const cheapestAvailable = pickAvailableSource(costs, settings.available) ?? settings.activeSource;
+    const cheapestAvailable = pickAvailableSource(costs, settings.available) ?? 'gas';
 
     const next = {
       ...settings,
-      activeSource: settings.mode === 'auto' ? cheapestAvailable : settings.activeSource,
       lastDecision: {
         date: moment(today).format('YYYY-MM-DD'),
         costs,
@@ -426,9 +513,9 @@ async function runCostDecision() {
       },
     };
     await saveSettings(next);
-    console.log(`[Thermostat] Cost decision: cheapest available=${cheapestAvailable}`, costs);
+    console.log(`[Thermostat] Forecast refreshed: avg ${next.lastDecision.avgOutdoorTempF}°F, cheapest=${cheapestAvailable}`, costs);
   } catch (err) {
-    console.error('[Thermostat] Cost decision error:', err.message);
+    console.error('[Thermostat] Forecast refresh error:', err.message);
   }
 }
 
@@ -443,11 +530,13 @@ async function setZone(zoneId, { target, on }) {
   if (typeof target === 'number') {
     const clamped = clampToSafetyRange(target);
     zs.target = clamped;
-    // Manually nudging the target creates a hold tied to whichever
-    // schedule block (or gap between blocks) is active right now — it
-    // stops applying as soon as we move into a different one. See
-    // resolveTarget().
-    zs.override = { target: clamped, untilBlockKey: currentBlockKey(zs.schedule, moment()) };
+    // Manually nudging the target creates a hold that lasts exactly until
+    // whichever block (or gap) is active right now ends — see
+    // nextBoundary()/resolveTarget(). Also mirrored into the base `target`
+    // above, so if the schedule is empty (nextBoundary has nothing to hand
+    // off to) the held value sticks around as the new baseline instead of
+    // reverting to whatever it was before.
+    zs.override = { target: clamped, untilTime: nextBoundary(zs.schedule, moment()) };
   }
   const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
   await saveSettings(next);
@@ -473,14 +562,8 @@ async function setMode(mode) {
   if (mode !== 'auto' && settings.available[mode] === false) {
     throw new Error(`${mode} is currently marked as being serviced and can't be selected`);
   }
-  const next = {
-    ...settings,
-    mode,
-    // A manual override takes effect immediately; 'auto' keeps whatever
-    // activeSource the last midnight decision (or an initial boot-time
-    // decision) resolved to, until the next midnight run.
-    activeSource: mode === 'auto' ? settings.activeSource : mode,
-  };
+  // activeSource is derived live by resolveActiveSource() — nothing else to store here.
+  const next = { ...settings, mode };
   await saveSettings(next);
   return next;
 }
@@ -489,33 +572,22 @@ async function setRates(rates) {
   const settings = getSettings();
   const next = { ...settings, rates: { ...settings.rates, ...rates } };
   await saveSettings(next);
-  // Re-evaluate immediately with the new rates rather than leaving
-  // activeSource pointing at whatever the last midnight/boot decision
-  // picked — otherwise editing rates has no visible effect until the next
-  // midnight cron, which reads as "it just didn't work."
-  await runCostDecision();
-  return getSettings();
+  // No re-decision needed — activeSource is resolved live from whatever
+  // rates are currently saved (see resolveActiveSource()), so this takes
+  // effect on the very next read, with no dependency on a weather API call.
+  return next;
 }
 
-// Mark a heat source as being serviced (or back in service). Taking the
-// currently-selected/active source offline fails over immediately — using
-// the last known costs, or a fixed gas > air > electric priority if we
-// haven't run a cost check yet — rather than waiting for the next manual
-// change or the midnight cron.
+// Mark a heat source as being serviced (or back in service). If it was the
+// manually-selected mode, fall back to auto rather than staying pinned to
+// something that can't actually run — auto's live cost comparison already
+// excludes unavailable sources, so no separate failover math is needed here.
 async function setAvailability(source, available) {
   if (!PLANT_RELAYS[source]) throw new Error(`Unknown source ${source}`);
   const settings = getSettings();
   const nextAvailable = { ...settings.available, [source]: available };
-  let next = { ...settings, available: nextAvailable };
-
-  if (!available && (settings.mode === source || settings.activeSource === source)) {
-    const costs = settings.lastDecision?.costs;
-    const replacement = costs
-      ? pickAvailableSource(costs, nextAvailable)
-      : ['gas', 'air', 'electric'].find(s => nextAvailable[s] !== false && s !== source);
-    next = { ...next, mode: 'auto', activeSource: replacement ?? settings.activeSource };
-  }
-
+  const nextMode = (!available && settings.mode === source) ? 'auto' : settings.mode;
+  const next = { ...settings, available: nextAvailable, mode: nextMode };
   await saveSettings(next);
   return next;
 }
@@ -524,7 +596,7 @@ function getState() {
   const settings = getSettings();
   return {
     mode: settings.mode,
-    activeSource: settings.activeSource,
+    activeSource: resolveActiveSource(settings),
     lastDecision: settings.lastDecision,
     rates: settings.rates,
     available: settings.available,
