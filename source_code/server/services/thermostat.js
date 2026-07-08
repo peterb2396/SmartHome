@@ -480,6 +480,34 @@ function computeCrossover(rates) {
   };
 }
 
+// Gas vs. heat pump cost comparison at today's actual outdoor temp average
+// (as opposed to computeCrossover(), which answers "at what temperature do
+// they tie" independent of the weather). This answers "right now, how much
+// more does the losing option cost" — e.g. "heat pump would cost 13% more
+// (ex: $100 for gas, $113 for heat pump)". Same avgOutdoorTempF fallback as
+// resolveActiveSource() so this stays in sync with whatever source is
+// actually running.
+function computeCostComparison(settings) {
+  const avgOutdoorTempF = settings.lastDecision?.avgOutdoorTempF ?? 40;
+  const gasCost = costPerUnit('gas', avgOutdoorTempF, settings.rates);
+  const airCost = costPerUnit('air', avgOutdoorTempF, settings.rates);
+  const cheaper = gasCost <= airCost ? 'gas' : 'air';
+  const cheaperCost = cheaper === 'gas' ? gasCost : airCost;
+  const pricierCost = cheaper === 'gas' ? airCost : gasCost;
+  const pricier = cheaper === 'gas' ? 'air' : 'gas';
+  const pctMoreExpensive = Math.round(((pricierCost / cheaperCost) - 1) * 100);
+  return {
+    avgOutdoorTempF,
+    cheaper,
+    pricier,
+    pctMoreExpensive,
+    // A fixed $100 basis for the cheaper source makes the comparison
+    // concrete without pretending to know the household's actual usage.
+    cheaperExampleCost: 100,
+    pricierExampleCost: Math.round(100 * (pricierCost / cheaperCost)),
+  };
+}
+
 // Cheapest source among those not marked unavailable. Electric is the
 // manual backup — it only wins here if gas/air are both down, since its
 // cost is otherwise always the highest (COP fixed at 1, see costPerUnit).
@@ -569,6 +597,10 @@ async function setZone(zoneId, { target, on }) {
   }
   const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
   await saveSettings(next);
+  // Re-evaluate right away instead of waiting up to TICK_MS for the next
+  // scheduled loop — a manual change should take effect (relay included)
+  // the moment it's saved, not on the next interval tick.
+  tick();
   return next;
 }
 
@@ -580,6 +612,10 @@ async function setZoneSchedule(zoneId, schedule) {
   const zs = { ...settings.zones[zoneId], schedule: clamped, override: null };
   const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
   await saveSettings(next);
+  // Same reasoning as setZone() — if "now" falls inside one of the blocks
+  // just saved, that target (and the relay) should take hold immediately,
+  // not whenever the next 30s tick happens to land.
+  tick();
   return next;
 }
 
@@ -631,6 +667,7 @@ function getState() {
     available: settings.available,
     safetyRange: { min: SAFETY_MIN_F, max: SAFETY_MAX_F },
     crossover: computeCrossover(settings.rates),
+    costComparison: computeCostComparison(settings),
     zones: ZONES.map(zone => {
       const zs = settings.zones[zone.id];
       // sensors.get() already computes `stale` (sensorStore.js's shared

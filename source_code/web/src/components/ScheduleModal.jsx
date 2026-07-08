@@ -42,8 +42,15 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
         boxShadow: "0 25px 50px rgba(0,0,0,0.2)", overflow: "hidden",
         maxHeight: "85vh", display: "flex", flexDirection: "column",
       }}>
+        <style>{`
+          @media (max-width: 560px) {
+            .schedule-block-row { flex-wrap: wrap; }
+            .schedule-block-row select { flex-basis: 100% !important; }
+            .schedule-target-input { flex: 0 0 64px !important; min-width: 64px !important; }
+          }
+        `}</style>
         <div style={{
-          background: "linear-gradient(135deg, #fb923c, #ea580c)",
+          background: "linear-gradient(135deg, #3b82f6, #2563eb)",
           padding: "1.25rem 1.5rem", display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
           <h2 style={{ color: "white", margin: 0, fontSize: "1.2rem", fontWeight: 700 }}>
@@ -56,17 +63,8 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
         </div>
 
         <div style={{ padding: "1.5rem", overflowY: "auto", flex: 1 }}>
-          <p style={{ color: "#94a3b8", fontSize: "0.8rem", marginTop: 0 }}>
-            Targets are limited to 60–75°F. This zone will also never be allowed to drop below 60°F or
-            rise above 75°F even outside these blocks — that's a hard safety limit, not a schedule setting.
-          </p>
-          {blocks.length === 0 && (
-            <p style={{ color: "#94a3b8", fontSize: "0.9rem" }}>
-              No schedule blocks yet — this zone will just hold its manual target. Add a block below.
-            </p>
-          )}
           {blocks.map((b, i) => (
-            <div key={i} style={{
+            <div key={i} className="schedule-block-row" style={{
               display: "flex", gap: 8, alignItems: "center", marginBottom: 10,
               background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "0.6rem",
             }}>
@@ -77,9 +75,9 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
               <input type="time" value={b.start} onChange={e => updateBlock(i, { start: e.target.value })} style={{ ...inputStyle, flex: "1.2", minWidth: 118 }} />
               <span style={{ color: "#94a3b8" }}>–</span>
               <input type="time" value={b.end} onChange={e => updateBlock(i, { end: e.target.value })} style={{ ...inputStyle, flex: "1.2", minWidth: 118 }} />
-              <input type="number" min={60} max={75} value={b.target}
+              <input type="number" min={60} max={75} value={b.target} className="schedule-target-input"
                 onChange={e => updateBlock(i, { target: Math.min(75, Math.max(60, Number(e.target.value) || 60)) })}
-                style={{ ...inputStyle, flex: "0.6", textAlign: "center" }} />
+                style={{ ...inputStyle, flex: "0 0 56px", minWidth: 56, textAlign: "center" }} />
               <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>°F</span>
               <button onClick={() => removeBlock(i)} style={{
                 background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: "0.9rem",
@@ -91,7 +89,7 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
 
           <button onClick={addBlock} style={{
             display: "flex", alignItems: "center", gap: 6, marginTop: 6,
-            background: "#fff7ed", border: "1px dashed #fb923c", color: "#c2410c",
+            background: "#f8fafc", border: "1px dashed #cbd5e1", color: "#475569",
             borderRadius: 10, padding: "0.6rem 1rem", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer",
           }}>
             <FaPlus size={12} /> Add block
@@ -100,7 +98,7 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
 
         <div style={{ display: "flex", gap: "0.75rem", padding: "1rem 1.5rem", background: "#f8fafc" }}>
           <button onClick={onClose} style={{ flex: 1, padding: "0.7rem", background: "#e2e8f0", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-          <button onClick={handleSave} style={{ flex: 1, padding: "0.7rem", background: "#ea580c", color: "white", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Save Schedule</button>
+          <button onClick={handleSave} style={{ flex: 1, padding: "0.7rem", background: "#3b82f6", color: "white", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Save Schedule</button>
         </div>
       </div>
     </div>

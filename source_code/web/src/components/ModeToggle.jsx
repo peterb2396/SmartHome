@@ -9,7 +9,7 @@ const OPTIONS = [
 const SOURCES = ["gas", "electric", "air"];
 const SOURCE_LABEL = { gas: "Gas", electric: "Electric", air: "Air (Heat Pump)" };
 
-export default function ModeToggle({ mode, activeSource, lastDecision, available, crossover, onSetMode, onSetAvailability }) {
+export default function ModeToggle({ mode, activeSource, lastDecision, available, crossover, costComparison, onSetMode, onSetAvailability }) {
   const servicedSources = SOURCES.filter(s => available?.[s] === false);
 
   return (
@@ -131,6 +131,13 @@ export default function ModeToggle({ mode, activeSource, lastDecision, available
               covers ({crossover.modelEdge}°F, where the heat pump's real-world efficiency{" "}
               {crossover.outOfRange === "above" ? "plateaus" : "bottoms out"}) — treat it as an estimate, not a
               precise number.
+            </div>
+          )}
+          {costComparison && costComparison.pctMoreExpensive > 0 && (
+            <div style={{ marginTop: 4 }}>
+              Right now (~{costComparison.avgOutdoorTempF}°F out): <strong>{SOURCE_LABEL[costComparison.pricier]}</strong> would
+              cost <strong>{costComparison.pctMoreExpensive}% more</strong> than <strong>{SOURCE_LABEL[costComparison.cheaper]}</strong> (ex:
+              ${costComparison.cheaperExampleCost} for {SOURCE_LABEL[costComparison.cheaper]}, ${costComparison.pricierExampleCost} for {SOURCE_LABEL[costComparison.pricier]}).
             </div>
           )}
         </div>

@@ -92,25 +92,56 @@ function init() {
 function setupPIR() {
   const { isAfterSunset } = require('./astro');
   const { lights }        = require('./lights');
+  const smartthings       = require('./smartthings');
 
   const FOYER_LIGHT_ID = process.env.FOYER_LIGHT_ID || '50746520-3906-4528-8473-b7735a0600e9';
-  const FOYER_ON_LEVEL = 45;
+  // 41% is deliberately not a level the Lutron Caseta wall dimmer can be set
+  // to by hand (its physical presets/ramp land on round numbers). That makes
+  // it a reliable marker for "the PIR set this light" — see the timer below,
+  // which uses it to tell a motion-triggered light apart from a person who
+  // turned the light on (or re-set its brightness) themselves.
+  const FOYER_ON_LEVEL = 41;
   const FOYER_TIMEOUT  = 45000;
 
   const pir = createPin(22, 'in', 'rising');
   let timer = null;
 
-  pir.watch((err) => {
+  pir.watch(async (err) => {
     if (err) { console.error('[GPIO] PIR error:', err); return; }
     if (!isAfterSunset()) return;
+
+    // Only take over a light that's currently off. If it's already on —
+    // whether from a previous motion trigger or someone turning it on by
+    // hand — leave it alone entirely; a person controlling their own light
+    // always wins over the motion automation.
+    let status;
+    try {
+      status = await smartthings.getDeviceStatus(FOYER_LIGHT_ID);
+    } catch (e) {
+      console.warn('[GPIO] Could not read foyer light status, skipping motion trigger:', e.message);
+      return;
+    }
+    if (status?.components?.main?.switch?.switch?.value === 'on') return;
 
     console.log('[GPIO] Motion detected — foyer light on.');
     lights([FOYER_LIGHT_ID], true, process.env.PASSWORD, FOYER_ON_LEVEL);
 
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      lights([FOYER_LIGHT_ID], false, process.env.PASSWORD);
+    timer = setTimeout(async () => {
       timer = null;
+      // Only auto-off if the brightness is still exactly what the PIR set.
+      // Any manual change since then (dimmer or app, to any other level)
+      // means a person has taken over — the timer backs off instead of
+      // fighting them.
+      let current;
+      try {
+        current = await smartthings.getDeviceStatus(FOYER_LIGHT_ID);
+      } catch (e) {
+        console.warn('[GPIO] Could not verify foyer light level before auto-off:', e.message);
+        return;
+      }
+      if (current?.components?.main?.switchLevel?.level?.value !== FOYER_ON_LEVEL) return;
+      lights([FOYER_LIGHT_ID], false, process.env.PASSWORD);
     }, FOYER_TIMEOUT);
   });
 

@@ -30,6 +30,7 @@ function defaultState() {
     available: { gas: true, electric: true, air: true },
     safetyRange: { min: 60, max: 75 },
     crossover: null,
+    costComparison: null,
     zones: ZONE_DEFAULTS.map(({ id, label }) => ({
       id, label, on: true, target: 68, schedule: [], overridden: false,
       currentTemp: null, updatedAt: null, sensorOk: false,

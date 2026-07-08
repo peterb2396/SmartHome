@@ -94,6 +94,7 @@ export default function Thermostat() {
           lastDecision={state.lastDecision}
           available={state.available}
           crossover={state.crossover}
+          costComparison={state.costComparison}
           onSetMode={setMode}
           onSetAvailability={setAvailability}
         />
