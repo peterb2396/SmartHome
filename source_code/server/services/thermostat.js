@@ -188,12 +188,33 @@ async function saveSettings(next) {
 }
 
 // ── Schedule resolution ──────────────────────────────────────────────────────
-function matchingBlock(schedule, now) {
+function dayMatches(blockDay, dow) {
+  return blockDay === 'all' || blockDay === dow;
+}
+
+// A block whose end time is not after its start time (e.g. 22:00–06:00)
+// spans midnight — it's scheduled for one calendar day but is still active
+// into the next. Plain string comparison on "now falls between start and
+// end" only works within a single day, so a wrapping block needs to be
+// checked from both sides: "started tonight" (today's date matches the
+// block's day, and we're at/after its start) or "carried over from last
+// night" (yesterday's date matched the block's day, and we're still before
+// its end).
+function blockActiveAt(b, now) {
   const dow = now.day();
   const hm = now.format('HH:mm');
-  const matches = (schedule || []).filter(
-    b => (b.day === dow || b.day === 'all') && hm >= b.start && hm < b.end
-  );
+  const wraps = b.end <= b.start;
+  if (!wraps) {
+    return dayMatches(b.day, dow) && hm >= b.start && hm < b.end;
+  }
+  const yesterday = (dow + 6) % 7;
+  const startedTonight       = dayMatches(b.day, dow) && hm >= b.start;
+  const carriedFromLastNight = dayMatches(b.day, yesterday) && hm < b.end;
+  return startedTonight || carriedFromLastNight;
+}
+
+function matchingBlock(schedule, now) {
+  const matches = (schedule || []).filter(b => blockActiveAt(b, now));
   return matches.length ? matches[matches.length - 1] : null;
 }
 
@@ -213,7 +234,15 @@ function nextBoundary(schedule, now) {
   const active = matchingBlock(schedule, now);
   if (active) {
     const [hh, mm] = active.end.split(':').map(Number);
-    return moment(now).hours(hh).minutes(mm).seconds(0).milliseconds(0).toISOString();
+    const endMoment = moment(now).hours(hh).minutes(mm).seconds(0).milliseconds(0);
+    // A wrapping block's end time (e.g. the "06:00" in 22:00–06:00) refers
+    // to tomorrow morning if we're still in tonight's portion of it — only
+    // when we've already carried over past midnight does "today at end
+    // time" mean the actual end.
+    const wraps = active.end <= active.start;
+    const hm = now.format('HH:mm');
+    if (wraps && hm >= active.start) endMoment.add(1, 'day');
+    return endMoment.toISOString();
   }
   // In a gap — find the soonest upcoming block start, scanning up to a week
   // ahead (covers day-specific blocks that haven't come around yet).
