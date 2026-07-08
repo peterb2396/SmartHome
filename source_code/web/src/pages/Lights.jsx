@@ -83,10 +83,13 @@ export default function Lights() {
   const plugsDevices      = devices.filter(d => !d.deviceTypeName?.toLowerCase().includes("samsung") && d.name?.toLowerCase().includes("switch"));
 
   const lightsByRoom = lightsDevices.reduce((acc, d) => {
-    const room = settings.lights?.[d.deviceId]?.room || "Uncategorized";
+    const room = settings.lights?.[d.deviceId]?.room?.trim() || "Uncategorized";
     (acc[room] = acc[room] || []).push(d);
     return acc;
   }, {});
+
+  const existingRooms = [...new Set(Object.values(settings.lights || {}).map(l => l.room?.trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
 
   if (loading) return <Spinner message="Loading your smart home..." />;
 
@@ -273,6 +276,7 @@ export default function Lights() {
           deviceId={modalDevice}
           settings={settings}
           users={users}
+          existingRooms={existingRooms}
           onClose={() => setModalDevice(null)}
           onSave={saveDeviceSettings}
         />

@@ -1,13 +1,20 @@
 import { useState } from "react";
 
-export default function LightSettingsModal({ deviceId, settings, users, onClose, onSave }) {
+const NEW_ROOM_VALUE = "__new__";
+
+export default function LightSettingsModal({ deviceId, settings, users, existingRooms = [], onClose, onSave }) {
   const light = settings.lights?.[deviceId] || {};
-  const [lutronId, setLutronId] = useState(light.lutronId ?? "");
-  const [owner,    setOwner]    = useState(light.owner    ?? "");
-  const [room,     setRoom]     = useState(light.room     ?? "Uncategorized");
+  const [lutronId,   setLutronId]   = useState(light.lutronId ?? "");
+  const [owner,      setOwner]      = useState(light.owner    ?? "");
+  const [room,       setRoom]       = useState(light.room     ?? "Uncategorized");
+  const [addingRoom, setAddingRoom] = useState(false);
+  const [newRoom,    setNewRoom]    = useState("");
+
+  const roomOptions = [...new Set([...existingRooms, "Uncategorized"])].sort((a, b) => a.localeCompare(b));
 
   function handleSave() {
-    onSave(deviceId, { lutronId, owner, room });
+    const finalRoom = (addingRoom ? newRoom : room).trim() || "Uncategorized";
+    onSave(deviceId, { lutronId, owner, room: finalRoom });
     onClose();
   }
 
@@ -32,8 +39,34 @@ export default function LightSettingsModal({ deviceId, settings, users, onClose,
           }}>×</button>
         </div>
         <div style={{ padding: "1.5rem" }}>
+          <div style={{ marginBottom: "1.25rem" }}>
+            <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "#1e293b", marginBottom: 6 }}>Room</label>
+            {!addingRoom ? (
+              <select
+                value={room}
+                onChange={e => {
+                  if (e.target.value === NEW_ROOM_VALUE) { setAddingRoom(true); setNewRoom(""); }
+                  else setRoom(e.target.value);
+                }}
+                style={inputStyle}>
+                {roomOptions.map(r => <option key={r} value={r}>{r}</option>)}
+                <option value={NEW_ROOM_VALUE}>+ New category…</option>
+              </select>
+            ) : (
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="text" autoFocus value={newRoom}
+                  onChange={e => setNewRoom(e.target.value)}
+                  placeholder="e.g. Living Room"
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <button type="button" onClick={() => setAddingRoom(false)} style={{
+                  padding: "0 0.9rem", background: "#e2e8f0", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer",
+                }}>Cancel</button>
+              </div>
+            )}
+          </div>
           {[
-            { label: "Room",      value: room,     onChange: setRoom,     type: "text",   placeholder: "e.g. Living Room" },
             { label: "Lutron ID", value: lutronId, onChange: setLutronId, type: "number", placeholder: "Lutron ID" },
           ].map(({ label, ...props }) => (
             <div key={label} style={{ marginBottom: "1.25rem" }}>
