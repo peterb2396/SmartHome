@@ -686,6 +686,13 @@ function getState() {
         // base fallback, whichever applies right now (see resolveTarget()).
         target: resolveTarget(zs, now),
         overridden: isOverridden(zs, now),
+        // Only meaningful while overridden is true. null both when there's
+        // no active override AND when the override has no expiry (an empty
+        // schedule — nextBoundary() has nothing to hand off to, so the hold
+        // is indefinite) — the frontend uses this to decide whether a
+        // "Manual override until next schedule" countdown makes sense to
+        // show at all.
+        overrideUntil: zs.override?.untilTime ?? null,
         schedule: zs.schedule,
         currentTemp: hasReading ? reading.value : null,
         updatedAt: reading?.updatedAt ?? null,

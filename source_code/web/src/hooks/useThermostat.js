@@ -32,7 +32,7 @@ function defaultState() {
     crossover: null,
     costComparison: null,
     zones: ZONE_DEFAULTS.map(({ id, label }) => ({
-      id, label, on: true, target: 68, schedule: [], overridden: false,
+      id, label, on: true, target: 68, schedule: [], overridden: false, overrideUntil: null,
       currentTemp: null, updatedAt: null, sensorOk: false,
       calling: false, coolCalling: false, safety: "normal", windowOpen: false,
     })),

@@ -5,10 +5,19 @@ const STEP = 1;
 const SAFETY_MIN = 60;
 const SAFETY_MAX = 75;
 
+// "2h 15m" / "45m" — omits the hours segment entirely under an hour rather
+// than showing "0h 45m".
+function formatCountdown(untilIso) {
+  const totalMinutes = Math.max(0, Math.round((new Date(untilIso).getTime() - Date.now()) / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours === 0 ? `${minutes}m` : `${hours}h ${minutes}m`;
+}
+
 export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule }) {
   const {
     id, label, on, target, currentTemp: current, calling, coolCalling,
-    safety = "normal", overridden, windowOpen,
+    safety = "normal", overridden, overrideUntil, windowOpen,
   } = zone;
   const inSafetyOverride = safety !== "normal";
 
@@ -59,13 +68,13 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule }) {
         onCommit={value => onStep(id, Math.max(SAFETY_MIN, Math.min(SAFETY_MAX, value)))}
       />
 
-      {on && overridden && !inSafetyOverride && (
+      {on && overridden && overrideUntil && !inSafetyOverride && (
         <div style={{
           display: "flex", alignItems: "center", gap: 6, width: "100%",
           background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10,
           padding: "0.5rem 0.7rem", color: "#1d4ed8", fontSize: "0.78rem", fontWeight: 600,
         }}>
-          Manual hold — resumes the schedule at the next scheduled change.
+          Manual override until next schedule: {formatCountdown(overrideUntil)}
         </div>
       )}
 
