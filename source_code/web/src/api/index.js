@@ -41,6 +41,13 @@ export const setThermostatMode = (mode) => api.post("/thermostat/mode", { mode }
 export const setThermostatRates = (rates) => api.post("/thermostat/rates", rates);
 export const setThermostatAvailability = (source, available) => api.post("/thermostat/availability", { source, available });
 
+// ── Maintenance ──────────────────────────────────────────────────────────────
+export const getMaintenance        = () => api.get("/maintenance");
+export const addMaintenanceTask    = (label, frequency) => api.post("/maintenance/task", { label, frequency });
+export const updateMaintenanceTask = (id, body) => api.patch(`/maintenance/task/${id}`, body);
+export const deleteMaintenanceTask = (id) => api.delete(`/maintenance/task/${id}`);
+export const completeMaintenanceTask = (id) => api.post(`/maintenance/task/${id}/complete`);
+
 // ── Garage ───────────────────────────────────────────────────────────────────
 export const getGarageStatus  = () => api.get("/garage/status");
 export const triggerGarage    = (duration) =>

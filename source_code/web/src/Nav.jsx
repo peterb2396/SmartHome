@@ -8,6 +8,7 @@ const LINKS = [
   { to: "/cameras", label: "Cameras"  },
   { to: "/finance", label: "Finance"  },
   { to: "/thermostat", label: "Thermostat" },
+  { to: "/maintenance", label: "Maintenance" },
   { to: "/settings",label: "Settings" },
 ];
 

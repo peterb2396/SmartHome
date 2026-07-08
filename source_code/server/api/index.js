@@ -7,6 +7,7 @@ const settings = require('../services/settings');
 const gpio     = require('../services/gpio');
 const cameraSvc = require('../services/camera');
 const thermostat = require('../services/thermostat');
+const maintenance = require('../services/maintenance');
 
 // Route modules
 const smarthome = require('./smarthome');
@@ -16,7 +17,8 @@ const auth      = require('./auth');
 const finance   = require('./finance');
 const misc      = require('./misc');
 const camera    = require('./camera');
-const thermostatRoutes = require('./thermostat');
+const thermostatRoutes  = require('./thermostat');
+const maintenanceRoutes = require('./maintenance');
 
 // Boot sequence
 (async () => {
@@ -25,6 +27,7 @@ const thermostatRoutes = require('./thermostat');
   await astro.init();
   gpio.init();
   await thermostat.init();
+  maintenance.init();
   await cameraSvc.initRecorders(); // start recording for all enabled cameras
 })();
 
@@ -36,5 +39,6 @@ router.use(finance);
 router.use(misc);
 router.use(camera);
 router.use(thermostatRoutes);
+router.use(maintenanceRoutes);
 
 module.exports = router;
