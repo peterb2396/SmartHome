@@ -9,6 +9,8 @@ import LightSettingsModal   from "../components/LightSettingsModal";
 import CarControls          from "../components/CarControls";
 import SectionHeader        from "../components/SectionHeader";
 import Spinner              from "../components/Spinner";
+import PageHeader           from "../components/PageHeader";
+import { CONTAINER_WIDE, GRID_COMPACT, GRID_WIDE, pageContainerStyle } from "../styles/tokens";
 
 // ── Sub-displays ──────────────────────────────────────────────────────────────
 
@@ -94,7 +96,8 @@ export default function Lights() {
   if (loading) return <Spinner message="Loading your smart home..." />;
 
   return (
-    <div className="lights-page" style={{ maxWidth: 1400, margin: "0 auto", padding: "1.5rem" }}>
+    <div className="lights-page" style={pageContainerStyle(CONTAINER_WIDE)}>
+      <PageHeader title="Lights" />
       <style>{`
         .device-card-wrapper:hover .settings-button { opacity: 1 !important; }
         .settings-button:hover { background: #e2e8f0 !important; color: #1e293b !important; }
@@ -133,7 +136,7 @@ export default function Lights() {
                   <span style={{ color: "#cbd5e1", fontSize: "0.8rem" }}>{expanded ? "▲" : "▼"}</span>
                 </div>
                 {expanded && (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "1rem" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_WIDE}px, 1fr))`, gap: "1rem" }}>
                     {roomDevices.map(d => (
                       <LightCard
                         key={d.deviceId} device={d}
@@ -156,7 +159,7 @@ export default function Lights() {
         icon={FaTv} count={appliancesDevices.length} accentColor="#10b981" />
 
       {showAppliances && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_WIDE}px, 1fr))`, gap: "1rem", marginBottom: "1.5rem" }}>
           {appliancesDevices.map(d => {
             const main      = d.status?.components?.main || {};
             const isOffline = main.healthCheck?.["DeviceWatch-DeviceStatus"]?.value === "offline";
@@ -205,7 +208,7 @@ export default function Lights() {
         icon={FaSun} accentColor="#f59e0b" />
 
       {showWeather && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_COMPACT}px, 1fr))`, gap: "1rem", marginBottom: "1.5rem" }}>
           <WeatherCard title="Sunrise" pairs={[
             { icon: FaSun,   bg: "#fef3c7", time: settings.sunrise },
             { icon: FaMoon,  bg: "#f3f0ff", time: settings.sunset  },
@@ -222,7 +225,7 @@ export default function Lights() {
         icon={FaPlug} count={plugsDevices.length} accentColor="#8b5cf6" />
 
       {showPlugs && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_COMPACT}px, 1fr))`, gap: "1rem", marginBottom: "1.5rem" }}>
           {plugsDevices.map(d => {
             const main      = d.status?.components?.main || {};
             const isOn      = main.switch?.switch?.value === "on";

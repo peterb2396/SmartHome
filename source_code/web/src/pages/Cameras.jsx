@@ -1,155 +1,19 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getCameras, addCamera, updateCamera, deleteCamera,
-  getCameraSnapshot, startCameraRecord, stopCameraRecord,
-  getCameraRecordings, streamRecordingUrl, deleteRecording, getCameraStorage,
+  getCameraSnapshot,startCameraRecord, stopCameraRecord,
+  getCameraRecordings, streamRecordingUrl, deleteRecording,
 } from "../api";
-import { formatDate, formatRelativeTime } from "../utils";
+import { formatDate } from "../utils";
 import Spinner from "../components/Spinner";
+import PageHeader from "../components/PageHeader";
+import { useSettings } from "../hooks/useSettings";
+import CameraTile, { iconBtn } from "../components/CameraTile";
+import { CONTAINER_WIDE, GRID_WIDE, pageContainerStyle } from "../styles/tokens";
 import {
-  FaVideo, FaVideoSlash, FaPlus, FaTrash, FaCog, FaPlay,
-  FaStop, FaDownload, FaSync, FaHdd, FaHistory, FaCamera,
+  FaVideoSlash, FaPlus, FaTrash, FaPlay,
+  FaDownload, FaSync, FaHdd, FaHistory, FaCamera,
 } from "react-icons/fa";
-
-// ── Storage bar ───────────────────────────────────────────────────────────────
-function StorageBar({ used, max }) {
-  const pct = Math.min(100, Math.round((used / (max * 1024)) * 100)) || 0;
-  const color = pct > 85 ? "#ef4444" : pct > 60 ? "#f59e0b" : "#10b981";
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "#64748b", marginBottom: 4 }}>
-        <span>{(used / 1024).toFixed(1)} GB used</span>
-        <span>{max} GB max</span>
-      </div>
-      <div style={{ height: 6, background: "#e2e8f0", borderRadius: 3, overflow: "hidden" }}>
-        <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 3, transition: "width 0.4s" }} />
-      </div>
-      <div style={{ fontSize: "0.72rem", color, marginTop: 2, fontWeight: 600 }}>{pct}% full</div>
-    </div>
-  );
-}
-
-// ── Camera card ───────────────────────────────────────────────────────────────
-function CameraCard({ camera, onSelect, onSettings, onToggleRecord }) {
-  const [snapshot, setSnapshot] = useState(null);
-  const [snapLoading, setSnapLoading] = useState(false);
-  const [storage, setStorage] = useState(null);
-
-  const fetchSnapshot = useCallback(async () => {
-    if (!camera.streamUrl && !camera.snapshotUrl) return;
-    setSnapLoading(true);
-    try {
-      const { data } = await getCameraSnapshot(camera.cameraId);
-      if (data.snapshot) setSnapshot(`data:image/jpeg;base64,${data.snapshot}`);
-    } catch {}
-    setSnapLoading(false);
-  }, [camera.cameraId, camera.streamUrl, camera.snapshotUrl]);
-
-  const fetchStorage = useCallback(async () => {
-    try {
-      const { data } = await getCameraStorage(camera.cameraId);
-      setStorage(data);
-    } catch {}
-  }, [camera.cameraId]);
-
-  useEffect(() => {
-    fetchSnapshot();
-    fetchStorage();
-    // Refresh snapshot every 30s
-    const id = setInterval(fetchSnapshot, 30000);
-    return () => clearInterval(id);
-  }, [fetchSnapshot, fetchStorage]);
-
-  const hasStream = !!(camera.streamUrl || camera.snapshotUrl);
-
-  return (
-    <div style={{
-      background: "white", borderRadius: 16, border: "1px solid #e2e8f0",
-      boxShadow: "0 2px 8px rgba(0,0,0,0.07)", overflow: "hidden",
-      opacity: camera.enabled ? 1 : 0.55,
-    }}>
-      {/* Thumbnail / live preview */}
-      <div
-        onClick={() => hasStream && onSelect(camera)}
-        style={{
-          position: "relative", paddingBottom: "56.25%", background: "#0f172a",
-          cursor: hasStream ? "pointer" : "default",
-        }}
-      >
-        {snapshot
-          ? <img src={snapshot} alt={camera.label} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-          : (
-            <div style={{
-              position: "absolute", inset: 0, display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center", color: "#475569", gap: 8,
-            }}>
-              {snapLoading
-                ? <div style={{ width: 28, height: 28, border: "2px solid #475569", borderTop: "2px solid #94a3b8", borderRadius: "50%", animation: "spin 0.9s linear infinite" }} />
-                : <><FaVideoSlash style={{ fontSize: "2rem" }} /><span style={{ fontSize: "0.8rem" }}>{hasStream ? "No preview" : "No stream configured"}</span></>
-              }
-            </div>
-          )
-        }
-
-        {/* Recording indicator */}
-        {camera.isRecording && (
-          <div style={{
-            position: "absolute", top: 10, left: 10,
-            display: "flex", alignItems: "center", gap: 5,
-            background: "rgba(0,0,0,0.6)", borderRadius: 20, padding: "3px 8px",
-          }}>
-            <div style={{ width: 8, height: 8, background: "#ef4444", borderRadius: "50%", animation: "recPulse 1.2s ease-in-out infinite" }} />
-            <span style={{ color: "white", fontSize: "0.72rem", fontWeight: 700 }}>REC</span>
-          </div>
-        )}
-
-        {/* Play overlay */}
-        {snapshot && (
-          <div style={{
-            position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-            background: "rgba(0,0,0,0)", transition: "background 0.2s",
-          }}
-            onMouseEnter={e => e.currentTarget.style.background = "rgba(0,0,0,0.3)"}
-            onMouseLeave={e => e.currentTarget.style.background = "rgba(0,0,0,0)"}
-          >
-            <FaPlay style={{ color: "white", fontSize: "2rem", opacity: 0, transition: "opacity 0.2s" }}
-              onMouseEnter={e => e.currentTarget.style.opacity = 1}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Info row */}
-      <div style={{ padding: "1rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-          <div>
-            <h3 style={{ margin: 0, fontWeight: 700, color: "#1e293b", fontSize: "0.95rem" }}>{camera.label}</h3>
-            {camera.location && <p style={{ margin: 0, fontSize: "0.78rem", color: "#94a3b8" }}>{camera.location}</p>}
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => onSettings(camera)} title="Configure"
-              style={iconBtn("#f1f5f9", "#64748b")}>
-              <FaCog style={{ fontSize: "0.85rem" }} />
-            </button>
-            <button
-              onClick={() => onToggleRecord(camera)}
-              title={camera.isRecording ? "Stop recording" : "Start recording"}
-              style={iconBtn(camera.isRecording ? "#fef2f2" : "#f0fdf4", camera.isRecording ? "#ef4444" : "#10b981")}
-            >
-              {camera.isRecording ? <FaStop style={{ fontSize: "0.85rem" }} /> : <FaVideo style={{ fontSize: "0.85rem" }} />}
-            </button>
-            <button onClick={() => onSelect(camera)} title="View history"
-              style={iconBtn("#eff6ff", "#2563eb")}>
-              <FaHistory style={{ fontSize: "0.85rem" }} />
-            </button>
-          </div>
-        </div>
-
-        {storage && <StorageBar used={storage.usedMB} max={storage.maxGB} />}
-      </div>
-    </div>
-  );
-}
 
 // ── Live view modal ───────────────────────────────────────────────────────────
 function LiveModal({ camera, onClose }) {
@@ -444,6 +308,15 @@ export default function Cameras() {
   const [editing,     setEditing]     = useState(null);  // camera for form (null=add, obj=edit)
   const [showForm,    setShowForm]    = useState(false);
   const [deleting,    setDeleting]    = useState(null);
+  const { settings, updateSetting } = useSettings();
+
+  const pinnedCameraIds = settings.console?.pinnedCameraIds ?? [];
+  const togglePin = (camera) => {
+    const next = pinnedCameraIds.includes(camera.cameraId)
+      ? pinnedCameraIds.filter(id => id !== camera.cameraId)
+      : [...pinnedCameraIds, camera.cameraId];
+    updateSetting("console", { ...settings.console, pinnedCameraIds: next });
+  };
 
   const fetchCameras = useCallback(async () => {
     try {
@@ -485,29 +358,26 @@ export default function Cameras() {
   if (loading) return <Spinner message="Loading cameras..." />;
 
   return (
-    <div style={{ maxWidth: 1400, margin: "0 auto", padding: "1.5rem" }}>
+    <div style={pageContainerStyle(CONTAINER_WIDE)}>
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes recPulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
       `}</style>
 
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.5rem" }}>
-        <div>
-          <h1 style={{ fontSize: "1.6rem", fontWeight: 800, color: "#1e293b", margin: 0 }}>Cameras</h1>
-          <p style={{ color: "#94a3b8", margin: 0, fontSize: "0.85rem" }}>
-            {cameras.length} camera{cameras.length !== 1 ? "s" : ""} · {cameras.filter(c => c.isRecording).length} recording
-          </p>
-        </div>
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <button onClick={fetchCameras} style={headerBtn("#f1f5f9", "#64748b")}>
-            <FaSync style={{ fontSize: "0.8rem" }} /> Refresh
-          </button>
-          <button onClick={() => { setEditing(null); setShowForm(true); }} style={headerBtn("#0f172a", "white")}>
-            <FaPlus style={{ fontSize: "0.8rem" }} /> Add Camera
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Cameras"
+        subtitle={`${cameras.length} camera${cameras.length !== 1 ? "s" : ""} · ${cameras.filter(c => c.isRecording).length} recording`}
+        actions={
+          <>
+            <button onClick={fetchCameras} style={headerBtn("#f1f5f9", "#64748b")}>
+              <FaSync style={{ fontSize: "0.8rem" }} /> Refresh
+            </button>
+            <button onClick={() => { setEditing(null); setShowForm(true); }} style={headerBtn("#0f172a", "white")}>
+              <FaPlus style={{ fontSize: "0.8rem" }} /> Add Camera
+            </button>
+          </>
+        }
+      />
 
       {/* Empty state */}
       {cameras.length === 0 && (
@@ -530,21 +400,23 @@ export default function Cameras() {
       )}
 
       {/* Camera grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "1.25rem" }}>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_WIDE}px, 1fr))`, gap: "1.25rem" }}>
         {cameras.map(cam => (
           <div key={cam.cameraId} style={{ position: "relative" }}>
-            <CameraCard
+            <CameraTile
               camera={cam}
               onSelect={setSelected}
               onSettings={(c) => { setEditing(c); setShowForm(true); }}
               onToggleRecord={handleToggleRecord}
+              pinned={pinnedCameraIds.includes(cam.cameraId)}
+              onTogglePin={togglePin}
             />
             <button
               onClick={() => handleDelete(cam)}
               disabled={deleting === cam.cameraId}
               title="Delete camera"
               style={{
-                position: "absolute", top: 10, right: 10,
+                position: "absolute", top: 10, right: 52,
                 ...iconBtn("rgba(15,23,42,0.7)", "#f87171"),
                 backdropFilter: "blur(4px)",
               }}>
@@ -580,14 +452,7 @@ export default function Cameras() {
 }
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
-function iconBtn(bg, color) {
-  return {
-    width: 32, height: 32, background: bg, border: "none", borderRadius: 8,
-    display: "flex", alignItems: "center", justifyContent: "center",
-    color, cursor: "pointer", transition: "opacity 0.15s", flexShrink: 0,
-  };
-}
-
+// (iconBtn is imported from CameraTile.jsx to avoid duplicating it)
 function headerBtn(bg, color) {
   return {
     display: "flex", alignItems: "center", gap: 6, padding: "0.5rem 1rem",

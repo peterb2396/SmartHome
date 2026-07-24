@@ -8,6 +8,7 @@ import {
 } from "recharts";
 import { getMonthlyStats, getTransactions, getTransactionsByCategory } from "../api";
 import { formatCurrency, formatDate, CATEGORY_COLORS, getAccountName } from "../utils";
+import PageHeader from "../components/PageHeader";
 import "../styles/Finance.css";
 
 export default function Finance() {
@@ -202,6 +203,7 @@ export default function Finance() {
 
   return (
     <div className="finance-container">
+      <PageHeader title="Finance" subtitle="Income, expenses, and transaction history" />
       <div className="finance-header">
         <div className="net-income-cards">
           <div className="income-card">

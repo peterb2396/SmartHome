@@ -34,7 +34,11 @@ function defaultState() {
     zones: ZONE_DEFAULTS.map(({ id, label }) => ({
       id, label, on: true, target: 68, schedule: [], overridden: false, overrideUntil: null,
       currentTemp: null, updatedAt: null, sensorOk: false,
-      calling: false, coolCalling: false, safety: "normal", windowOpen: false,
+      calling: false, coolCalling: false, safety: "normal",
+      environment: {
+        humidity: { value: null, status: null }, pressure: { value: null, status: null },
+        voc: { value: null, status: null }, co2: { value: null, status: null },
+      },
     })),
   };
 }

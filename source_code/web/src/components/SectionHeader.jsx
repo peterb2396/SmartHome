@@ -1,6 +1,6 @@
 import { FaChevronDown, FaChevronUp } from "react-icons/fa";
 
-export default function SectionHeader({ title, isExpanded, onClick, icon: Icon, count, accentColor = "#3b82f6" }) {
+export default function SectionHeader({ title, isExpanded, onClick, icon: Icon, count, unitLabel = "devices", accentColor = "#3b82f6" }) {
   return (
     <div className="section-header" onClick={onClick} style={{
       display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -10,16 +10,18 @@ export default function SectionHeader({ title, isExpanded, onClick, icon: Icon, 
       height: "80px",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-        <div style={{
-          width: 44, height: 44, borderRadius: 10,
-          background: `linear-gradient(135deg, ${accentColor} 0%, ${accentColor}cc 100%)`,
-          display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: "1.1rem",
-        }}>
-          <Icon />
-        </div>
+        {Icon && (
+          <div style={{
+            width: 44, height: 44, borderRadius: 10,
+            background: `linear-gradient(135deg, ${accentColor} 0%, ${accentColor}cc 100%)`,
+            display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: "1.1rem",
+          }}>
+            <Icon />
+          </div>
+        )}
         <div>
           <h2 style={{ fontSize: "1.2rem", fontWeight: 700, color: "#1e293b", margin: 0 }}>{title}</h2>
-          {count != null && <p style={{ color: "#94a3b8", fontSize: "0.8rem", margin: 0 }}>{count} devices</p>}
+          {count != null && <p style={{ color: "#94a3b8", fontSize: "0.8rem", margin: 0 }}>{count} {unitLabel}</p>}
         </div>
       </div>
       <div style={{ color: "#cbd5e1" }}>

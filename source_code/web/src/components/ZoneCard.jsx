@@ -1,5 +1,6 @@
-import { FaCog, FaExclamationTriangle } from "react-icons/fa";
+import { FaCog, FaExclamationTriangle, FaTint, FaTachometerAlt, FaSmog, FaWind } from "react-icons/fa";
 import ThermoDial from "./ThermoDial";
+import EnvironmentRow from "./EnvironmentRow";
 
 const STEP = 1;
 const SAFETY_MIN = 60;
@@ -17,7 +18,7 @@ function formatCountdown(untilIso) {
 export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule }) {
   const {
     id, label, on, target, currentTemp: current, calling, coolCalling,
-    safety = "normal", overridden, overrideUntil, windowOpen,
+    safety = "normal", overridden, overrideUntil, environment,
   } = zone;
   const inSafetyOverride = safety !== "normal";
 
@@ -68,6 +69,19 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule }) {
         onCommit={value => onStep(id, Math.max(SAFETY_MIN, Math.min(SAFETY_MAX, value)))}
       />
 
+      {environment && (
+        <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
+          <EnvironmentRow icon={FaTint} label="Humidity" unit="%" precision={0}
+            min={0} max={100} value={environment.humidity.value} status={environment.humidity.status} />
+          <EnvironmentRow icon={FaTachometerAlt} label="Pressure" unit=" hPa" precision={0}
+            min={950} max={1050} value={environment.pressure.value} status={environment.pressure.status} />
+          <EnvironmentRow icon={FaSmog} label="VOC" unit="" precision={0}
+            min={0} max={100} value={environment.voc.value} status={environment.voc.status} />
+          <EnvironmentRow icon={FaWind} label="CO2" unit=" ppm" precision={0}
+            min={400} max={3000} value={environment.co2.value} status={environment.co2.status} />
+        </div>
+      )}
+
       {on && overridden && overrideUntil && !inSafetyOverride && (
         <div style={{
           display: "flex", alignItems: "center", gap: 6, width: "100%",
@@ -88,17 +102,6 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule }) {
           {safety === "below-min"
             ? `Below ${SAFETY_MIN}°F — forcing heat to prevent freezing, even though this zone is ${on ? "on" : "off"}.`
             : `Above ${SAFETY_MAX}°F — forcing cooling to prevent damage, even though this zone is ${on ? "on" : "off"}.`}
-        </div>
-      )}
-
-      {on && !inSafetyOverride && windowOpen && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 6, width: "100%",
-          background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10,
-          padding: "0.5rem 0.7rem", color: "#b91c1c", fontSize: "0.78rem", fontWeight: 600,
-        }}>
-          <FaExclamationTriangle />
-          Window open in this zone
         </div>
       )}
     </div>

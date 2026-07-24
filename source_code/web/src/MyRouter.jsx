@@ -6,6 +6,7 @@ import Cameras  from "./pages/Cameras";
 import Finance  from "./pages/Finance";
 import Thermostat from "./pages/Thermostat";
 import Maintenance from "./pages/Maintenance";
+import Console  from "./pages/Console";
 import Settings from "./pages/Settings";
 
 export default function MyRouter() {
@@ -26,6 +27,7 @@ export default function MyRouter() {
           <Route path="finance"  element={<Finance  />} />
           <Route path="thermostat" element={<Thermostat />} />
           <Route path="maintenance" element={<Maintenance />} />
+          <Route path="console" element={<Console />} />
           <Route path="settings" element={<Settings />} />
         </Routes>
       </div>

@@ -4,6 +4,8 @@ import { useMaintenance } from "../hooks/useMaintenance";
 import MaintenanceTaskCard  from "../components/MaintenanceTaskCard";
 import MaintenanceTaskModal from "../components/MaintenanceTaskModal";
 import Spinner from "../components/Spinner";
+import PageHeader from "../components/PageHeader";
+import { CONTAINER_MEDIUM, pageContainerStyle } from "../styles/tokens";
 
 export default function Maintenance() {
   const { state, loading, error, addTask, editTask, removeTask, completeTask } = useMaintenance();
@@ -21,23 +23,21 @@ export default function Maintenance() {
   }
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "1.5rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: "1.4rem", color: "#1e293b" }}>Maintenance</h1>
-          <p style={{ margin: "2px 0 0", color: "#94a3b8", fontSize: "0.85rem" }}>
-            Routine home upkeep — you'll get a weekly reminder for anything due until it's checked off.
-          </p>
-        </div>
-        <button onClick={() => setModalTask({})} style={{
-          display: "flex", alignItems: "center", gap: 8,
-          background: "#3b82f6", color: "white", border: "none",
-          borderRadius: 10, padding: "0.65rem 1.1rem", fontWeight: 600, fontSize: "0.88rem",
-          cursor: "pointer", whiteSpace: "nowrap",
-        }}>
-          <FaPlus size={12} /> Add Task
-        </button>
-      </div>
+    <div style={pageContainerStyle(CONTAINER_MEDIUM)}>
+      <PageHeader
+        title="Maintenance"
+        subtitle="Routine home upkeep — you'll get a weekly reminder for anything due until it's checked off."
+        actions={
+          <button onClick={() => setModalTask({})} style={{
+            display: "flex", alignItems: "center", gap: 8,
+            background: "#3b82f6", color: "white", border: "none",
+            borderRadius: 10, padding: "0.65rem 1.1rem", fontWeight: 600, fontSize: "0.88rem",
+            cursor: "pointer", whiteSpace: "nowrap",
+          }}>
+            <FaPlus size={12} /> Add Task
+          </button>
+        }
+      />
 
       {error && (
         <div style={{

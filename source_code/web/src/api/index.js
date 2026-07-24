@@ -48,10 +48,17 @@ export const updateMaintenanceTask = (id, body) => api.patch(`/maintenance/task/
 export const deleteMaintenanceTask = (id) => api.delete(`/maintenance/task/${id}`);
 export const completeMaintenanceTask = (id) => api.post(`/maintenance/task/${id}/complete`);
 
-// ── Garage ───────────────────────────────────────────────────────────────────
-export const getGarageStatus  = () => api.get("/garage/status");
-export const triggerGarage    = (duration) =>
-  api.post("/garage/trigger", { password: token(), duration });
+// ── Console ──────────────────────────────────────────────────────────────────
+export const getConsoleNodes    = () => api.get("/console/nodes");
+export const configureConsoleNode = (uniqueId, body) => api.post(`/console/nodes/${uniqueId}/configure`, body);
+export const deleteConsoleNode  = (uniqueId) => api.delete(`/console/nodes/${uniqueId}`);
+export const getMonitorZones    = () => api.get("/console/monitor-zones");
+export const getRecentLogs      = () => api.get("/console/logs/recent", { headers: { Authorization: `Bearer ${token()}` } });
+export const logsStreamUrl      = () => `${api.defaults.baseURL}/console/logs/stream?token=${encodeURIComponent(token() || "")}`;
+export const getGpioMap         = () => api.get("/console/gpio-map");
+export const upsertGpioPin      = (pin) => api.post("/console/gpio-map", pin);
+export const deleteGpioPin      = (pin) => api.delete(`/console/gpio-map/${pin}`);
+export const getConsoleFaults   = () => api.get("/console/faults");
 
 // ── Finance ──────────────────────────────────────────────────────────────────
 export const getMonthlyStats  = () => api.get("/monthly-stats");

@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { getSettings, putSetting, arrive, leave } from "../api";
+import PageHeader from "../components/PageHeader";
+import { colors, card, CONTAINER_NARROW, pageContainerStyle } from "../styles/tokens";
 
 const LABEL_MAP = {
   temp_lights:      "Temporary Lights",
@@ -47,11 +49,11 @@ export default function Settings() {
   );
 
   return (
-    <div style={{ maxWidth: 700, margin: "0 auto", padding: "1.5rem" }}>
-      <h1 style={{ fontSize: "1.6rem", fontWeight: 800, color: "#1e293b", marginBottom: "1.5rem" }}>Settings</h1>
+    <div style={pageContainerStyle(CONTAINER_NARROW)}>
+      <PageHeader title="Settings" />
 
       {/* Settings list */}
-      <div style={card}>
+      <div style={cardStyle}>
         <h2 style={cardTitle}>Manage Settings</h2>
         <div>
           {filteredKeys.map(key => (
@@ -85,7 +87,7 @@ export default function Settings() {
       </div>
 
       {/* Presence simulation */}
-      <div style={{ ...card, marginTop: "1.25rem" }}>
+      <div style={{ ...cardStyle, marginTop: "1.25rem" }}>
         <h2 style={cardTitle}>Simulate Transit</h2>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
@@ -100,16 +102,13 @@ export default function Settings() {
   );
 }
 
-const card = {
-  background: "white", borderRadius: 14, border: "1px solid #e2e8f0",
-  boxShadow: "0 1px 3px rgba(0,0,0,0.07)", padding: "1.5rem",
-};
-const cardTitle = { fontSize: "1rem", fontWeight: 700, color: "#1e293b", marginBottom: "1rem" };
+const cardStyle = { ...card, padding: "1.5rem" };
+const cardTitle = { fontSize: "1rem", fontWeight: 700, color: colors.textPrimary, marginBottom: "1rem" };
 const inputStyle = {
-  padding: "0.6rem 0.9rem", background: "#f8fafc", border: "1px solid #e2e8f0",
+  padding: "0.6rem 0.9rem", background: colors.surface, border: `1px solid ${colors.border}`,
   borderRadius: 8, fontSize: "0.9rem", outline: "none", boxSizing: "border-box",
 };
 const btnPrimary = {
-  padding: "0.6rem 1rem", background: "#3b82f6", color: "white",
+  padding: "0.6rem 1rem", background: colors.accent, color: "white",
   border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
 };

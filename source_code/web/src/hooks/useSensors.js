@@ -1,25 +1,20 @@
 import { useState, useEffect, useCallback } from "react";
-import { getAllSensors, getGarageStatus, triggerGarage, getCarStatus } from "../api";
+import { getAllSensors, getCarStatus } from "../api";
 
 const SENSOR_POLL_MS = 15000;
 
 export function useSensors() {
-  const [sensors,     setSensors]     = useState({});
-  const [garage,      setGarage]      = useState(null);
-  const [carStatus,   setCarStatus]   = useState(null);  // { value: "on"|"off"|"unknown", updatedAt }
-  const [loading,     setLoading]     = useState(true);
-  const [triggerBusy, setTriggerBusy] = useState(false);
-  const [triggerMsg,  setTriggerMsg]  = useState("");
+  const [sensors,   setSensors]   = useState({});
+  const [carStatus, setCarStatus] = useState(null);  // { value: "on"|"off"|"unknown", updatedAt }
+  const [loading,   setLoading]   = useState(true);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [sensorsRes, garageRes, carRes] = await Promise.all([
+      const [sensorsRes, carRes] = await Promise.all([
         getAllSensors(),
-        getGarageStatus(),
         getCarStatus(),
       ]);
       setSensors(sensorsRes.data);
-      setGarage(garageRes.data);
       setCarStatus(carRes.data);
     } catch (e) {
       console.error("useSensors:", e);
@@ -34,28 +29,5 @@ export function useSensors() {
     return () => clearInterval(id);
   }, [fetchAll]);
 
-  const triggerGarageDoor = useCallback(async () => {
-    setTriggerBusy(true);
-    setTriggerMsg("");
-    try {
-      const { data } = await triggerGarage();
-      if (data.ok) {
-        setTriggerMsg("Signal sent!");
-        setTimeout(fetchAll, 1500);
-      } else {
-        setTriggerMsg(data.reason || "Failed");
-      }
-    } catch {
-      setTriggerMsg("Error communicating with server");
-    } finally {
-      setTriggerBusy(false);
-      setTimeout(() => setTriggerMsg(""), 4000);
-    }
-  }, [fetchAll]);
-
-  return {
-    sensors, garage, carStatus, loading,
-    triggerGarageDoor, triggerBusy, triggerMsg,
-    refetch: fetchAll,
-  };
+  return { sensors, carStatus, loading, refetch: fetchAll };
 }

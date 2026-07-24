@@ -1,12 +1,12 @@
-import { FaThermometerHalf, FaTint, FaWindowMaximize, FaWarehouse, FaWifi, FaSync, FaCar } from "react-icons/fa";
+import { FaThermometerHalf, FaTint, FaWifi, FaSync, FaCar } from "react-icons/fa";
 import { useSensors } from "../hooks/useSensors";
 import { formatRelativeTime } from "../utils";
 import Spinner from "../components/Spinner";
+import PageHeader from "../components/PageHeader";
+import { CONTAINER_MEDIUM, pageContainerStyle } from "../styles/tokens";
 
 // ── Sensor category config ────────────────────────────────────────────────────
 const CATEGORIES = [
-  { key: "garage",      label: "Garage",      icon: FaWarehouse,       color: "#6366f1", prefix: "garage"   },
-  { key: "windows",     label: "Windows",     icon: FaWindowMaximize,  color: "#0ea5e9", prefix: "window"   },
   { key: "temperature", label: "Temperature", icon: FaThermometerHalf, color: "#f97316", prefix: ["temp", "temperature"] },
   { key: "humidity",    label: "Humidity",    icon: FaTint,            color: "#14b8a6", prefix: "humidity" },
   { key: "other",       label: "Other",       icon: FaWifi,            color: "#8b5cf6", prefix: null       },
@@ -165,70 +165,6 @@ function VehicleCard({ carStatus }) {
   );
 }
 
-// ── Garage card ───────────────────────────────────────────────────────────────
-function GarageCard({ garage, onTrigger, triggerBusy, triggerMsg }) {
-  const isOpen    = garage?.value?.toLowerCase() === "open";
-  const isUnknown = !garage || garage.value === "unknown";
-
-  return (
-    <div style={{
-      background: isOpen
-        ? "linear-gradient(135deg, #fef3c7, white)"
-        : "linear-gradient(135deg, #f0fdf4, white)",
-      border: `1px solid ${isOpen ? "#fde68a" : "#bbf7d0"}`,
-      borderRadius: 14, padding: "1.5rem", marginBottom: "1.5rem",
-    }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
-          <div style={{
-            width: 52, height: 52, borderRadius: 12, display: "flex",
-            alignItems: "center", justifyContent: "center", fontSize: "1.5rem",
-            background: isOpen ? "#fbbf24" : "#10b981", color: "white",
-            boxShadow: `0 6px 18px ${isOpen ? "rgba(251,191,36,0.35)" : "rgba(16,185,129,0.35)"}`,
-          }}>
-            <FaWarehouse />
-          </div>
-          <div>
-            <h3 style={{ margin: 0, fontWeight: 700, color: "#1e293b" }}>Garage Door</h3>
-            <p style={{ margin: 0, fontSize: "0.8rem", color: "#94a3b8" }}>
-              {isUnknown ? "Status unknown" : `Last updated ${formatRelativeTime(garage.updatedAt)}`}
-            </p>
-          </div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          {isUnknown
-            ? <span style={{ color: "#94a3b8", fontWeight: 600 }}>Unknown</span>
-            : <StatusBadge value={garage.value} />
-          }
-        </div>
-      </div>
-
-      <div style={{ marginTop: "1.25rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
-        <button
-          onClick={onTrigger}
-          disabled={triggerBusy}
-          style={{
-            padding: "0.65rem 1.5rem", border: "none", borderRadius: 10, fontWeight: 700,
-            cursor: triggerBusy ? "not-allowed" : "pointer", transition: "all 0.2s",
-            background: isOpen ? "#ef4444" : "#10b981", color: "white", fontSize: "0.9rem",
-            boxShadow: `0 4px 12px ${isOpen ? "rgba(239,68,68,0.3)" : "rgba(16,185,129,0.3)"}`,
-            opacity: triggerBusy ? 0.7 : 1,
-          }}>
-          {triggerBusy ? "Sending..." : isOpen ? "Close Door" : "Open Door"}
-        </button>
-        {triggerMsg && (
-          <span style={{
-            fontSize: "0.82rem", fontWeight: 600,
-            color: triggerMsg.includes("Error") ? "#dc2626" : "#059669",
-          }}>
-            {triggerMsg}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ── Category card ─────────────────────────────────────────────────────────────
 function CategoryCard({ category, sensors: list }) {
   if (list.length === 0) return null;
@@ -267,10 +203,7 @@ function CategoryCard({ category, sensors: list }) {
 
 // ── Main Sensors page ─────────────────────────────────────────────────────────
 export default function Sensors() {
-  const {
-    sensors, garage, carStatus, loading,
-    triggerGarageDoor, triggerBusy, triggerMsg, refetch,
-  } = useSensors();
+  const { sensors, carStatus, loading, refetch } = useSensors();
 
   if (loading) return <Spinner message="Loading sensors..." />;
 
@@ -279,7 +212,7 @@ export default function Sensors() {
   const sensorCount = Object.keys(sensors).filter(k => k !== "vehicle-suburban").length;
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "1.5rem" }}>
+    <div style={pageContainerStyle(CONTAINER_MEDIUM)}>
       <style>{`
         @keyframes enginePulse {
           0%, 100% { opacity: 1; transform: scale(1); }
@@ -287,37 +220,26 @@ export default function Sensors() {
         }
       `}</style>
 
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.5rem" }}>
-        <div>
-          <h1 style={{ fontSize: "1.6rem", fontWeight: 800, color: "#1e293b", margin: 0 }}>Sensors</h1>
-          <p style={{ color: "#94a3b8", margin: 0, fontSize: "0.85rem" }}>
-            Live readings from Pi GPIO and ESP32
-          </p>
-        </div>
-        <button
-          onClick={refetch}
-          style={{
-            display: "flex", alignItems: "center", gap: 6, padding: "0.5rem 1rem",
-            background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 8,
-            cursor: "pointer", color: "#64748b", fontWeight: 600, fontSize: "0.85rem",
-          }}>
-          <FaSync style={{ fontSize: "0.8rem" }} /> Refresh
-        </button>
-      </div>
+      <PageHeader
+        title="Sensors"
+        subtitle="Live readings from the Pi and its sensor nodes"
+        actions={
+          <button
+            onClick={refetch}
+            style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "0.5rem 1rem",
+              background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 8,
+              cursor: "pointer", color: "#64748b", fontWeight: 600, fontSize: "0.85rem",
+            }}>
+            <FaSync style={{ fontSize: "0.8rem" }} /> Refresh
+          </button>
+        }
+      />
 
       {/* Vehicle status card */}
       <VehicleCard carStatus={carStatus} />
 
-      {/* Garage door card */}
-      <GarageCard
-        garage={garage}
-        onTrigger={triggerGarageDoor}
-        triggerBusy={triggerBusy}
-        triggerMsg={triggerMsg}
-      />
-
-      {/* Other sensor categories */}
+      {/* Sensor categories */}
       {sensorCount === 0 && (
         <div style={{
           textAlign: "center", padding: "3rem", color: "#94a3b8",
@@ -326,12 +248,12 @@ export default function Sensors() {
           <FaWifi style={{ fontSize: "2.5rem", marginBottom: "0.75rem", opacity: 0.4 }} />
           <p style={{ fontWeight: 600, margin: 0 }}>No sensor data yet</p>
           <p style={{ fontSize: "0.85rem", margin: "4px 0 0" }}>
-            Sensors will appear once the Pi GPIO or ESP32 starts reporting.
+            Sensors will appear once the Pi or a sensor node starts reporting.
           </p>
         </div>
       )}
 
-      {CATEGORIES.filter(c => c.key !== "garage").map(cat => (
+      {CATEGORIES.map(cat => (
         <CategoryCard
           key={cat.key}
           category={cat}

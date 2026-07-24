@@ -9,6 +9,7 @@ const LINKS = [
   { to: "/finance", label: "Finance"  },
   { to: "/thermostat", label: "Thermostat" },
   { to: "/maintenance", label: "Maintenance" },
+  { to: "/console", label: "Console" },
   { to: "/settings",label: "Settings" },
 ];
 

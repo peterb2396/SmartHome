@@ -6,6 +6,8 @@ import ModeToggle    from "../components/ModeToggle";
 import ScheduleModal from "../components/ScheduleModal";
 import RatesModal    from "../components/RatesModal";
 import Spinner       from "../components/Spinner";
+import PageHeader    from "../components/PageHeader";
+import { CONTAINER_NARROW, CONTAINER_WIDE, GRID_COMPACT, pageContainerStyle } from "../styles/tokens";
 
 export default function Thermostat() {
   const { state, loading, error, offline, setTarget, toggleZone, saveSchedule, setMode, setAvailability, setRates, refetch } = useThermostat();
@@ -19,7 +21,7 @@ export default function Thermostat() {
   // page if that assumption is ever wrong.
   if (!state) {
     return (
-      <div style={{ maxWidth: 700, margin: "3rem auto", padding: "1.5rem" }}>
+      <div style={{ ...pageContainerStyle(CONTAINER_NARROW), marginTop: "3rem" }}>
         <div style={{
           display: "flex", alignItems: "center", gap: 10,
           background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12,
@@ -45,16 +47,33 @@ export default function Thermostat() {
   const unresponsiveZones = state.zones.filter(z => !z.sensorOk);
 
   return (
-    <div style={{ maxWidth: 1400, margin: "0 auto", padding: "1.5rem" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "0 0 1rem" }}>
-        <h1 style={{ fontSize: "1.4rem", fontWeight: 700, color: "#1e293b", margin: 0 }}>Thermostat</h1>
-        <button onClick={() => setShowRates(true)} aria-label="Utility rate settings" title="Utility rate settings" style={{
-          width: 34, height: 34, borderRadius: "50%", border: "none",
-          background: "white", boxShadow: "0 1px 3px rgba(0,0,0,0.1)", color: "#64748b",
-          display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "0.95rem",
-        }}>
-          <FaCog />
-        </button>
+    <div style={pageContainerStyle(CONTAINER_WIDE)}>
+      <PageHeader
+        title="Thermostat"
+        actions={
+          <button onClick={() => setShowRates(true)} aria-label="Utility rate settings" title="Utility rate settings" style={{
+            width: 34, height: 34, borderRadius: "50%", border: "none",
+            background: "white", boxShadow: "0 1px 3px rgba(0,0,0,0.1)", color: "#64748b",
+            display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "0.95rem",
+          }}>
+            <FaCog />
+          </button>
+        }
+      />
+
+      <div style={{
+        display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_COMPACT}px, 1fr))`,
+        gap: "1.25rem", marginBottom: "1.5rem",
+      }}>
+        {state.zones.map(zone => (
+          <ZoneCard
+            key={zone.id}
+            zone={zone}
+            onStep={setTarget}
+            onToggle={toggleZone}
+            onOpenSchedule={setScheduleZoneId}
+          />
+        ))}
       </div>
 
       {offline && (
@@ -98,21 +117,6 @@ export default function Thermostat() {
           onSetMode={setMode}
           onSetAvailability={setAvailability}
         />
-      </div>
-
-      <div style={{
-        display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-        gap: "1.25rem",
-      }}>
-        {state.zones.map(zone => (
-          <ZoneCard
-            key={zone.id}
-            zone={zone}
-            onStep={setTarget}
-            onToggle={toggleZone}
-            onOpenSchedule={setScheduleZoneId}
-          />
-        ))}
       </div>
 
       {scheduleZone && (

@@ -47,8 +47,6 @@ export function formatOperatingState(operatingStateObj) {
 export function getSensorCategory(name) {
   if (name.startsWith("temp"))      return "temperature";
   if (name.startsWith("humidity"))  return "humidity";
-  if (name.startsWith("window"))    return "windows";
-  if (name.startsWith("garage"))    return "garage";
   return "other";
 }
 
