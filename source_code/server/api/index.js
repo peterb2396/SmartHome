@@ -8,6 +8,10 @@ const gpio     = require('../services/gpio');
 const cameraSvc = require('../services/camera');
 const thermostat = require('../services/thermostat');
 const maintenance = require('../services/maintenance');
+const logStream = require('../services/logStream');
+const rs485 = require('../services/rs485');
+const nodeRegistry = require('../services/nodeRegistry');
+const faultLed = require('../services/faultLed');
 
 // Route modules
 const smarthome = require('./smarthome');
@@ -19,6 +23,12 @@ const misc      = require('./misc');
 const camera    = require('./camera');
 const thermostatRoutes  = require('./thermostat');
 const maintenanceRoutes = require('./maintenance');
+const consoleRoutes     = require('./console');
+const logRoutes         = require('./logs');
+
+// Installed synchronously, before anything else logs, so the Console
+// terminal's history starts from the very first boot message.
+logStream.install();
 
 // Boot sequence
 (async () => {
@@ -28,6 +38,8 @@ const maintenanceRoutes = require('./maintenance');
   gpio.init();
   await thermostat.init();
   maintenance.init();
+  rs485.init(() => nodeRegistry.getState().configured);
+  faultLed.init();
   await cameraSvc.initRecorders(); // start recording for all enabled cameras
 })();
 
@@ -40,5 +52,7 @@ router.use(misc);
 router.use(camera);
 router.use(thermostatRoutes);
 router.use(maintenanceRoutes);
+router.use(consoleRoutes);
+router.use(logRoutes);
 
 module.exports = router;

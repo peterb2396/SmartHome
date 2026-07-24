@@ -3,8 +3,10 @@
  * ─────────────────────────────────────────────────────────────────
  * Multi-zone digital thermostat for the central air handler/condenser
  * (heating coil + heat pump + AC cooling, all one physical unit) plus a
- * totally separate gas boiler. All decision logic lives here — the attic
- * ESP32 node and the basement Pi's GPIO pins are just I/O.
+ * totally separate gas boiler. All decision logic lives here — every zone
+ * is identical hardware-wise: an RS485 node (rs485.js) reports its
+ * temperature to the Pi, and the Pi drives that zone's damper directly via
+ * two of its own relays. No ESP32/Wi-Fi node is involved anywhere anymore.
  *
  * Zones                Primary Suite, Upstairs, Office, Downstairs
  * Heat sources          gas (boiler), electric (15kW coil in the air handler),
@@ -27,15 +29,12 @@
  * The 60-75°F freeze/mold safety floor and ceiling apply UNCONDITIONALLY
  * either way — off does not mean unprotected. See updateSafetyState().
  *
- * Wiring:
- *   node: 'basement' → relay wired directly to this Pi (gpio.js createPin)
- *   node: 'attic'    → relay is on the (future) attic ESP32. Desired state
- *                       is exposed via getAtticRelayCommands() and returned
- *                       in the response body of POST /esp32/report, so the
- *                       node applies it on its next check-in. No inbound
- *                       connection to the ESP32 is needed.
- *
- * Add/remove zones or relay pins in the ZONES / PLANT_RELAYS config below.
+ * Damper actuation: each zone's damper motor takes two separate relays —
+ * one drives it open, the other drives it closed (not a single spring-
+ * return relay). The motor's spec is 60±0.5s of travel, so a transition
+ * pulses the relevant relay for DAMPER_PULSE_MS then releases it — see
+ * driveDamper(). Add/remove zones or relay pins in the ZONES /
+ * PLANT_RELAYS config below.
  */
 
 const moment      = require('moment');
@@ -62,13 +61,21 @@ const SAFETY_MIN_F = 60;
 const SAFETY_MAX_F = 75;
 
 // ── Zone / relay configuration ───────────────────────────────────────────────
-// BCM pin numbers are placeholders — edit to match actual wiring.
+// BCM pin numbers — edit to match actual wiring. Every zone is identical:
+// tempSensor is fed by that zone's RS485 node (rs485.js writes
+// `temp-<zoneId>` once the node is configured on the Console's node
+// registry with matching zoneId); openRelayPin/closeRelayPin are two
+// separate Pi relays driving the damper motor's open/close windings.
 const ZONES = [
-  { id: 'primary-suite', label: 'Primary Suite', tempSensor: 'temp-primary-suite', node: 'attic',    relayName: 'zone-primary-suite', windowSensors: ['window-primary-suite'] },
-  { id: 'upstairs',      label: 'Upstairs',       tempSensor: 'temp-upstairs',      node: 'attic',    relayName: 'zone-upstairs',       windowSensors: ['window-upstairs'] },
-  { id: 'office',        label: 'Office',         tempSensor: 'temp-office',        node: 'basement', relayPin: 17,                     windowSensors: ['window-office'] },
-  { id: 'downstairs',    label: 'Downstairs',     tempSensor: 'temp-downstairs',     node: 'basement', relayPin: 27,                     windowSensors: ['window-front', 'window-back'] },
+  { id: 'primary-suite', label: 'Primary Suite', tempSensor: 'temp-primary-suite', openRelayPin: 4,  closeRelayPin: 12 },
+  { id: 'upstairs',      label: 'Upstairs',       tempSensor: 'temp-upstairs',      openRelayPin: 13, closeRelayPin: 16 },
+  { id: 'office',        label: 'Office',         tempSensor: 'temp-office',        openRelayPin: 17, closeRelayPin: 18 },
+  { id: 'downstairs',    label: 'Downstairs',     tempSensor: 'temp-downstairs',     openRelayPin: 27, closeRelayPin: 23 },
 ];
+
+// Damper motor spec is 60±0.5s of travel — pulse a bit past the worst case
+// so it always reaches the end of travel, without running indefinitely.
+const DAMPER_PULSE_MS = 61000;
 
 const PLANT_RELAYS = { gas: 20, electric: 21, air: 26 }; // basement Pi, BCM pins — heating calls
 
@@ -159,12 +166,19 @@ function clampToSafetyRange(target) {
 // ── In-memory runtime state (ephemeral, like sensorStore) ───────────────────
 // safety: 'normal' | 'below-min' | 'above-max' — hysteresis state for the
 // hard floor/ceiling, tracked independently of the zone's own on/off state.
+// damperPosition/damperMoving track the two-relay open/close actuation —
+// see driveDamper(). damperPosition defaults 'closed': on a fresh boot we
+// have no real position feedback, and assuming closed is the safer of the
+// two wrong guesses (worst case is one redundant close pulse rather than a
+// zone silently not getting air it thinks it's getting).
 const runtime = Object.fromEntries(
-  ZONES.map(z => [z.id, { calling: false, coolCalling: false, windowOpen: false, safety: 'normal' }])
+  ZONES.map(z => [z.id, {
+    calling: false, coolCalling: false, safety: 'normal', envStatus: {},
+    damperPosition: 'closed', damperMoving: null,
+  }])
 );
-const atticRelayCommands = {}; // { relayName: boolean }
-const basementZonePins = {};   // { zoneId: GpioPin }
-const plantPins = {};          // { source: GpioPin }
+const zonePins = {};   // { zoneId: { open: GpioPin, close: GpioPin } }
+const plantPins = {};  // { source: GpioPin }
 let coolModePin = null;
 
 // ── Settings helpers ─────────────────────────────────────────────────────────
@@ -281,10 +295,6 @@ function isOverridden(zoneSettings, now) {
   return overrideActive(zoneSettings, now);
 }
 
-function windowsOpenForZone(zone) {
-  return zone.windowSensors.some(name => sensors.get(name)?.value === 'open');
-}
-
 // ── Safety floor/ceiling ──────────────────────────────────────────────────────
 // Uses the same deadband-hysteresis shape as comfort calls so it doesn't
 // short-cycle right at the boundary. Pushes on every state transition —
@@ -293,6 +303,78 @@ function windowsOpenForZone(zone) {
 // should essentially never trip, since comfort logic already keeps zones
 // well inside 60-75°F — if it does trip, something's actually wrong
 // (equipment down, sensor lag, extreme weather overwhelming capacity).
+// ── Environmental sensors (RS485 zone nodes: BME680 + SCD41) ───────────────
+// humidity is a comfort/mold-prevention band, not an acute hazard, so it
+// only has one "warn" tier. co2/voc use standard indoor-air-quality tiers.
+// Pressure has no safety implication — read and displayed, never classified.
+const ENV_RANGES = {
+  humidity: { warnLow: 30, warnHigh: 50 },  // %RH
+  co2:      { warn: 1000, danger: 2000 },   // ppm
+  voc:      { warn: 50, danger: 25 },       // 0-100 heuristic score, higher = cleaner (see rs485_node.ino)
+};
+
+function classifyEnv(type, value) {
+  if (typeof value !== 'number') return null;
+  if (type === 'humidity') {
+    return (value < ENV_RANGES.humidity.warnLow || value > ENV_RANGES.humidity.warnHigh) ? 'warn' : 'ok';
+  }
+  if (type === 'co2') {
+    if (value > ENV_RANGES.co2.danger) return 'danger';
+    if (value > ENV_RANGES.co2.warn) return 'warn';
+    return 'ok';
+  }
+  if (type === 'voc') {
+    if (value < ENV_RANGES.voc.danger) return 'danger';
+    if (value < ENV_RANGES.voc.warn) return 'warn';
+    return 'ok';
+  }
+  return null;
+}
+
+// Reads whatever an RS485 node has reported for this zone so far — keys
+// follow the same `<type>-<zoneId>` convention rs485.js writes with. Zones
+// with no node yet (or basement/attic monitor zones, which only ever get
+// temp+humidity) simply read as "no reading", same as any other unwired
+// sensor elsewhere in the app.
+function readEnvironment(zone) {
+  const env = {};
+  for (const type of ['humidity', 'pressure', 'voc', 'co2']) {
+    const r = sensors.get(`${type}-${zone.id}`);
+    const value = typeof r?.value === 'number' ? r.value : null;
+    env[type] = {
+      value,
+      updatedAt: r?.updatedAt ?? null,
+      sensorOk: value !== null && !r.stale,
+      status: classifyEnv(type, value),
+    };
+  }
+  return env;
+}
+
+// Edge-triggered, same pattern as updateSafetyState() — push once on the
+// transition into (or out of) a non-'ok' tier, not every tick while it stays
+// there. Pressure is excluded (classifyEnv always returns null for it).
+function updateEnvironmentAlerts(zone, rt, env) {
+  const LABEL = { humidity: 'Humidity', co2: 'CO2', voc: 'VOC' };
+  const UNIT = { humidity: '%', co2: 'ppm', voc: '' };
+  for (const type of ['humidity', 'co2', 'voc']) {
+    const status = env[type].status;
+    if (status === null) continue; // no reading yet — leave last known state alone
+    const was = rt.envStatus[type];
+    if (status !== was) {
+      if (status !== 'ok') {
+        sendPush(
+          `${zone.label} ${LABEL[type]} is ${status === 'danger' ? 'critically ' : ''}out of range: ${env[type].value}${UNIT[type]}`,
+          `Thermostat: ${LABEL[type]} Alert`
+        );
+      } else if (was) {
+        sendPush(`${zone.label} ${LABEL[type]} is back in a normal range.`, 'Thermostat: Resolved');
+      }
+    }
+    rt.envStatus[type] = status;
+  }
+}
+
 function updateSafetyState(zone, rt, currentTemp, settings) {
   if (currentTemp === null) return; // no data — can't evaluate, leave last known state
   const was = rt.safety;
@@ -351,12 +433,12 @@ function tick() {
   for (const zone of ZONES) {
     const zs = settings.zones[zone.id];
     const rt = runtime[zone.id];
-    rt.windowOpen = windowsOpenForZone(zone);
 
     const reading = sensors.get(zone.tempSensor);
     const currentTemp = typeof reading?.value === 'number' ? reading.value : null;
 
     updateSafetyState(zone, rt, currentTemp, settings);
+    updateEnvironmentAlerts(zone, rt, readEnvironment(zone));
 
     if (currentTemp === null) {
       // No sensor data — fail safe, don't call for anything.
@@ -385,17 +467,8 @@ function tick() {
     if (rt.safety === 'below-min') { heatCall = true; coolCall = false; }
     else if (rt.safety === 'above-max') { coolCall = true; heatCall = false; }
 
-    const wasCalling = rt.calling;
-    const wasCooling = rt.coolCalling;
     rt.calling = heatCall;
     rt.coolCalling = coolCall;
-
-    if (((heatCall && !wasCalling) || (coolCall && !wasCooling)) && rt.windowOpen) {
-      sendPush(
-        `${zone.label} is turning on ${coolCall ? 'cooling' : 'heat'} but has an open window.`,
-        'Thermostat Warning'
-      );
-    }
   }
 
   // Pass 2: system-wide arbitration + relay writes. A heat pump can't heat
@@ -409,18 +482,40 @@ function tick() {
   for (const zone of ZONES) {
     const rt = runtime[zone.id];
     const heatSuppressed = rt.calling && anyCooling && airHandlesHeat;
-    writeZoneRelay(zone, (rt.calling && !heatSuppressed) || rt.coolCalling);
+    driveDamper(zone, rt, (rt.calling && !heatSuppressed) || rt.coolCalling);
   }
 
   drivePlantRelays(settings, activeSource, anyCooling);
 }
 
-function writeZoneRelay(zone, on) {
-  if (zone.node === 'basement') {
-    basementZonePins[zone.id]?.writeSync(on ? 1 : 0);
-  } else {
-    atticRelayCommands[zone.relayName] = on;
-  }
+// Two-relay damper actuation: energizing openPin drives the motor toward
+// open, closePin toward closed — there's no "hold" state, just a timed
+// pulse (DAMPER_PULSE_MS) in one direction or the other. Guards against
+// both re-triggering a pulse that's already moving the damper the right
+// way, and against a direction reversal mid-pulse (finishes the current
+// motion before reconsidering — reversing a motor mid-travel without
+// position feedback is asking for trouble).
+function driveDamper(zone, rt, wantOpen) {
+  const desired = wantOpen ? 'open' : 'closed';
+  if (rt.damperPosition === desired || rt.damperMoving) return;
+
+  const pins = zonePins[zone.id];
+  if (!pins) return; // init() hasn't created the relay pins yet — nothing to drive
+
+  const drivePin = wantOpen ? pins.open : pins.close;
+  const otherPin = wantOpen ? pins.close : pins.open;
+
+  otherPin.writeSync(0); // hard interlock — never both relays energized at once
+  drivePin.writeSync(1);
+  rt.damperMoving = wantOpen ? 'opening' : 'closing';
+  console.log(`[Thermostat] ${zone.label} damper ${rt.damperMoving} (${DAMPER_PULSE_MS / 1000}s pulse)`);
+
+  setTimeout(() => {
+    drivePin.writeSync(0);
+    rt.damperPosition = desired;
+    rt.damperMoving = null;
+    console.log(`[Thermostat] ${zone.label} damper now ${desired}`);
+  }, DAMPER_PULSE_MS);
 }
 
 function drivePlantRelays(settings, activeSource, anyCooling) {
@@ -729,14 +824,10 @@ function getState() {
         calling: rt.calling,
         coolCalling: rt.coolCalling,
         safety: rt.safety,
-        windowOpen: rt.windowOpen,
+        environment: readEnvironment(zone),
       };
     }),
   };
-}
-
-function getAtticRelayCommands() {
-  return { ...atticRelayCommands };
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
@@ -745,13 +836,17 @@ async function init() {
     await saveSettings(DEFAULT_SETTINGS);
   }
 
+  // Explicitly de-energize every damper relay on boot — if the process
+  // ever restarted mid-pulse, this ensures we don't come up believing a
+  // relay is idle while it's actually still been sitting energized since
+  // the last run.
   for (const zone of ZONES) {
-    if (zone.node === 'basement') {
-      basementZonePins[zone.id] = gpioSvc.createPin(zone.relayPin, 'out');
-      basementZonePins[zone.id].writeSync(0);
-    } else {
-      atticRelayCommands[zone.relayName] = false;
-    }
+    zonePins[zone.id] = {
+      open: gpioSvc.createPin(zone.openRelayPin, 'out'),
+      close: gpioSvc.createPin(zone.closeRelayPin, 'out'),
+    };
+    zonePins[zone.id].open.writeSync(0);
+    zonePins[zone.id].close.writeSync(0);
   }
   for (const [source, pin] of Object.entries(PLANT_RELAYS)) {
     plantPins[source] = gpioSvc.createPin(pin, 'out');
@@ -784,6 +879,5 @@ module.exports = {
   setMode,
   setRates,
   setAvailability,
-  getAtticRelayCommands,
   ZONES,
 };

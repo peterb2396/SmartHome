@@ -2,16 +2,15 @@
  * Sensor Store
  * ─────────────────────────────────────────────────────────────────
  * Single source of truth for ALL sensor readings, regardless of
- * where they came from (Pi GPIO, ESP32 WiFi report, etc.)
+ * where they came from (Pi GPIO, RS485 node poll, etc.)
  *
  * Both gpio.js and smarthome.js import this — they share the same object.
  *
- * Freshness: every sensor (window, temp, whatever) is expected to report
- * at least once a minute — the attic ESP32 batches a report every 60s
- * (attic_node.ino), and gpio.js re-confirms every Pi-wired reed switch on
- * the same 60s cadence on top of its interrupt-driven watch(). STALE_MS
- * gives a few missed cycles of grace before a reading is flagged stale, so
- * routine jitter doesn't false-positive. Anything consuming sensor data —
+ * Freshness: every sensor (temp, humidity, whatever) is expected to report
+ * at least once a minute — rs485.js polls each configured node on that
+ * cadence. STALE_MS gives a few missed cycles of grace before a reading is
+ * flagged stale, so routine jitter doesn't false-positive. Anything
+ * consuming sensor data —
  * the general /sensors views AND the thermostat's safety-range check —
  * reads through get()/getAll() and gets the same `stale` flag for free.
  */
@@ -28,7 +27,7 @@ function withStaleness(reading) {
 
 /**
  * Write a sensor reading.
- * @param {string} name       e.g. "garage", "temp-attic", "window-north"
+ * @param {string} name       e.g. "temp-attic", "humidity-office"
  * @param {*}      value      e.g. "open", 72.4, true
  * @param {string} [unit]     e.g. "F", "%"
  * @param {Object} [metadata] any extra info e.g. { location: "attic" }
@@ -54,29 +53,13 @@ function get(name) {
 /**
  * Read all sensors, optionally filtered by name prefix. Each reading
  * includes a computed `stale` flag.
- * @param {string} [prefix]  e.g. "window" returns all window-* sensors
+ * @param {string} [prefix]  e.g. "temp" returns all temp-* sensors
  */
 function getAll(prefix = '') {
   const entries = prefix
     ? Object.entries(store).filter(([k]) => k.startsWith(prefix))
     : Object.entries(store);
   return Object.fromEntries(entries.map(([k, v]) => [k, withStaleness(v)]));
-}
-
-/**
- * Bulk-write multiple sensors at once (used by ESP32 batch report).
- * @param {Object} sensors  { name: { value, unit?, metadata? }, ... }
- */
-function setBulk(sensors) {
-  const now = new Date().toISOString();
-  for (const [name, reading] of Object.entries(sensors)) {
-    store[name] = {
-      value:     reading.value,
-      unit:      reading.unit     ?? null,
-      metadata:  reading.metadata ?? {},
-      updatedAt: now,
-    };
-  }
 }
 
 /**
@@ -89,4 +72,4 @@ function isStale(name) {
   return (Date.now() - new Date(reading.updatedAt).getTime()) > STALE_MS;
 }
 
-module.exports = { set, get, getAll, setBulk, isStale, STALE_MS };
+module.exports = { set, get, getAll, isStale, STALE_MS };

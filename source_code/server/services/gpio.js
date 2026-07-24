@@ -2,33 +2,18 @@
  * GPIO Service
  * ─────────────────────────────────────────────────────────────────
  * Handles all hardware directly wired to the Raspberry Pi:
- *   • PIR motion sensor  (GPIO 22) — foyer light automation
- *   • Garage door sensor (GPIO 24) — reed switch, reports open/closed
- *   • Window sensors     (GPIO 5, 6, 13) — reed switches, one per window
- *   • Garage door relay  (GPIO 23) — pulse to trigger door
+ *   • PIR motion sensor (GPIO 22) — foyer light automation
+ *   • Fault LED (GPIO 5 red, GPIO 6 yellow) — see faultLed.js, which owns
+ *     the blink logic but uses createPin() from here like everything else
  *
  * Pin numbering: BCM GPIO numbers.
  * onoff uses /sys/class/gpio — createPin() handles the offset.
  *
- * Reed switch wiring:
- *   One leg → GPIO pin
- *   Other leg → GND
- *   Closed (magnet present) = LOW = "closed"
- *   Open  (magnet absent)   = HIGH = "open"
- *
- * Add or remove sensors in the REED_SWITCHES config array below.
- *
- * Freshness: watch() is interrupt-driven and normally reports the instant
- * something changes, but cheap contacts can bounce or miss an edge. Every
- * reed switch also gets an explicit re-read once a minute (REFRESH_MS
- * below) regardless of whether watch() has fired — this is the Pi side of
- * the "gather every sensor in the house at least once a minute" contract;
- * the attic ESP32 node does the equivalent on its own report timer
- * (attic_node.ino). Both feed the same sensorStore, which is what the
- * thermostat's safety-range check and the general sensor views both read.
+ * No door/window reed switches or a garage relay are wired right now —
+ * removed along with all their references elsewhere in the app. Re-add
+ * following the same createPin()/watch() pattern as setupPIR() below if
+ * that hardware gets wired again.
  */
-
-const sensors = require('./sensorStore');
 
 // ── Platform-aware GPIO driver ───────────────────────────────────────────────
 const GpioDriver = (() => {
@@ -55,23 +40,6 @@ function createPin(bcmNumber, ...args) {
   return pin;
 }
 
-// ── Reed switch configuration ────────────────────────────────────────────────
-// Add a new entry here for each sensor wired directly to the Pi.
-// name     → sensor key  →  GET /sensors/<name>
-// pin      → BCM GPIO number
-// location → stored in metadata
-const REED_SWITCHES = [
-  { name: 'garage',         pin: 24, location: 'Garage door'     },
-  { name: 'window-front',   pin:  5, location: 'Front window'    },
-  { name: 'window-back',    pin:  6, location: 'Back window'     },
-  { name: 'window-bedroom', pin: 13, location: 'Bedroom window'  },
-  // Add more here:
-  // { name: 'window-office', pin: 19, location: 'Office window' },
-];
-
-const REFRESH_MS = 60000; // once-a-minute redundant re-read, see file header
-const activeReedSwitches = []; // { name, pin, bcmPin, location } — for the periodic refresh
-
 // ── Main init ────────────────────────────────────────────────────────────────
 function init() {
   if (process.platform !== 'linux' || process.env.DISABLE_GPIO) {
@@ -82,10 +50,6 @@ function init() {
   process.on('SIGINT', () => { pins.forEach(p => p.unexport()); process.exit(); });
 
   setupPIR();
-  setupReedSwitches();
-  setupGarageRelay();
-
-  setInterval(refreshReedSwitches, REFRESH_MS);
 }
 
 // ── PIR motion sensor ────────────────────────────────────────────────────────
@@ -148,89 +112,6 @@ function setupPIR() {
   console.log('[GPIO] PIR sensor active on GPIO 22.');
 }
 
-// ── Reed switches (garage door + windows) ───────────────────────────────────
-function setupReedSwitches() {
-  for (const sw of REED_SWITCHES) {
-    setupReedSwitch(sw.name, sw.pin, sw.location);
-  }
-}
-
-function setupReedSwitch(name, bcmPin, location) {
-  const pin      = createPin(bcmPin, 'in', 'both', { activeLow: false, reconfigureDirection: false });
-  const toStatus = value => (value === 0 ? 'closed' : 'open');
-
-  // Read and store initial state immediately on boot
-  try {
-    const initial = pin.readSync();
-    sensors.set(name, toStatus(initial), null, { location, source: 'gpio', pin: bcmPin });
-    console.log(`[GPIO] ${name} (GPIO ${bcmPin}): initially ${toStatus(initial)}`);
-  } catch (e) {
-    console.warn(`[GPIO] Could not read initial state of ${name}:`, e.message);
-  }
-
-  // Watch for open/close changes
-  pin.watch((err, value) => {
-    if (err) { console.error(`[GPIO] ${name} error:`, err); return; }
-    const status = toStatus(value);
-    sensors.set(name, status, null, { location, source: 'gpio', pin: bcmPin });
-    console.log(`[GPIO] ${name}: ${status}`);
-  });
-
-  activeReedSwitches.push({ name, pin, bcmPin, location, toStatus });
-  console.log(`[GPIO] Reed switch "${name}" watching on GPIO ${bcmPin}.`);
-}
-
-// Once-a-minute redundant confirmation on top of watch() — see file header.
-// Same sensors.set() call watch() makes; a no-op if nothing changed, and a
-// caught-up correction if an edge was ever missed.
-function refreshReedSwitches() {
-  for (const { name, pin, bcmPin, location, toStatus } of activeReedSwitches) {
-    try {
-      const status = toStatus(pin.readSync());
-      sensors.set(name, status, null, { location, source: 'gpio', pin: bcmPin });
-    } catch (e) {
-      console.warn(`[GPIO] Refresh failed for ${name}:`, e.message);
-    }
-  }
-}
-
-// ── Garage door relay ────────────────────────────────────────────────────────
-// Separate OUTPUT pin that pulses to physically trigger the door motor.
-// Reading the status (reed switch above) and triggering are two different pins.
-const GARAGE_RELAY_BCM = 23;
-let garageRelayPin = null;
-
-function setupGarageRelay() {
-  garageRelayPin = createPin(GARAGE_RELAY_BCM, 'out');
-  garageRelayPin.writeSync(0);
-  console.log(`[GPIO] Garage relay on GPIO ${GARAGE_RELAY_BCM}.`);
-}
-
-/**
- * Pulse the garage relay to trigger the door open/close.
- * @param {number} [durationMs=500]
- * @returns {Promise<{ok:boolean, lastKnownStatus:string}>}
- */
-function triggerGarageDoor(durationMs = 500) {
-  return new Promise((resolve, reject) => {
-    if (!garageRelayPin) {
-      resolve({ ok: false, reason: 'GPIO not available on this platform' });
-      return;
-    }
-    try {
-      garageRelayPin.writeSync(1);
-      setTimeout(() => {
-        garageRelayPin.writeSync(0);
-        const current = sensors.get('garage');
-        console.log(`[GPIO] Garage door pulsed. Last known: ${current?.value ?? 'unknown'}`);
-        resolve({ ok: true, lastKnownStatus: current?.value ?? 'unknown' });
-      }, durationMs);
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
-
 // ── Generic button helper ────────────────────────────────────────────────────
 function pressButton(pin, durationMs) {
   return new Promise(resolve => {
@@ -239,4 +120,4 @@ function pressButton(pin, durationMs) {
   });
 }
 
-module.exports = { init, createPin, triggerGarageDoor, pressButton };
+module.exports = { init, createPin, pressButton };
