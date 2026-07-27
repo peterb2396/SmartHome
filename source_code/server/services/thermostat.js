@@ -152,9 +152,8 @@ const SAFETY_MAX_F = 75;
 
 // ── I2C board addresses ──────────────────────────────────────────────────────
 // Each is a daisy-chained XL9535/PCA9535-compatible 8-channel board (see
-// i2cRelay.js) — address set via that board's A0-A2 jumpers. VERIFY against
-// actual jumper settings on first power-up; these are just this project's
-// chosen convention, trivially changed here if wired differently.
+// i2cRelay.js) — address set via that board's A0-A2 jumpers (0x20 default,
+// no jumpers bridged). Confirmed via i2cdetect against real hardware.
 const DAMPER_BOARD = 0x20;
 const AIR_HANDLER_BOARD = 0x21;
 

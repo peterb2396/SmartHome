@@ -14,9 +14,10 @@
  * which existing sensorStore key each zone's config points at. Each boiler
  * zone has its own motorized zone valve (simple energize-to-open, spring-
  * return-closed — no proportional position, unlike the air handler's
- * dampers); the circulator/burner enable relay is shared and only
- * energized while at least one zone valve is calling, with its own
- * short-cycle protection.
+ * dampers). There's no separate "burner enable" relay: the boiler's own
+ * zone valves have end switches already bused together and wired straight
+ * into the boiler's thermostat-call terminals, so the boiler fires on its
+ * own once a valve is confirmed physically open — see the wiring guide.
  *
  * This system only actually drives hardware while it's the "active" zone
  * layout — see thermostat.js's getActiveSystem()/setSystemActive() below.
@@ -27,13 +28,14 @@
  *
  * ── Hardware ──────────────────────────────────────────────────────────
  * BOILER_BOARD (0x22), a 3rd daisy-chained I2C relay board (see
- * i2cRelay.js): channel 0 Great Room zone valve, channel 1 Downstairs zone
- * valve, channel 2 Upstairs zone valve, channel 3 circulator/burner enable,
- * channels 4-7 spare. Unlike the damper board and the air handler board,
- * the user didn't specify a physical left-to-right wire order for this
- * board — this is this project's own default layout, trivially
- * reconfigured below (BOILER_BOARD / channel constants) if wired
- * differently.
+ * i2cRelay.js): channel 5 (CH6) Upstairs zone valve, channel 6 (CH7) Great
+ * Room zone valve, channel 7 (CH8) Downstairs zone valve — confirmed
+ * against real hardware wiring, only 3 relays wired on this board.
+ * Channels 0-2, 3 (CH4), and 4 are spare — CH4 was originally reserved for
+ * a "burner enable" relay, but the boiler's own zone valves have end
+ * switches already bused together and wired straight into the boiler's
+ * thermostat-call terminals (see the wiring guide), so that channel was
+ * never wired and isn't referenced by this file. Free for a future use.
  */
 
 const moment      = require('moment');
@@ -41,7 +43,6 @@ const sensors     = require('./sensorStore');
 const settingsSvc = require('./settings');
 const i2cRelay    = require('./i2cRelay');
 const scheduleUtil = require('./scheduleUtil');
-const { applyMinRunTime } = require('./shortCycle');
 const { readEnvironment, updateEnvironmentAlerts } = require('./envSensors');
 const { sendPush } = require('./mail');
 
@@ -53,11 +54,11 @@ const TICK_MS = 30000;
 const SAFETY_MIN_F = 60;
 const SAFETY_MAX_F = 75;
 
+// Confirmed via i2cdetect against real hardware (A1 jumper bridged).
 const BOILER_BOARD = 0x22;
-const CH = { GREAT_ROOM: 0, DOWNSTAIRS: 1, UPSTAIRS: 2, BOILER_ENABLE: 3 };
-
-const MIN_BOILER_ON_MS = 3 * 60 * 1000;
-const MIN_BOILER_OFF_MS = 3 * 60 * 1000;
+// Channel assignments confirmed against real wiring (CH6/7/8 — see header
+// comment above for why CH4 is spare, not "boiler enable").
+const CH = { UPSTAIRS: 5, GREAT_ROOM: 6, DOWNSTAIRS: 7 };
 
 // tempSensor: no boiler zone gets a dedicated new RS485 node. Great Room
 // AND Downstairs both read the air handler's existing "Downstairs" node —
@@ -83,7 +84,6 @@ function clampToSafetyRange(target) {
 const runtime = Object.fromEntries(
   ZONES.map(z => [z.id, { calling: false, safety: 'normal', envStatus: {} }])
 );
-const boilerState = { on: false, lastOnAt: 0, lastOffAt: 0 };
 let systemActive = false; // true only while thermostat.js's getActiveSystem() says '3zone'
 
 const { resolveTarget, isOverridden, nextBoundary } = scheduleUtil;
@@ -190,16 +190,10 @@ async function tick() {
     rt.calling = heatCall;
   }
 
-  const anyCalling = ZONES.some(z => runtime[z.id].calling);
-
   for (const zone of ZONES) {
     const on = systemActive && runtime[zone.id].calling;
     i2cRelay.setChannel(BOILER_BOARD, zone.ch, on);
   }
-
-  const wantBoilerOn = systemActive && anyCalling;
-  const on = applyMinRunTime(boilerState, wantBoilerOn, Date.now(), MIN_BOILER_ON_MS, MIN_BOILER_OFF_MS);
-  i2cRelay.setChannel(BOILER_BOARD, CH.BOILER_ENABLE, on);
 }
 
 async function setZone(zoneId, { target, on }) {
@@ -262,7 +256,6 @@ function getState() {
 
 function shutdown() {
   for (const zone of ZONES) i2cRelay.setChannel(BOILER_BOARD, zone.ch, false);
-  i2cRelay.setChannel(BOILER_BOARD, CH.BOILER_ENABLE, false);
 }
 
 async function init() {
@@ -270,10 +263,6 @@ async function init() {
     await saveSettings(DEFAULT_SETTINGS);
   }
   for (const zone of ZONES) i2cRelay.setChannel(BOILER_BOARD, zone.ch, false);
-  i2cRelay.setChannel(BOILER_BOARD, CH.BOILER_ENABLE, false);
-
-  boilerState.lastOffAt = Date.now(); // boot counts as "just turned off" for short-cycle purposes
-  boilerState.lastOnAt = 0;
 
   setInterval(() => { tick().catch(err => console.error('[Boiler] Tick error:', err.message)); }, TICK_MS);
   console.log('[Boiler] Initialized.');

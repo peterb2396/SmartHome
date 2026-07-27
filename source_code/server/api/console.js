@@ -8,6 +8,9 @@
  * GET    /console/gpio-map               — { pins, groups } reference pinout map
  * POST   /console/gpio-map               — { pin, label, direction, group, notes? } add/edit a pin
  * DELETE /console/gpio-map/:pin          — remove a pin from the map
+ * GET    /console/relay-map              — { relays, boards } reference I2C relay channel map
+ * POST   /console/relay-map              — { address, channel, label, notes? } add/edit a relay
+ * DELETE /console/relay-map/:address/:channel — remove a relay from the map
  * GET    /console/faults                 — { faults } — same list the fault LED drives off
  *
  * Pinned-camera state deliberately has no dedicated route here — it's
@@ -19,6 +22,7 @@ const router = require('express').Router();
 const nodeRegistry = require('../services/nodeRegistry');
 const monitorZones = require('../services/monitorZones');
 const gpioMap = require('../services/gpioMap');
+const relayMap = require('../services/relayMap');
 const faultsSvc = require('../services/faults');
 
 router.get('/console/nodes', (req, res) => {
@@ -66,6 +70,29 @@ router.delete('/console/gpio-map/:pin', async (req, res) => {
   try {
     await gpioMap.removePin(Number(req.params.pin));
     res.json({ ok: true, state: gpioMap.getState() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+router.get('/console/relay-map', (req, res) => {
+  res.json(relayMap.getState());
+});
+
+router.post('/console/relay-map', async (req, res) => {
+  try {
+    const { address, channel, label, notes } = req.body;
+    await relayMap.upsertRelay({ address: Number(address), channel: Number(channel), label, notes });
+    res.json({ ok: true, state: relayMap.getState() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+router.delete('/console/relay-map/:address/:channel', async (req, res) => {
+  try {
+    await relayMap.removeRelay(Number(req.params.address), Number(req.params.channel));
+    res.json({ ok: true, state: relayMap.getState() });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
   }
