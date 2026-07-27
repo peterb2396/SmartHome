@@ -2,15 +2,15 @@
  * Thermostat Service
  * ─────────────────────────────────────────────────────────────────
  * Multi-zone digital thermostat for the central air handler/condenser
- * (heating coil + heat pump + AC cooling, all one physical unit) plus a
- * totally separate gas boiler. All decision logic lives here — every zone
- * is identical hardware-wise: an RS485 node (rs485.js) reports its
- * temperature to the Pi, and the Pi drives that zone's damper directly via
- * two of its own relays. No ESP32/Wi-Fi node is involved anywhere anymore.
+ * (heating coil + heat pump + AC cooling, all one physical unit). The
+ * gas boiler is a completely separate, isolated hydronic system serving a
+ * different 3-zone layout — see boiler.js and getActiveSystem() below for
+ * how the two systems hand off to each other seasonally.
  *
  * Zones                Primary Suite, Upstairs, Office, Downstairs
- * Heat sources          gas (boiler), electric (15kW coil in the air handler),
- *                       air (heat pump mode of the condenser)
+ * Heat sources          gas (boiler — see boiler.js), electric (aux coil in
+ *                       the air handler), air (heat pump mode of the
+ *                       condenser)
  * Cooling               Always the condenser's AC/cooling mode — it's the
  *                       only equipment that can cool, so cooling never goes
  *                       through the Gas/Electric/Air heat-source selection.
@@ -29,20 +29,88 @@
  * The 60-75°F freeze/mold safety floor and ceiling apply UNCONDITIONALLY
  * either way — off does not mean unprotected. See updateSafetyState().
  *
- * Damper actuation: each zone's damper motor takes two separate relays —
- * one drives it open, the other drives it closed (not a single spring-
- * return relay). The motor's spec is 60±0.5s of travel, so a transition
- * pulses the relevant relay for DAMPER_PULSE_MS then releases it — see
- * driveDamper(). Add/remove zones or relay pins in the ZONES /
- * PLANT_RELAYS config below.
+ * ── Hardware ──────────────────────────────────────────────────────────
+ * Every zone's temperature comes from its own RS485 node (rs485.js). All
+ * relay control — zone dampers AND the air handler's 24V control wires —
+ * runs over I2C relay boards (i2cRelay.js), not direct Pi GPIO. There are
+ * two boards in play here:
+ *
+ *   DAMPER_BOARD (0x20)   8 channels, one open+close pair per zone. Channel
+ *                         order matches the physical board left-to-right:
+ *                         Primary Suite open/close, Upstairs open/close,
+ *                         Downstairs open/close, Office open/close.
+ *   AIR_HANDLER_BOARD (0x21)  8 terminal positions, one per 24V control
+ *                         wire, in the order they run left-to-right off the
+ *                         terminal strip: red(R) orange(O/B) yellow(Y1)
+ *                         green(G) blue(C) brown(Y2) white(W1) black(W2) —
+ *                         this is the ACiQ AHD's real "8-wire to 2-wire
+ *                         conventional thermostat" terminal layout (read off
+ *                         the unit's own install manual, not guessed). Y1/Y2
+ *                         are two compressor-demand stages (this is a
+ *                         variable-capacity inverter compressor); W1/W2 are
+ *                         two electric-aux-heat stages. Real 2-stage timing
+ *                         is implemented (see driveAirHandler(),
+ *                         COMPRESSOR_STAGE2_DELAY_MS/ELECTRIC_STAGE2_DELAY_MS):
+ *                         stage 1 (Y1/W1) engages immediately on a call;
+ *                         stage 2 (Y2/W2) only joins if that call outlasts
+ *                         its delay running on stage 1 alone, and always
+ *                         drops the instant stage 1 does. 6 of these 8
+ *                         terminals are real I2C-driven relay channels —
+ *                         O/B, Y1, Y2, G, W1,
+ *                         W2. R and C are NOT wired through a relay at all:
+ *                         the air handler's internal transformer supplies R
+ *                         as constant hot, and a thermostat (or this board,
+ *                         standing in for one) never generates its own
+ *                         24VAC — it only switches R through to whichever
+ *                         call wire needs it. So R lands on the CH1
+ *                         terminal purely as a junction point, physically
+ *                         jumpered (plain wire, no relay) to the COM
+ *                         terminal of the 6 switching relays; C similarly
+ *                         bypasses the relay board entirely. Nothing in
+ *                         code ever touches R or C's channel — see AH_CH's
+ *                         comment.
+ *
+ *                         IMPORTANT — this mode also needs, separately from
+ *                         anything the Pi/relay board touches: (1) the AHU's
+ *                         DIP switch SW1 position 1 set ON (all other SW1-4
+ *                         positions OFF) to actually enable 8-wire/
+ *                         conventional-thermostat fallback mode at all —
+ *                         power must be off before changing DIP switches;
+ *                         (2) a 2-wire S1/S2 Class-2 link run between the
+ *                         AHU and the outdoor condenser (ODU) — this is
+ *                         required in every mode, communicating or not, and
+ *                         is normal HVAC-installer commissioning work, not
+ *                         something this project's I2C board touches. See
+ *                         the wiring guide for both.
+ *
+ * Damper actuation is proportional, not just open/closed: each zone tracks
+ * an internal angle (0-90°), exposed as a 0-100% position. A call drives
+ * the damper to that zone's configured `balancePercent` (default 100,
+ * tunable per zone for airflow balancing — see setZoneBalance()); ending a
+ * call always drives back to a hard 0%, never left partially open. Motor
+ * spec is 60±0.5s for a full 0→100% traverse (`FULL_TRAVEL_SECONDS` per
+ * zone below) — a partial move is timed proportionally
+ * (|Δposition| / 100 * FULL_TRAVEL_SECONDS), same rate in both directions.
+ * See driveDamper().
+ *
+ * Professional-grade control: short-cycle prevention on the compressor
+ * (shortCycle.js), a reversing-valve-before-compressor sequencing delay so
+ * the valve never flips under load, fan purge after a call ends, boot-time
+ * damper homing (no position-feedback sensor exists, so every zone is
+ * driven to a known 0% on startup rather than trusting a possibly-stale
+ * remembered position), and graceful all-relays-off on SIGINT/SIGTERM.
  */
 
 const moment      = require('moment');
 const cron        = require('node-cron');
 const sensors     = require('./sensorStore');
 const settingsSvc = require('./settings');
-const gpioSvc     = require('./gpio');
+const i2cRelay    = require('./i2cRelay');
 const astro       = require('./astro');
+const boiler      = require('./boiler');
+const scheduleUtil = require('./scheduleUtil');
+const { applyMinRunTime } = require('./shortCycle');
+const { readEnvironment: readEnv, updateEnvironmentAlerts: updateEnvAlerts } = require('./envSensors');
 const { sendPush } = require('./mail');
 
 const CRON_OPTS = { scheduled: true, timezone: astro.TZ };
@@ -60,30 +128,57 @@ const TICK_MS = 30000;           // control loop cadence
 const SAFETY_MIN_F = 60;
 const SAFETY_MAX_F = 75;
 
-// ── Zone / relay configuration ───────────────────────────────────────────────
-// BCM pin numbers — edit to match actual wiring. Every zone is identical:
+// ── I2C board addresses ──────────────────────────────────────────────────────
+// Each is a daisy-chained XL9535/PCA9535-compatible 8-channel board (see
+// i2cRelay.js) — address set via that board's A0-A2 jumpers. VERIFY against
+// actual jumper settings on first power-up; these are just this project's
+// chosen convention, trivially changed here if wired differently.
+const DAMPER_BOARD = 0x20;
+const AIR_HANDLER_BOARD = 0x21;
+
+// ── Zone / damper configuration ──────────────────────────────────────────────
 // tempSensor is fed by that zone's RS485 node (rs485.js writes
 // `temp-<zoneId>` once the node is configured on the Console's node
-// registry with matching zoneId); openRelayPin/closeRelayPin are two
-// separate Pi relays driving the damper motor's open/close windings.
+// registry with matching zoneId). openCh/closeCh are DAMPER_BOARD channel
+// indexes (0-7) — order matches the physical board's left-to-right wiring.
+// fullTravelSeconds is that zone's motor spec for a complete 0→100% sweep
+// (60±0.5s nominal); tune per zone here if real motors/manufacturing
+// variance calls for it — this is a hardware constant, not a runtime
+// setting, same as openCh/closeCh.
 const ZONES = [
-  { id: 'primary-suite', label: 'Primary Suite', tempSensor: 'temp-primary-suite', openRelayPin: 4,  closeRelayPin: 12 },
-  { id: 'upstairs',      label: 'Upstairs',       tempSensor: 'temp-upstairs',      openRelayPin: 13, closeRelayPin: 16 },
-  { id: 'office',        label: 'Office',         tempSensor: 'temp-office',        openRelayPin: 17, closeRelayPin: 18 },
-  { id: 'downstairs',    label: 'Downstairs',     tempSensor: 'temp-downstairs',     openRelayPin: 27, closeRelayPin: 23 },
+  { id: 'primary-suite', label: 'Primary Suite', tempSensor: 'temp-primary-suite', openCh: 0, closeCh: 1, fullTravelSeconds: 61 },
+  { id: 'upstairs',      label: 'Upstairs',       tempSensor: 'temp-upstairs',      openCh: 2, closeCh: 3, fullTravelSeconds: 61 },
+  { id: 'downstairs',    label: 'Downstairs',     tempSensor: 'temp-downstairs',    openCh: 4, closeCh: 5, fullTravelSeconds: 61 },
+  { id: 'office',        label: 'Office',         tempSensor: 'temp-office',        openCh: 6, closeCh: 7, fullTravelSeconds: 61 },
 ];
 
-// Damper motor spec is 60±0.5s of travel — pulse a bit past the worst case
-// so it always reaches the end of travel, without running indefinitely.
-const DAMPER_PULSE_MS = 61000;
+// Below this a partial correction isn't worth pulsing a relay for — avoids
+// chattering the damper motor over a 1-2% rounding-sized difference.
+const MIN_DAMPER_MOVE_PERCENT = 3;
 
-const PLANT_RELAYS = { gas: 20, electric: 21, air: 26 }; // basement Pi, BCM pins — heating calls
+// ── Air handler wire-color -> function map (AIR_HANDLER_BOARD channels) ─────
+// Only O, Y1, Y2, G, W1, W2 are real, code-driven relay channels. R
+// (terminal 0) and C (terminal 4) are deliberately absent from this map —
+// they're never switched, just physically jumpered on the terminal block
+// (see the header comment above) — so there's nothing for code to
+// reference for them. Every terminal on this board is spoken for; there
+// are no spares (matches the ACiQ AHD's real 8-wire layout).
+const AH_CH = { O: 1, Y1: 2, G: 3, Y2: 5, W1: 6, W2: 7 };
 
-// Reversing valve / cooling-mode select for the heat pump — only the "air"
-// source can cool. Energized whenever ANY zone needs safety cooling (see
-// SAFETY_MAX_F above); a heat pump can't heat and cool at once, so cooling
-// always wins over a comfort heat call that would otherwise use "air".
-const COOL_MODE_RELAY_PIN = 19; // basement Pi, BCM pin — placeholder, edit to match actual wiring
+// Short-cycle protection + sequencing timing for the compressor.
+const MIN_COMPRESSOR_ON_MS = 5 * 60 * 1000;
+const MIN_COMPRESSOR_OFF_MS = 5 * 60 * 1000;
+const REVERSING_VALVE_LEAD_MS = 5000; // valve only ever flips while the compressor is confirmed off
+const FAN_PURGE_MS = 45 * 1000;       // keep the fan running this long after the last call ends
+
+// Real 2-stage timing, not just mirroring stage 1: stage 2 (Y2/W2) only
+// joins once stage 1 (Y1/W1) has been running continuously for this long
+// without the call being satisfied — matching how a real 2-stage
+// thermostat hands the equipment full capacity only once base capacity
+// proves insufficient, rather than always running both stages together.
+// Both drop the instant stage 1 does.
+const COMPRESSOR_STAGE2_DELAY_MS = 20 * 60 * 1000; // 20 min — typical residential 2-stage compressor staging delay
+const ELECTRIC_STAGE2_DELAY_MS = 15 * 60 * 1000;   // 15 min — aux electric heat stages up a bit sooner than the compressor
 
 const DEFAULT_SETTINGS = {
   mode: 'auto',            // 'auto' | 'gas' | 'electric' | 'air'
@@ -99,10 +194,19 @@ const DEFAULT_SETTINGS = {
   // so it only gets selected when gas and/or air are marked unavailable
   // (e.g. mid-service). See setAvailability()/pickAvailableSource() below.
   available: { gas: true, electric: true, air: true },
+  // Below this outdoor temp (avgOutdoorTempF, same daily forecast average
+  // used for cost decisions), gas mode hands the 3 boiler zones control
+  // instead of these 4 — see getActiveSystem(). Configurable since climate
+  // and personal comfort preference vary.
+  gasSeasonThresholdF: 50,
   // on: whether comfort control is active for this zone (safety floor/
   // ceiling apply either way). override: a manual target that holds until
   // the schedule moves into a different block — see resolveTarget().
-  zones: Object.fromEntries(ZONES.map(z => [z.id, { on: true, target: 68, schedule: [], override: null }])),
+  // balancePercent: how far open this zone's damper drives while actively
+  // calling — default fully open (100), tune down per zone for airflow
+  // balancing (see setZoneBalance()). Ending a call always drives to 0
+  // regardless of this value.
+  zones: Object.fromEntries(ZONES.map(z => [z.id, { on: true, target: 68, schedule: [], override: null, balancePercent: 100 }])),
 };
 
 // ── Heat pump COP curve (efficiency drops as it gets colder outside) ────────
@@ -166,20 +270,30 @@ function clampToSafetyRange(target) {
 // ── In-memory runtime state (ephemeral, like sensorStore) ───────────────────
 // safety: 'normal' | 'below-min' | 'above-max' — hysteresis state for the
 // hard floor/ceiling, tracked independently of the zone's own on/off state.
-// damperPosition/damperMoving track the two-relay open/close actuation —
-// see driveDamper(). damperPosition defaults 'closed': on a fresh boot we
-// have no real position feedback, and assuming closed is the safer of the
-// two wrong guesses (worst case is one redundant close pulse rather than a
-// zone silently not getting air it thinks it's getting).
+// damperPercent is the last commanded/assumed position (0-100); damperMoving
+// is 'opening' | 'closing' | null while a pulse is in flight — see
+// driveDamper(). Starts at 0 (closed): init() immediately re-homes every
+// zone for real on boot rather than trusting this default, since a restart
+// could have occurred mid-motion and there's no physical position feedback.
 const runtime = Object.fromEntries(
   ZONES.map(z => [z.id, {
     calling: false, coolCalling: false, safety: 'normal', envStatus: {},
-    damperPosition: 'closed', damperMoving: null,
+    damperPercent: 0, damperMoving: null,
   }])
 );
-const zonePins = {};   // { zoneId: { open: GpioPin, close: GpioPin } }
-const plantPins = {};  // { source: GpioPin }
-let coolModePin = null;
+
+// Compressor short-cycle + reversing-valve sequencing state. lastOffAt
+// starts at process-boot time (see init()) — a restart counts as "just
+// turned off" for short-cycle purposes, so equipment can't be slammed
+// straight back on ahead of its own minimum-off timer by a crash/restart.
+const compressorState = { on: false, lastOnAt: 0, lastOffAt: 0 };
+let reversingValveCool = false; // physical valve position — only ever changed while compressor is off
+const fanState = { on: false, purgeUntil: 0 };
+// Tracks when W1 (stage 1 electric heat) most recently turned on, purely
+// for the stage-2 escalation timer — no short-cycle protection on the
+// electric elements (matches original behavior, resistive heat has none
+// of a compressor's cycling concerns).
+const electricState = { on: false, onAt: 0 };
 
 // ── Settings helpers ─────────────────────────────────────────────────────────
 function getSettings() {
@@ -201,99 +315,8 @@ async function saveSettings(next) {
   await settingsSvc.updateSetting('thermostat', next);
 }
 
-// ── Schedule resolution ──────────────────────────────────────────────────────
-function dayMatches(blockDay, dow) {
-  return blockDay === 'all' || blockDay === dow;
-}
-
-// A block whose end time is not after its start time (e.g. 22:00–06:00)
-// spans midnight — it's scheduled for one calendar day but is still active
-// into the next. Plain string comparison on "now falls between start and
-// end" only works within a single day, so a wrapping block needs to be
-// checked from both sides: "started tonight" (today's date matches the
-// block's day, and we're at/after its start) or "carried over from last
-// night" (yesterday's date matched the block's day, and we're still before
-// its end).
-function blockActiveAt(b, now) {
-  const dow = now.day();
-  const hm = now.format('HH:mm');
-  const wraps = b.end <= b.start;
-  if (!wraps) {
-    return dayMatches(b.day, dow) && hm >= b.start && hm < b.end;
-  }
-  const yesterday = (dow + 6) % 7;
-  const startedTonight       = dayMatches(b.day, dow) && hm >= b.start;
-  const carriedFromLastNight = dayMatches(b.day, yesterday) && hm < b.end;
-  return startedTonight || carriedFromLastNight;
-}
-
-function matchingBlock(schedule, now) {
-  const matches = (schedule || []).filter(b => blockActiveAt(b, now));
-  return matches.length ? matches[matches.length - 1] : null;
-}
-
-// When does "right now" — whichever block (or gap between blocks) we're
-// currently in — end? A manual hold created now should last exactly until
-// this absolute moment, then release. Returns an ISO string, or null if the
-// schedule has no blocks at all (nothing to hand off to, ever — hold stands
-// until manually changed again).
-//
-// This MUST be an absolute timestamp rather than a "which block/gap is this"
-// identity — a gap has no distinguishing features of its own (any gap looks
-// like any other gap), so identity-based comparison would let a hold set
-// during one gap silently reactivate during a LATER, unrelated gap once
-// enough real time had passed for it to roll around again. An absolute
-// expiry moment can only ever be crossed once, since time only moves forward.
-function nextBoundary(schedule, now) {
-  const active = matchingBlock(schedule, now);
-  if (active) {
-    const [hh, mm] = active.end.split(':').map(Number);
-    const endMoment = moment(now).hours(hh).minutes(mm).seconds(0).milliseconds(0);
-    // A wrapping block's end time (e.g. the "06:00" in 22:00–06:00) refers
-    // to tomorrow morning if we're still in tonight's portion of it — only
-    // when we've already carried over past midnight does "today at end
-    // time" mean the actual end.
-    const wraps = active.end <= active.start;
-    const hm = now.format('HH:mm');
-    if (wraps && hm >= active.start) endMoment.add(1, 'day');
-    return endMoment.toISOString();
-  }
-  // In a gap — find the soonest upcoming block start, scanning up to a week
-  // ahead (covers day-specific blocks that haven't come around yet).
-  let soonest = null;
-  for (let dayOffset = 0; dayOffset <= 7; dayOffset++) {
-    const day = moment(now).add(dayOffset, 'days');
-    const dow = day.day();
-    for (const b of (schedule || [])) {
-      if (b.day !== 'all' && b.day !== dow) continue;
-      const [hh, mm] = b.start.split(':').map(Number);
-      const startMoment = moment(day).hours(hh).minutes(mm).seconds(0).milliseconds(0);
-      if (startMoment.isAfter(now) && (!soonest || startMoment.isBefore(soonest))) {
-        soonest = startMoment;
-      }
-    }
-  }
-  return soonest ? soonest.toISOString() : null;
-}
-
-function overrideActive(zoneSettings, now) {
-  const ov = zoneSettings.override;
-  if (!ov) return false;
-  return !ov.untilTime || moment(now).isBefore(ov.untilTime);
-}
-
-// The target actually in effect right now: a manual hold (if one is set and
-// hasn't reached its expiry moment yet), else whatever the schedule says for
-// this moment, else the zone's base target.
-function resolveTarget(zoneSettings, now) {
-  if (overrideActive(zoneSettings, now)) return zoneSettings.override.target;
-  const block = matchingBlock(zoneSettings.schedule, now);
-  return block ? block.target : (zoneSettings.target ?? 68);
-}
-
-function isOverridden(zoneSettings, now) {
-  return overrideActive(zoneSettings, now);
-}
+// ── Schedule resolution (shared with boiler.js) ──────────────────────────────
+const { resolveTarget, isOverridden, nextBoundary, inScheduledBlock } = scheduleUtil;
 
 // ── Safety floor/ceiling ──────────────────────────────────────────────────────
 // Uses the same deadband-hysteresis shape as comfort calls so it doesn't
@@ -304,75 +327,13 @@ function isOverridden(zoneSettings, now) {
 // well inside 60-75°F — if it does trip, something's actually wrong
 // (equipment down, sensor lag, extreme weather overwhelming capacity).
 // ── Environmental sensors (RS485 zone nodes: BME680 + SCD41) ───────────────
-// humidity is a comfort/mold-prevention band, not an acute hazard, so it
-// only has one "warn" tier. co2/voc use standard indoor-air-quality tiers.
-// Pressure has no safety implication — read and displayed, never classified.
-const ENV_RANGES = {
-  humidity: { warnLow: 30, warnHigh: 50 },  // %RH
-  co2:      { warn: 1000, danger: 2000 },   // ppm
-  voc:      { warn: 50, danger: 25 },       // 0-100 heuristic score, higher = cleaner (see rs485_node.ino)
-};
-
-function classifyEnv(type, value) {
-  if (typeof value !== 'number') return null;
-  if (type === 'humidity') {
-    return (value < ENV_RANGES.humidity.warnLow || value > ENV_RANGES.humidity.warnHigh) ? 'warn' : 'ok';
-  }
-  if (type === 'co2') {
-    if (value > ENV_RANGES.co2.danger) return 'danger';
-    if (value > ENV_RANGES.co2.warn) return 'warn';
-    return 'ok';
-  }
-  if (type === 'voc') {
-    if (value < ENV_RANGES.voc.danger) return 'danger';
-    if (value < ENV_RANGES.voc.warn) return 'warn';
-    return 'ok';
-  }
-  return null;
-}
-
-// Reads whatever an RS485 node has reported for this zone so far — keys
-// follow the same `<type>-<zoneId>` convention rs485.js writes with. Zones
-// with no node yet (or basement/attic monitor zones, which only ever get
-// temp+humidity) simply read as "no reading", same as any other unwired
-// sensor elsewhere in the app.
+// Read/classify/alert logic lives in envSensors.js (shared with boiler.js).
 function readEnvironment(zone) {
-  const env = {};
-  for (const type of ['humidity', 'pressure', 'voc', 'co2']) {
-    const r = sensors.get(`${type}-${zone.id}`);
-    const value = typeof r?.value === 'number' ? r.value : null;
-    env[type] = {
-      value,
-      updatedAt: r?.updatedAt ?? null,
-      sensorOk: value !== null && !r.stale,
-      status: classifyEnv(type, value),
-    };
-  }
-  return env;
+  return readEnv(zone.id);
 }
 
-// Edge-triggered, same pattern as updateSafetyState() — push once on the
-// transition into (or out of) a non-'ok' tier, not every tick while it stays
-// there. Pressure is excluded (classifyEnv always returns null for it).
 function updateEnvironmentAlerts(zone, rt, env) {
-  const LABEL = { humidity: 'Humidity', co2: 'CO2', voc: 'VOC' };
-  const UNIT = { humidity: '%', co2: 'ppm', voc: '' };
-  for (const type of ['humidity', 'co2', 'voc']) {
-    const status = env[type].status;
-    if (status === null) continue; // no reading yet — leave last known state alone
-    const was = rt.envStatus[type];
-    if (status !== was) {
-      if (status !== 'ok') {
-        sendPush(
-          `${zone.label} ${LABEL[type]} is ${status === 'danger' ? 'critically ' : ''}out of range: ${env[type].value}${UNIT[type]}`,
-          `Thermostat: ${LABEL[type]} Alert`
-        );
-      } else if (was) {
-        sendPush(`${zone.label} ${LABEL[type]} is back in a normal range.`, 'Thermostat: Resolved');
-      }
-    }
-    rt.envStatus[type] = status;
-  }
+  return updateEnvAlerts(zone.label, rt, env);
 }
 
 function updateSafetyState(zone, rt, currentTemp, settings) {
@@ -411,10 +372,78 @@ function updateSafetyState(zone, rt, currentTemp, settings) {
   rt.safety = next;
 }
 
+// ── Seasonal zone-system handoff (4-zone air handler vs. 3-zone boiler) ─────
+// The boiler serves an entirely different 3-zone layout (Great Room,
+// Downstairs, Upstairs — see boiler.js) and only takes over when gas is the
+// selected heat source AND it's cold enough outside that AC won't be
+// needed. Below that threshold there's no ambiguity about which system
+// should be live, since the air handler's "gas" option always defers to
+// the boiler outright when both could theoretically run.
+function getActiveSystem(settings) {
+  const avgOutdoorTempF = settings.lastDecision?.avgOutdoorTempF;
+  const inHeatingSeason = typeof avgOutdoorTempF === 'number' && avgOutdoorTempF < settings.gasSeasonThresholdF;
+  return (settings.mode === 'gas' && inHeatingSeason) ? '3zone' : '4zone';
+}
+
+// Graceful temperature handoff between the two zone layouts — only fires on
+// an actual system-boundary crossing (edge-triggered against the last
+// computed system, tracked in `lastActiveSystem`), and only remaps a zone
+// whose target isn't currently being driven by an active schedule block
+// (inScheduledBlock()) — a zone mid-block keeps whatever the block says
+// rather than getting silently overwritten.
+//
+// Name-matched mapping (Downstairs has a direct namesake on both systems;
+// Primary Suite<->Upstairs and Great Room have no counterpart on the other
+// side and are handled below):
+//   4zone -> 3zone: Great Room <- Downstairs, Downstairs <- Downstairs,
+//                   Upstairs <- Primary Suite
+//   3zone -> 4zone: Primary Suite <- Upstairs, Downstairs <- Downstairs
+//                   (Office has no 3-zone counterpart and is left alone;
+//                   Great Room has no 4-zone counterpart and is dropped)
+async function runZoneSystemSwap(fromSystem, toSystem, now) {
+  const thermoSettings = getSettings();
+  const boilerSettings = boiler.getSettings();
+
+  const applyThermo = (zoneId, value) => {
+    const zs = thermoSettings.zones[zoneId];
+    if (!zs || inScheduledBlock(zs, now)) return;
+    thermoSettings.zones[zoneId] = { ...zs, target: clampToSafetyRange(value), override: null };
+  };
+  const applyBoiler = (zoneId, value) => boiler.applyExternalTarget(boilerSettings, zoneId, value, now);
+
+  if (toSystem === '3zone') {
+    const downstairsF = thermoSettings.zones['downstairs']?.target;
+    const primaryF = thermoSettings.zones['primary-suite']?.target;
+    if (typeof downstairsF === 'number') {
+      applyBoiler('great-room', downstairsF);
+      applyBoiler('downstairs', downstairsF);
+    }
+    if (typeof primaryF === 'number') applyBoiler('upstairs', primaryF);
+  } else {
+    const upstairsF = boilerSettings.zones['upstairs']?.target;
+    const downstairsF = boilerSettings.zones['downstairs']?.target;
+    if (typeof upstairsF === 'number') applyThermo('primary-suite', upstairsF);
+    if (typeof downstairsF === 'number') applyThermo('downstairs', downstairsF);
+  }
+
+  await saveSettings(thermoSettings);
+  await boiler.saveSettings(boilerSettings);
+  console.log(`[Thermostat] Zone system handoff: ${fromSystem} -> ${toSystem} (temperatures mapped across, schedule-driven zones left untouched).`);
+}
+
+let lastActiveSystem = null;
+
 // ── Control loop ─────────────────────────────────────────────────────────────
-function tick() {
+async function tick() {
   const settings = getSettings();
   const now = moment();
+
+  const activeSystem = getActiveSystem(settings);
+  if (lastActiveSystem !== null && activeSystem !== lastActiveSystem) {
+    await runZoneSystemSwap(lastActiveSystem, activeSystem, now);
+  }
+  lastActiveSystem = activeSystem;
+  boiler.setSystemActive(activeSystem === '3zone');
 
   // Pass 1: per-zone desired heat/cool calls. Comfort control (target ±
   // deadband, heat below / cool above) only runs while the zone is on; off
@@ -430,6 +459,13 @@ function tick() {
   // base was before the block ever started. Only an explicit manual change
   // (setZone) is allowed to update the base — see its comment for why a
   // manual hold is different (it's meant to persist as the new baseline).
+  //
+  // When the 3-zone boiler system is active, the air handler's 4 zones
+  // still track their own temps/safety state (so nothing looks broken/dead
+  // in the UI) but never actually call for heat via air/electric — gas mode
+  // means the boiler is the exclusive heat source for the house right now.
+  const airHandlerIsHeatSource = activeSystem === '4zone';
+
   for (const zone of ZONES) {
     const zs = settings.zones[zone.id];
     const rt = runtime[zone.id];
@@ -467,6 +503,8 @@ function tick() {
     if (rt.safety === 'below-min') { heatCall = true; coolCall = false; }
     else if (rt.safety === 'above-max') { coolCall = true; heatCall = false; }
 
+    if (!airHandlerIsHeatSource) heatCall = false; // boiler has the house's heat right now — cooling can still run
+
     rt.calling = heatCall;
     rt.coolCalling = coolCall;
   }
@@ -477,68 +515,125 @@ function tick() {
   // stay closed this tick rather than get cold air pushed into them.
   const activeSource = resolveActiveSource(settings);
   const anyCooling = ZONES.some(z => runtime[z.id].coolCalling);
-  const airHandlesHeat = activeSource === 'air';
-
-  for (const zone of ZONES) {
-    const rt = runtime[zone.id];
-    const heatSuppressed = rt.calling && anyCooling && airHandlesHeat;
-    driveDamper(zone, rt, (rt.calling && !heatSuppressed) || rt.coolCalling);
-  }
-
-  drivePlantRelays(settings, activeSource, anyCooling);
-}
-
-// Two-relay damper actuation: energizing openPin drives the motor toward
-// open, closePin toward closed — there's no "hold" state, just a timed
-// pulse (DAMPER_PULSE_MS) in one direction or the other. Guards against
-// both re-triggering a pulse that's already moving the damper the right
-// way, and against a direction reversal mid-pulse (finishes the current
-// motion before reconsidering — reversing a motor mid-travel without
-// position feedback is asking for trouble).
-function driveDamper(zone, rt, wantOpen) {
-  const desired = wantOpen ? 'open' : 'closed';
-  if (rt.damperPosition === desired || rt.damperMoving) return;
-
-  const pins = zonePins[zone.id];
-  if (!pins) return; // init() hasn't created the relay pins yet — nothing to drive
-
-  const drivePin = wantOpen ? pins.open : pins.close;
-  const otherPin = wantOpen ? pins.close : pins.open;
-
-  otherPin.writeSync(0); // hard interlock — never both relays energized at once
-  drivePin.writeSync(1);
-  rt.damperMoving = wantOpen ? 'opening' : 'closing';
-  console.log(`[Thermostat] ${zone.label} damper ${rt.damperMoving} (${DAMPER_PULSE_MS / 1000}s pulse)`);
-
-  setTimeout(() => {
-    drivePin.writeSync(0);
-    rt.damperPosition = desired;
-    rt.damperMoving = null;
-    console.log(`[Thermostat] ${zone.label} damper now ${desired}`);
-  }, DAMPER_PULSE_MS);
-}
-
-function drivePlantRelays(settings, activeSource, anyCooling) {
   const anyHeatCalling = ZONES.some(z => runtime[z.id].calling);
   const airHandlesHeat = activeSource === 'air';
 
-  for (const source of Object.keys(PLANT_RELAYS)) {
-    let on;
-    if (source === 'air') {
-      const wantsHeatViaAir = anyHeatCalling && airHandlesHeat && !anyCooling;
-      // Hard invariant: a source marked unavailable (being serviced) NEVER
-      // gets energized, no matter what activeSource/mode says elsewhere —
-      // this is the one place actual heating hardware gets switched on.
-      on = (anyCooling || wantsHeatViaAir) && settings.available.air !== false;
-    } else {
-      on = anyHeatCalling && activeSource === source && settings.available[source] !== false;
-    }
-    plantPins[source]?.writeSync(on ? 1 : 0);
+  for (const zone of ZONES) {
+    const zs = settings.zones[zone.id];
+    const rt = runtime[zone.id];
+    const heatSuppressed = rt.calling && anyCooling && airHandlesHeat;
+    const wantOpen = (rt.calling && !heatSuppressed) || rt.coolCalling;
+    driveDamper(zone, rt, wantOpen, zs.balancePercent ?? 100);
   }
 
-  // Same invariant for cooling — never energize the reversing valve for a
-  // heat pump that's marked as being serviced.
-  coolModePin?.writeSync((anyCooling && settings.available.air !== false) ? 1 : 0);
+  driveAirHandler(settings, activeSource, anyCooling, anyHeatCalling, Date.now());
+}
+
+// Proportional damper actuation over I2C: drives toward `targetPercent`
+// while calling, or hard to 0% once the call ends (never left partially
+// open — see the module header). Won't interrupt an in-flight pulse
+// (no position feedback, so reversing mid-travel is avoided — the next
+// tick re-evaluates once the current move finishes) and skips moves smaller
+// than MIN_DAMPER_MOVE_PERCENT to avoid chattering the motor over rounding
+// noise.
+function driveDamper(zone, rt, wantOpen, targetPercent) {
+  if (rt.damperMoving) return;
+
+  const desired = wantOpen ? Math.max(0, Math.min(100, targetPercent)) : 0;
+  const delta = desired - rt.damperPercent;
+  if (Math.abs(delta) < MIN_DAMPER_MOVE_PERCENT) return;
+
+  const opening = delta > 0;
+  const ch = opening ? zone.openCh : zone.closeCh;
+  const otherCh = opening ? zone.closeCh : zone.openCh;
+  const durationMs = Math.round((Math.abs(delta) / 100) * zone.fullTravelSeconds * 1000);
+
+  i2cRelay.setChannel(DAMPER_BOARD, otherCh, false); // hard interlock — never both relays energized at once
+  i2cRelay.setChannel(DAMPER_BOARD, ch, true);
+  rt.damperMoving = opening ? 'opening' : 'closing';
+  console.log(`[Thermostat] ${zone.label} damper ${rt.damperMoving} ${rt.damperPercent}% -> ${desired}% (${(durationMs / 1000).toFixed(1)}s pulse)`);
+
+  setTimeout(() => {
+    i2cRelay.setChannel(DAMPER_BOARD, ch, false);
+    rt.damperPercent = desired;
+    rt.damperMoving = null;
+    console.log(`[Thermostat] ${zone.label} damper now ${desired}%`);
+  }, durationMs);
+}
+
+// Drives Y1 immediately, then escalates to Y2 only once Y1 has been
+// running continuously for COMPRESSOR_STAGE2_DELAY_MS (see that constant's
+// comment) — real 2-stage timing, not just mirroring. Y2 always drops the
+// instant Y1 does, since there's no reason to hold stage 2 alone.
+function setCompressorChannels(on, now) {
+  i2cRelay.setChannel(AIR_HANDLER_BOARD, AH_CH.Y1, on);
+  const stage2On = on && (now - compressorState.lastOnAt >= COMPRESSOR_STAGE2_DELAY_MS);
+  i2cRelay.setChannel(AIR_HANDLER_BOARD, AH_CH.Y2, stage2On);
+}
+
+// Same staged-escalation idea for the two electric aux-heat elements — W1
+// alone covers most calls, W2 only joins once a call has outlasted
+// ELECTRIC_STAGE2_DELAY_MS running on W1 alone. Tracks its own on-time
+// separately from compressorState since electric heat isn't short-cycle
+// gated (see electricState's comment).
+function setElectricChannels(on, now) {
+  if (on && !electricState.on) electricState.onAt = now;
+  electricState.on = on;
+  i2cRelay.setChannel(AIR_HANDLER_BOARD, AH_CH.W1, on);
+  const stage2On = on && (now - electricState.onAt >= ELECTRIC_STAGE2_DELAY_MS);
+  i2cRelay.setChannel(AIR_HANDLER_BOARD, AH_CH.W2, stage2On);
+}
+
+// Air handler control: compressor (Y1/Y2, staged) with short-cycle
+// prevention, the reversing valve (O/B) which only ever moves while the
+// compressor is confirmed off (flipping it under load wears/damages it),
+// the aux electric coil (W1/W2, staged the same way), and the fan (G) with
+// a purge period after the last call ends. R and C are the transformer
+// hot/common feed — jumpered, never touched here (see the module header
+// comment).
+function driveAirHandler(settings, activeSource, anyCooling, anyHeatCalling, now) {
+  const wantCoolMode = anyCooling;
+  const wantCompressor = (anyCooling || (anyHeatCalling && activeSource === 'air' && !anyCooling)) && settings.available.air !== false;
+  const wantElectric = anyHeatCalling && activeSource === 'electric' && settings.available.electric !== false;
+
+  // The reversing valve may only move while the compressor is physically
+  // off. If a mode flip is needed, shut the compressor down first (subject
+  // to its own minimum-on-time) and let the valve flip on a later tick once
+  // REVERSING_VALVE_LEAD_MS has actually elapsed since it went off.
+  if (wantCoolMode !== reversingValveCool) {
+    if (compressorState.on) {
+      applyMinRunTime(compressorState, false, now, MIN_COMPRESSOR_ON_MS, 0);
+      setCompressorChannels(compressorState.on, now);
+    } else if (now - compressorState.lastOffAt >= REVERSING_VALVE_LEAD_MS) {
+      reversingValveCool = wantCoolMode;
+      i2cRelay.setChannel(AIR_HANDLER_BOARD, AH_CH.O, reversingValveCool);
+    }
+  } else {
+    const valveSettled = now - compressorState.lastOffAt >= REVERSING_VALVE_LEAD_MS;
+    const on = applyMinRunTime(
+      compressorState,
+      wantCompressor && (compressorState.on || valveSettled),
+      now, MIN_COMPRESSOR_ON_MS, MIN_COMPRESSOR_OFF_MS
+    );
+    setCompressorChannels(on, now);
+  }
+
+  setElectricChannels(wantElectric, now);
+
+  // Fan: on immediately whenever the compressor or aux coil is actually
+  // running, held on for a purge period after both stop.
+  const wantFanNow = compressorState.on || wantElectric;
+  if (wantFanNow) {
+    fanState.on = true;
+    fanState.purgeUntil = 0;
+    i2cRelay.setChannel(AIR_HANDLER_BOARD, AH_CH.G, true);
+  } else if (fanState.on) {
+    if (!fanState.purgeUntil) fanState.purgeUntil = now + FAN_PURGE_MS;
+    if (now >= fanState.purgeUntil) {
+      fanState.on = false;
+      i2cRelay.setChannel(AIR_HANDLER_BOARD, AH_CH.G, false);
+    }
+  }
 }
 
 // ── Nightly cost decision ────────────────────────────────────────────────────
@@ -632,11 +727,13 @@ function computeCostComparison(settings) {
   };
 }
 
+const PLANT_SOURCES = ['gas', 'electric', 'air'];
+
 // Cheapest source among those not marked unavailable. Electric is the
 // manual backup — it only wins here if gas/air are both down, since its
 // cost is otherwise always the highest (COP fixed at 1, see costPerUnit).
 function pickAvailableSource(costs, available) {
-  const eligible = Object.keys(PLANT_RELAYS).filter(s => available[s] !== false);
+  const eligible = PLANT_SOURCES.filter(s => available[s] !== false);
   if (eligible.length === 0) return null; // everything marked unavailable — caller decides fallback
   return eligible.sort((a, b) => costs[a] - costs[b])[0];
 }
@@ -724,7 +821,7 @@ async function setZone(zoneId, { target, on }) {
   // Re-evaluate right away instead of waiting up to TICK_MS for the next
   // scheduled loop — a manual change should take effect (relay included)
   // the moment it's saved, not on the next interval tick.
-  tick();
+  await tick();
   return next;
 }
 
@@ -739,7 +836,23 @@ async function setZoneSchedule(zoneId, schedule) {
   // Same reasoning as setZone() — if "now" falls inside one of the blocks
   // just saved, that target (and the relay) should take hold immediately,
   // not whenever the next 30s tick happens to land.
-  tick();
+  await tick();
+  return next;
+}
+
+// Per-zone damper balance — how far open (0-100%) this zone drives while
+// actively calling. Purely an airflow-tuning knob; ending a call always
+// still drives to a hard 0% regardless of this value (see driveDamper()).
+async function setZoneBalance(zoneId, balancePercent) {
+  const settings = getSettings();
+  if (!settings.zones[zoneId]) throw new Error(`Unknown zone ${zoneId}`);
+  if (typeof balancePercent !== 'number' || balancePercent < 0 || balancePercent > 100) {
+    throw new Error('balancePercent must be a number between 0 and 100');
+  }
+  const zs = { ...settings.zones[zoneId], balancePercent };
+  const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
+  await saveSettings(next);
+  await tick();
   return next;
 }
 
@@ -754,6 +867,11 @@ async function setMode(mode) {
   // activeSource is derived live by resolveActiveSource() — nothing else to store here.
   const next = { ...settings, mode };
   await saveSettings(next);
+  // A mode change can flip which zone system is active (see
+  // getActiveSystem()) — re-evaluate right away so the swap (and its
+  // temperature mapping) happens the moment this is saved, not up to
+  // TICK_MS later.
+  await tick();
   return next;
 }
 
@@ -772,7 +890,7 @@ async function setRates(rates) {
 // something that can't actually run — auto's live cost comparison already
 // excludes unavailable sources, so no separate failover math is needed here.
 async function setAvailability(source, available) {
-  if (!PLANT_RELAYS[source]) throw new Error(`Unknown source ${source}`);
+  if (!PLANT_SOURCES.includes(source)) throw new Error(`Unknown source ${source}`);
   const settings = getSettings();
   const nextAvailable = { ...settings.available, [source]: available };
   const nextMode = (!available && settings.mode === source) ? 'auto' : settings.mode;
@@ -781,11 +899,24 @@ async function setAvailability(source, available) {
   return next;
 }
 
+async function setGasSeasonThreshold(gasSeasonThresholdF) {
+  if (typeof gasSeasonThresholdF !== 'number') throw new Error('gasSeasonThresholdF must be a number');
+  const settings = getSettings();
+  const next = { ...settings, gasSeasonThresholdF };
+  await saveSettings(next);
+  // Same reasoning as setMode() — this can also flip the active zone system.
+  await tick();
+  return next;
+}
+
 function getState() {
   const settings = getSettings();
+  const activeSystem = getActiveSystem(settings);
   return {
     mode: settings.mode,
     activeSource: resolveActiveSource(settings),
+    activeSystem, // '4zone' | '3zone' — which zone layout is actually live right now
+    gasSeasonThresholdF: settings.gasSeasonThresholdF,
     lastDecision: settings.lastDecision,
     rates: settings.rates,
     available: settings.available,
@@ -821,13 +952,28 @@ function getState() {
         currentTemp: hasReading ? reading.value : null,
         updatedAt: reading?.updatedAt ?? null,
         sensorOk: hasReading && !stale,
-        calling: rt.calling,
+        calling: rt.calling && activeSystem === '4zone',
         coolCalling: rt.coolCalling,
         safety: rt.safety,
         environment: readEnvironment(zone),
+        balancePercent: zs.balancePercent ?? 100,
+        damperPercent: rt.damperPercent,
+        damperMoving: rt.damperMoving,
       };
     }),
   };
+}
+
+// ── Graceful shutdown ────────────────────────────────────────────────────────
+// De-energize everything on a planned stop/restart rather than leaving
+// relays (compressor, valves, dampers mid-pulse) energized. Damper timers
+// in flight are simply superseded — whatever position they were driving
+// toward gets abandoned in favor of "off", and boot-time homing on the next
+// start re-establishes a known 0% regardless.
+function shutdown(signal) {
+  console.log(`[Thermostat] ${signal} received — de-energizing all relays.`);
+  i2cRelay.allOff();
+  process.exit(0);
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
@@ -836,24 +982,31 @@ async function init() {
     await saveSettings(DEFAULT_SETTINGS);
   }
 
-  // Explicitly de-energize every damper relay on boot — if the process
-  // ever restarted mid-pulse, this ensures we don't come up believing a
-  // relay is idle while it's actually still been sitting energized since
-  // the last run.
+  i2cRelay.init();
+  boiler.init();
+
+  // R and C are physically jumpered, not relay-switched — see AH_CH's
+  // comment — so there's nothing to energize here for them.
+
+  const now = Date.now();
+  compressorState.lastOffAt = now; // boot counts as "just turned off" for short-cycle purposes
+  compressorState.lastOnAt = 0;
+
+  // Boot-time damper homing: no physical position feedback exists, so
+  // rather than trust whatever damperPercent defaulted to in memory, every
+  // zone gets a real full-length close pulse on startup to guarantee an
+  // actual, known 0% before the control loop starts making relative moves
+  // off of it.
   for (const zone of ZONES) {
-    zonePins[zone.id] = {
-      open: gpioSvc.createPin(zone.openRelayPin, 'out'),
-      close: gpioSvc.createPin(zone.closeRelayPin, 'out'),
-    };
-    zonePins[zone.id].open.writeSync(0);
-    zonePins[zone.id].close.writeSync(0);
+    i2cRelay.setChannel(DAMPER_BOARD, zone.openCh, false);
+    i2cRelay.setChannel(DAMPER_BOARD, zone.closeCh, true);
+    console.log(`[Thermostat] ${zone.label} damper homing to 0% (${zone.fullTravelSeconds}s)`);
+    setTimeout(() => {
+      i2cRelay.setChannel(DAMPER_BOARD, zone.closeCh, false);
+      runtime[zone.id].damperPercent = 0;
+      console.log(`[Thermostat] ${zone.label} damper homed.`);
+    }, zone.fullTravelSeconds * 1000);
   }
-  for (const [source, pin] of Object.entries(PLANT_RELAYS)) {
-    plantPins[source] = gpioSvc.createPin(pin, 'out');
-    plantPins[source].writeSync(0);
-  }
-  coolModePin = gpioSvc.createPin(COOL_MODE_RELAY_PIN, 'out');
-  coolModePin.writeSync(0);
 
   const settings = getSettings();
   const today = moment().format('YYYY-MM-DD');
@@ -861,12 +1014,18 @@ async function init() {
     await runCostDecision();
   }
 
-  setInterval(tick, TICK_MS);
+  lastActiveSystem = getActiveSystem(getSettings());
+  boiler.setSystemActive(lastActiveSystem === '3zone');
+
+  setInterval(() => { tick().catch(err => console.error('[Thermostat] Tick error:', err.message)); }, TICK_MS);
 
   cron.schedule('0 0 * * *', async () => {
     console.log('[Thermostat] Midnight cost decision');
     await runCostDecision();
   }, CRON_OPTS);
+
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   console.log('[Thermostat] Initialized.');
 }
@@ -876,8 +1035,12 @@ module.exports = {
   getState,
   setZone,
   setZoneSchedule,
+  setZoneBalance,
   setMode,
   setRates,
   setAvailability,
+  setGasSeasonThreshold,
+  getActiveSystem,
+  getSettings,
   ZONES,
 };

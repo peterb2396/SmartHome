@@ -1,50 +1,38 @@
 /**
  * GPIO Map
  * ─────────────────────────────────────────────────────────────────
- * A living reference of what's wired to each pin on the Pi — for the
- * Console page's "GPIO Map" panel. This is documentation, not control:
+ * A living reference of what's wired to each PHYSICAL PI GPIO PIN — for
+ * the Console page's "GPIO Map" panel. This is documentation, not control:
  * editing an entry here relabels the reference, it does NOT change what
- * the actual pin does. To actually move a relay/sensor to a different
- * pin, edit the real config (gpio.js, thermostat.js's ZONES/PLANT_RELAYS)
- * and update this map to match.
+ * the actual pin does. To actually move something to a different pin, edit
+ * the real config (gpio.js / faultLed.js) and update this map to match.
  *
- * Just the Pi — no other board in the picture. The RS485 bus doesn't use a
- * Pi GPIO pin either — it connects via a USB-to-RS485 adapter (see
+ * All HVAC relay control (zone dampers, air handler, gas boiler) has moved
+ * off direct Pi GPIO entirely and now runs over I2C relay boards — see
+ * i2cRelay.js's header comment and the wiring guide for that mapping
+ * (board address + channel, not a Pi pin, so it doesn't belong in this
+ * pin-specific map). What's left here is genuinely just Pi GPIO: PIR
+ * motion sensing and the two fault-status LEDs. The RS485 bus doesn't use
+ * a Pi GPIO pin either — it connects via a USB-to-RS485 adapter (see
  * rs485.js), so it has no entry here.
  *
  * Seeded once from every createPin() call that exists in the code today
- * (gpio.js + thermostat.js + faultLed.js) — all 4 zones' dampers included,
- * 2 relays each (open/close, see thermostat.js's driveDamper()). After the
- * first read this is fully user-managed (add/edit/remove), same
- * schema-less settings-blob pattern as thermostat.js/maintenance.js (key
- * 'gpioMap').
+ * (gpio.js + faultLed.js). After the first read this is fully user-managed
+ * (add/edit/remove), same schema-less settings-blob pattern as
+ * thermostat.js/maintenance.js (key 'gpioMap').
  */
 
 const settingsSvc = require('./settings');
 
 const GROUPS = {
-  'zone-dampers':       { label: 'Zone Dampers',        color: '#8b5cf6' },
-  'heat-source-relays': { label: 'Heat Source Relays',  color: '#f59e0b' },
   'motion':             { label: 'Motion',              color: '#14b8a6' },
   'status-led':         { label: 'Status LED',          color: '#ef4444' },
   'other':              { label: 'Other',                color: '#94a3b8' },
 };
 
-// Ground truth as of this file's writing — see gpio.js / thermostat.js /
-// faultLed.js for the actual pin assignments if this ever needs re-syncing.
+// Ground truth as of this file's writing — see gpio.js / faultLed.js for
+// the actual pin assignments if this ever needs re-syncing.
 const SEED_PINS = [
-  { pin: 4,  label: 'Primary Suite damper OPEN relay',  direction: 'out', group: 'zone-dampers' },
-  { pin: 12, label: 'Primary Suite damper CLOSE relay', direction: 'out', group: 'zone-dampers' },
-  { pin: 13, label: 'Upstairs damper OPEN relay',       direction: 'out', group: 'zone-dampers' },
-  { pin: 16, label: 'Upstairs damper CLOSE relay',      direction: 'out', group: 'zone-dampers' },
-  { pin: 17, label: 'Office damper OPEN relay',         direction: 'out', group: 'zone-dampers' },
-  { pin: 18, label: 'Office damper CLOSE relay',        direction: 'out', group: 'zone-dampers' },
-  { pin: 27, label: 'Downstairs damper OPEN relay',     direction: 'out', group: 'zone-dampers' },
-  { pin: 23, label: 'Downstairs damper CLOSE relay',    direction: 'out', group: 'zone-dampers' },
-  { pin: 19, label: 'Cool-mode / reversing valve',      direction: 'out', group: 'heat-source-relays' },
-  { pin: 20, label: 'Gas heat call relay',              direction: 'out', group: 'heat-source-relays' },
-  { pin: 21, label: 'Electric heat call relay',         direction: 'out', group: 'heat-source-relays' },
-  { pin: 26, label: 'Air (heat pump) call relay',       direction: 'out', group: 'heat-source-relays' },
   { pin: 22, label: 'PIR motion sensor',                direction: 'in',  group: 'motion' },
   { pin: 5,  label: 'Fault LED (red)',                  direction: 'out', group: 'status-led' },
   { pin: 6,  label: 'Fault LED (yellow)',               direction: 'out', group: 'status-led' },
