@@ -132,24 +132,40 @@ function setupPIR() {
 // runtime state.
 let hvacFaultActive = false;
 
+// A mechanical dry contact briefly bounces (opens/closes several times)
+// around a real transition, and a long wire run can also pick up electrical
+// noise — either one makes raw GPIO edges fire multiple spurious
+// active/cleared pairs in quick succession instead of one clean change.
+// DEBOUNCE_MS holds off acting on an edge until the pin has sat stable for
+// this long, which is what actually fixes "fires and clears at the same
+// time" — a real fault condition persists far longer than this, so it
+// doesn't meaningfully delay genuine detection.
+const HVAC_FAULT_DEBOUNCE_MS = 300;
+
 function setupHvacFault() {
   const { sendPush } = require('./mail');
 
   const pin = createPin(26, 'in', 'both');
   hvacFaultActive = !!pin.readSync(); // pick up a fault that was already active before boot, not just future edges
 
-  pin.watch((err, value) => {
+  let debounceTimer = null;
+
+  pin.watch((err) => {
     if (err) { console.error('[GPIO] HVAC fault pin error:', err); return; }
-    const active = !!value;
-    if (active === hvacFaultActive) return;
-    hvacFaultActive = active;
-    if (active) {
-      console.warn('[GPIO] HVAC fault signal (ALARM) active.');
-      sendPush('The air handler is reporting an active fault (ALARM signal).', 'CRITICAL: HVAC Fault');
-    } else {
-      console.log('[GPIO] HVAC fault signal (ALARM) cleared.');
-      sendPush('The air handler fault signal has cleared.', 'HVAC: Resolved');
-    }
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      const active = !!pin.readSync(); // re-read after settling, not the raw edge value
+      if (active === hvacFaultActive) return;
+      hvacFaultActive = active;
+      if (active) {
+        console.warn('[GPIO] HVAC fault signal (ALARM) active.');
+        sendPush('The air handler is reporting an active fault (ALARM signal).', 'CRITICAL: HVAC Fault');
+      } else {
+        console.log('[GPIO] HVAC fault signal (ALARM) cleared.');
+        sendPush('The air handler fault signal has cleared.', 'HVAC: Resolved');
+      }
+    }, HVAC_FAULT_DEBOUNCE_MS);
   });
 
   console.log(`[GPIO] HVAC fault input active on GPIO 26 (currently ${hvacFaultActive ? 'FAULT' : 'normal'}).`);

@@ -108,11 +108,18 @@ async function saveSettings(next) {
 // Applied by thermostat.js during a graceful zone-system swap — mutates the
 // passed-in settings object in place (caller saves it afterward) and
 // respects the same "don't clobber an active schedule block" rule as any
-// other target write.
-function applyExternalTarget(settingsObj, zoneId, value, now) {
+// other target write. Copies both the target AND the source zone's full
+// weekly schedule, so this zone's own automatic schedule keeps working
+// after the handoff instead of just getting a one-time target snapshot.
+function applyExternalZone(settingsObj, zoneId, sourceZoneSettings, now) {
   const zs = settingsObj.zones[zoneId];
-  if (!zs || scheduleUtil.inScheduledBlock(zs, now)) return;
-  settingsObj.zones[zoneId] = { ...zs, target: clampToSafetyRange(value), override: null };
+  if (!zs || !sourceZoneSettings || scheduleUtil.inScheduledBlock(zs, now)) return;
+  settingsObj.zones[zoneId] = {
+    ...zs,
+    target: clampToSafetyRange(sourceZoneSettings.target),
+    schedule: (sourceZoneSettings.schedule || []).map(b => ({ ...b, target: clampToSafetyRange(b.target) })),
+    override: null,
+  };
 }
 
 function updateSafetyState(zone, rt, currentTemp) {
@@ -280,7 +287,7 @@ module.exports = {
   setSystemActive,
   getSettings,
   saveSettings,
-  applyExternalTarget,
+  applyExternalZone,
   shutdown,
   ZONES,
 };
