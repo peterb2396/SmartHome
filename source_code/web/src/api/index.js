@@ -65,6 +65,9 @@ export const logsStreamUrl      = () => `${api.defaults.baseURL}/console/logs/st
 export const getGpioMap         = () => api.get("/console/gpio-map");
 export const upsertGpioPin      = (pin) => api.post("/console/gpio-map", pin);
 export const deleteGpioPin      = (pin) => api.delete(`/console/gpio-map/${pin}`);
+export const getRelayMap        = () => api.get("/console/relay-map");
+export const upsertRelay        = (relay) => api.post("/console/relay-map", relay);
+export const deleteRelay        = (address, channel) => api.delete(`/console/relay-map/${address}/${channel}`);
 export const getConsoleFaults   = () => api.get("/console/faults");
 
 // ── Finance ──────────────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import PageHeader from "../components/PageHeader";
 import CameraTile from "../components/CameraTile";
 import NodeSetupModal from "../components/NodeSetupModal";
 import GpioMapEditor from "../components/GpioMapEditor";
+import RelayMapEditor from "../components/RelayMapEditor";
 import Spinner from "../components/Spinner";
 import { colors, card, CONTAINER_WIDE, GRID_COMPACT, GRID_WIDE, pageContainerStyle } from "../styles/tokens";
 
@@ -247,6 +248,7 @@ export default function Console() {
       </div>
 
       <GpioMapEditor />
+      <RelayMapEditor />
 
       {setupNode && (
         <NodeSetupModal
