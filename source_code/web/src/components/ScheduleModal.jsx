@@ -38,7 +38,7 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
       zIndex: 1000, padding: "1rem",
     }}>
       <div style={{
-        background: "white", borderRadius: 16, maxWidth: 640, width: "100%",
+        background: "var(--bg-card)", borderRadius: 16, maxWidth: 640, width: "100%",
         boxShadow: "0 25px 50px rgba(0,0,0,0.2)", overflow: "hidden",
         maxHeight: "85vh", display: "flex", flexDirection: "column",
       }}>
@@ -50,7 +50,7 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
           }
         `}</style>
         <div style={{
-          background: "linear-gradient(135deg, #3b82f6, #2563eb)",
+          background: "linear-gradient(135deg, var(--accent), var(--accent-dark))",
           padding: "1.25rem 1.5rem", display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
           <h2 style={{ color: "white", margin: 0, fontSize: "1.2rem", fontWeight: 700 }}>
@@ -66,21 +66,21 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
           {blocks.map((b, i) => (
             <div key={i} className="schedule-block-row" style={{
               display: "flex", gap: 8, alignItems: "center", marginBottom: 10,
-              background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "0.6rem",
+              background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "0.6rem",
             }}>
               <select value={b.day} onChange={e => updateBlock(i, { day: e.target.value === "all" ? "all" : Number(e.target.value) })}
                 style={{ ...selectStyle, flex: "1.3" }}>
                 {DAY_OPTIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
               </select>
               <input type="time" value={b.start} onChange={e => updateBlock(i, { start: e.target.value })} style={{ ...inputStyle, flex: "1.2", minWidth: 118 }} />
-              <span style={{ color: "#94a3b8" }}>–</span>
+              <span style={{ color: "var(--text-muted)" }}>–</span>
               <input type="time" value={b.end} onChange={e => updateBlock(i, { end: e.target.value })} style={{ ...inputStyle, flex: "1.2", minWidth: 118 }} />
               <input type="number" min={60} max={75} value={b.target} className="schedule-target-input"
                 onChange={e => updateBlock(i, { target: Math.min(75, Math.max(60, Number(e.target.value) || 60)) })}
                 style={{ ...inputStyle, flex: "0 0 56px", minWidth: 56, textAlign: "center" }} />
-              <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>°F</span>
+              <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>°F</span>
               <button onClick={() => removeBlock(i)} style={{
-                background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: "0.9rem",
+                background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontSize: "0.9rem",
               }}>
                 <FaTrash />
               </button>
@@ -89,16 +89,16 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
 
           <button onClick={addBlock} style={{
             display: "flex", alignItems: "center", gap: 6, marginTop: 6,
-            background: "#f8fafc", border: "1px dashed #cbd5e1", color: "#475569",
+            background: "var(--bg-surface)", border: "1px dashed #cbd5e1", color: "#475569",
             borderRadius: 10, padding: "0.6rem 1rem", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer",
           }}>
             <FaPlus size={12} /> Add block
           </button>
         </div>
 
-        <div style={{ display: "flex", gap: "0.75rem", padding: "1rem 1.5rem", background: "#f8fafc" }}>
-          <button onClick={onClose} style={{ flex: 1, padding: "0.7rem", background: "#e2e8f0", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-          <button onClick={handleSave} style={{ flex: 1, padding: "0.7rem", background: "#3b82f6", color: "white", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Save Schedule</button>
+        <div style={{ display: "flex", gap: "0.75rem", padding: "1rem 1.5rem", background: "var(--bg-surface)" }}>
+          <button onClick={onClose} style={{ flex: 1, padding: "0.7rem", background: "var(--border)", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+          <button onClick={handleSave} style={{ flex: 1, padding: "0.7rem", background: "var(--accent)", color: "white", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Save Schedule</button>
         </div>
       </div>
     </div>
@@ -106,8 +106,8 @@ export default function ScheduleModal({ zone, onClose, onSave }) {
 }
 
 const inputStyle = {
-  padding: "0.5rem 0.6rem", background: "white",
-  border: "1px solid #e2e8f0", borderRadius: 8, fontSize: "0.85rem",
+  padding: "0.5rem 0.6rem", background: "var(--bg-card)",
+  border: "1px solid var(--border)", borderRadius: 8, fontSize: "0.85rem",
   outline: "none", boxSizing: "border-box", minWidth: 0,
 };
 const selectStyle = { ...inputStyle };

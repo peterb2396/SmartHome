@@ -1,6 +1,6 @@
 import { FaCar, FaLock, FaLockOpen } from "react-icons/fa";
 
-function CarButton({ label, icon: Icon, onClick, busy, success, message, color, successColor = "#10b981" }) {
+function CarButton({ label, icon: Icon, onClick, busy, success, message, color, successColor = "var(--success)" }) {
   const bg = busy
     ? "linear-gradient(135deg, #f59e0b, #d97706)"
     : success
@@ -56,8 +56,8 @@ export default function CarControls({ start, lock, unlock }) {
         }
       `}</style>
       <div style={{ display: "flex", gap: 8, marginBottom: "1.5rem" }}>
-         <CarButton label="Start Car"  icon={FaCar}      color={["#ef4444","#dc2626"]} {...start}  onClick={start.execute}  />
-                <CarButton label="Lock Car"   icon={FaLock}     color={["#3b82f6","#2563eb"]} {...lock}   onClick={lock.execute}   />
+         <CarButton label="Start Car"  icon={FaCar}      color={["var(--danger)","#dc2626"]} {...start}  onClick={start.execute}  />
+                <CarButton label="Lock Car"   icon={FaLock}     color={["var(--accent)","var(--accent-dark)"]} {...lock}   onClick={lock.execute}   />
                 <CarButton label="Unlock Car" icon={FaLockOpen} color={["#f59e0b","#d97706"]} {...unlock} onClick={unlock.execute} />
               </div>
     </>

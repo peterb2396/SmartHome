@@ -34,7 +34,7 @@ function StatTile({ icon: Icon, label, value, accent = colors.accent }) {
 }
 
 function LogLine({ entry }) {
-  const color = entry.level === "error" ? "#f87171" : entry.level === "warn" ? "#fbbf24" : "#94a3b8";
+  const color = entry.level === "error" ? "#f87171" : entry.level === "warn" ? "var(--warning)" : "var(--text-muted)";
   return (
     <div style={{ display: "flex", gap: 8, fontSize: "0.78rem", fontFamily: "monospace", lineHeight: 1.6 }}>
       <span style={{ color: "#475569", flexShrink: 0 }}>
@@ -97,8 +97,8 @@ export default function Console() {
           <FaTerminal color={colors.textMuted} /> Terminal
           <span style={{
             fontSize: "0.7rem", fontWeight: 700, padding: "2px 8px", borderRadius: 999,
-            background: logsConnected ? "#d1fae5" : "#f1f5f9",
-            color: logsConnected ? "#065f46" : "#64748b",
+            background: logsConnected ? "#d1fae5" : "var(--bg-surface-alt)",
+            color: logsConnected ? "#065f46" : "var(--text-secondary)",
           }}>
             {logsConnected ? "LIVE" : "connecting…"}
           </span>
@@ -153,7 +153,7 @@ export default function Console() {
         display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_COMPACT}px, 1fr))`,
         gap: "1rem", marginBottom: "1.5rem",
       }}>
-        <StatTile icon={FaLightbulb} label="Lights" value={`${lights.on} / ${lights.total} on`} accent="#fbbf24" />
+        <StatTile icon={FaLightbulb} label="Lights" value={`${lights.on} / ${lights.total} on`} accent="var(--warning)" />
         <StatTile icon={FaMicrochip} label="RS485 Nodes" value={`${nodes.configured.length} configured`} accent="#8b5cf6" />
       </div>
 
@@ -209,7 +209,7 @@ export default function Console() {
                     }}>
                       <span style={{ fontFamily: "monospace", fontSize: "0.8rem", color: "#92400e" }}>{n.uniqueId}</span>
                       <button onClick={() => setSetupNode(n)} style={{
-                        padding: "0.35rem 0.8rem", background: "#3b82f6", color: "white", border: "none",
+                        padding: "0.35rem 0.8rem", background: "var(--accent)", color: "white", border: "none",
                         borderRadius: 8, fontWeight: 600, fontSize: "0.8rem", cursor: "pointer",
                       }}>Set up</button>
                     </div>
@@ -230,11 +230,11 @@ export default function Console() {
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
                       <button onClick={() => setSetupNode(n)} title="Edit" style={{
-                        width: 30, height: 30, background: "#f1f5f9", border: "none", borderRadius: 8,
+                        width: 30, height: 30, background: "var(--bg-surface-alt)", border: "none", borderRadius: 8,
                         color: colors.textSecondary, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
                       }}><FaCog size={12} /></button>
                       <button onClick={() => handleRemoveNode(n.uniqueId)} title="Remove" style={{
-                        width: 30, height: 30, background: "#f1f5f9", border: "none", borderRadius: 8,
+                        width: 30, height: 30, background: "var(--bg-surface-alt)", border: "none", borderRadius: 8,
                         color: colors.danger, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
                       }}><FaTrash size={12} /></button>
                     </div>

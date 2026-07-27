@@ -30,7 +30,7 @@ export default function Main() {
 
   if (loading) return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <p style={{ color: "#94a3b8", fontWeight: 500 }}>Loading...</p>
+      <p style={{ color: "var(--text-muted)", fontWeight: 500 }}>Loading...</p>
     </div>
   );
 

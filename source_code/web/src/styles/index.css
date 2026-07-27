@@ -1,3 +1,105 @@
+/* ── Theme tokens ──────────────────────────────────────────────────────────
+ * Light values are the app's original hardcoded palette (unchanged look by
+ * default); dark values are a hand-picked slate/blue set, not a naive
+ * inversion. `useTheme.js` stamps `data-theme` on <html> from a user choice
+ * persisted in localStorage; absent a choice, `prefers-color-scheme` decides.
+ * tokens.js's `colors` export reads these vars, so anything importing it
+ * (most components) is automatically theme-reactive with no per-file work.
+ * Components with their own hand-copied hex (not routed through tokens.js)
+ * are converted to these same vars directly where that hex exactly matches
+ * a token value — see the sweep applied across pages/ and components/.
+ */
+:root {
+  --bg-page-from: #f8fafc;
+  --bg-page-to: #e2e8f0;
+  --bg-surface: #f8fafc;
+  --bg-surface-alt: #f1f5f9;
+  --bg-card: #ffffff;
+  --text-primary: #1e293b;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --border: #e2e8f0;
+  --accent: #3b82f6;
+  --accent-dark: #2563eb;
+  --danger: #ef4444;
+  --success: #10b981;
+  --warning: #fbbf24;
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.07);
+  --tint-danger: #fef2f2;
+  --tint-warning: #fff7ed;
+  --tint-info: #eff6ff;
+  --tint-success: #f0fdf4;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-page-from: #0b1120;
+    --bg-page-to: #0f172a;
+    --bg-surface: #0b1120;
+    --bg-surface-alt: #141b2b;
+    --bg-card: #1a2333;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --border: #2d3b52;
+    --accent: #60a5fa;
+    --accent-dark: #3b82f6;
+    --danger: #f87171;
+    --success: #34d399;
+    --warning: #fcd34d;
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --tint-danger: #2a1518;
+    --tint-warning: #2a1f13;
+    --tint-info: #14203a;
+    --tint-success: #102319;
+  }
+}
+
+/* The toggle's explicit choice always wins over the OS preference, in
+ * either direction. */
+:root[data-theme="dark"] {
+  --bg-page-from: #0b1120;
+  --bg-page-to: #0f172a;
+  --bg-surface: #0b1120;
+  --bg-surface-alt: #141b2b;
+  --bg-card: #1a2333;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border: #2d3b52;
+  --accent: #60a5fa;
+  --accent-dark: #3b82f6;
+  --danger: #f87171;
+  --success: #34d399;
+  --warning: #fcd34d;
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --tint-danger: #2a1518;
+  --tint-warning: #2a1f13;
+  --tint-info: #14203a;
+  --tint-success: #102319;
+}
+:root[data-theme="light"] {
+  --bg-page-from: #f8fafc;
+  --bg-page-to: #e2e8f0;
+  --bg-surface: #f8fafc;
+  --bg-surface-alt: #f1f5f9;
+  --bg-card: #ffffff;
+  --text-primary: #1e293b;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --border: #e2e8f0;
+  --accent: #3b82f6;
+  --accent-dark: #2563eb;
+  --danger: #ef4444;
+  --success: #10b981;
+  --warning: #fbbf24;
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.07);
+  --tint-danger: #fef2f2;
+  --tint-warning: #fff7ed;
+  --tint-info: #eff6ff;
+  --tint-success: #f0fdf4;
+}
+
 /* ── Reset & base ── */
 *, *::before, *::after {
   box-sizing: border-box;
@@ -16,15 +118,21 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   line-height: 1.5;
-  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  background: linear-gradient(135deg, var(--bg-page-from) 0%, var(--bg-page-to) 100%);
+  color: var(--text-primary);
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-/* Login page centering — only when not inside the app shell */
+/* Login page centering — only when not inside the app shell. Explicit
+ * color here (not just inherited from body) because Login.jsx imports
+ * bootstrap's CSS, which sets its own fixed body text color with equal
+ * specificity — a class selector is needed to reliably win that fight. */
 .login-wrapper {
   min-height: 100vh;
   display: flex;
   justify-content: center;
   align-items: center;
+  color: var(--text-primary);
 }
 
 .login-inner {

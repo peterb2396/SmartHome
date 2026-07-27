@@ -14,7 +14,7 @@ export default function ModeToggle({ mode, activeSource, lastDecision, available
 
   return (
     <div style={{
-      background: "white", border: "1px solid #e2e8f0", borderRadius: 16,
+      background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 16,
       boxShadow: "0 1px 3px rgba(0,0,0,0.07)", padding: "1rem 1.25rem",
       display: "flex", flexDirection: "column", gap: 10,
     }}>
@@ -43,8 +43,8 @@ export default function ModeToggle({ mode, activeSource, lastDecision, available
                   padding: "0.5rem 0.9rem", borderRadius: 999, border: "none",
                   fontWeight: 600, fontSize: "0.85rem",
                   cursor: isAvailable ? "pointer" : "not-allowed",
-                  background: !isAvailable ? "#f8fafc" : active ? "#1e293b" : "#f1f5f9",
-                  color: !isAvailable ? "#cbd5e1" : active ? "white" : "#64748b",
+                  background: !isAvailable ? "var(--bg-surface)" : active ? "var(--text-primary)" : "var(--bg-surface-alt)",
+                  color: !isAvailable ? "#cbd5e1" : active ? "white" : "var(--text-secondary)",
                   textDecoration: !isAvailable ? "line-through" : "none",
                   transition: "all 0.15s",
                 }}>
@@ -59,8 +59,8 @@ export default function ModeToggle({ mode, activeSource, lastDecision, available
           value={mode}
           onChange={e => onSetMode(e.target.value)}
           style={{
-            padding: "0.55rem 0.7rem", borderRadius: 10, border: "1px solid #e2e8f0",
-            background: "#f8fafc", fontWeight: 600, fontSize: "0.9rem", color: "#1e293b",
+            padding: "0.55rem 0.7rem", borderRadius: 10, border: "1px solid var(--border)",
+            background: "var(--bg-surface)", fontWeight: 600, fontSize: "0.9rem", color: "var(--text-primary)",
           }}>
           {OPTIONS.map(({ value, label }) => {
             const disabled = value !== "auto" && available?.[value] === false;
@@ -72,13 +72,13 @@ export default function ModeToggle({ mode, activeSource, lastDecision, available
           })}
         </select>
 
-        <div style={{ fontSize: "0.82rem", color: "#64748b" }}>
-          Currently running: <strong style={{ color: "#1e293b" }}>{SOURCE_LABEL[activeSource] ?? "—"}</strong>
+        <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)" }}>
+          Currently running: <strong style={{ color: "var(--text-primary)" }}>{SOURCE_LABEL[activeSource] ?? "—"}</strong>
         </div>
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontWeight: 600 }}>Equipment status:</span>
+        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 600 }}>Equipment status:</span>
         {SOURCES.map(s => {
           const isServiced = available?.[s] === false;
           return (
@@ -89,9 +89,9 @@ export default function ModeToggle({ mode, activeSource, lastDecision, available
               style={{
                 display: "flex", alignItems: "center", gap: 5,
                 padding: "0.3rem 0.65rem", borderRadius: 999,
-                border: isServiced ? "1px solid #fbbf24" : "1px solid #e2e8f0",
-                background: isServiced ? "#fffbeb" : "#f8fafc",
-                color: isServiced ? "#b45309" : "#64748b",
+                border: isServiced ? "1px solid var(--warning)" : "1px solid var(--border)",
+                background: isServiced ? "#fffbeb" : "var(--bg-surface)",
+                color: isServiced ? "#b45309" : "var(--text-secondary)",
                 fontSize: "0.75rem", fontWeight: 600, cursor: "pointer",
               }}>
               <FaWrench size={9} />
@@ -108,7 +108,7 @@ export default function ModeToggle({ mode, activeSource, lastDecision, available
       )}
 
       {/* {lastDecision && (
-        <div style={{ fontSize: "0.78rem", color: "#94a3b8" }}>
+        <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
           {mode === "auto" ? "Auto-selected" : "Last cost check"} for {lastDecision.date} (avg {lastDecision.avgOutdoorTempF}°F outside):{" "}
           {Object.entries(lastDecision.costs)
             .sort((a, b) => a[1] - b[1])
@@ -119,14 +119,14 @@ export default function ModeToggle({ mode, activeSource, lastDecision, available
 
       {crossover && (
         <div style={{
-          fontSize: "0.78rem", color: "#334155", background: "#f8fafc",
-          border: "1px solid #e2e8f0", borderRadius: 10, padding: "0.5rem 0.7rem",
+          fontSize: "0.78rem", color: "#334155", background: "var(--bg-surface)",
+          border: "1px solid var(--border)", borderRadius: 10, padding: "0.5rem 0.7rem",
         }}>
           <strong>Crossover: {crossover.tempF}°F</strong> at your current rates — above it,{" "}
           <strong>{SOURCE_LABEL[crossover.warmerIsCheaper]}</strong> is cheaper; below it,{" "}
           <strong>{SOURCE_LABEL[crossover.colderIsCheaper]}</strong> is cheaper.
           {crossover.outOfRange && (
-            <div style={{ marginTop: 4, color: "#94a3b8" }}>
+            <div style={{ marginTop: 4, color: "var(--text-muted)" }}>
               This is past the {crossover.outOfRange === "above" ? "warmest" : "coldest"} weather this model
               covers ({crossover.modelEdge}°F, where the heat pump's real-world efficiency{" "}
               {crossover.outOfRange === "above" ? "plateaus" : "bottoms out"}) — treat it as an estimate, not a

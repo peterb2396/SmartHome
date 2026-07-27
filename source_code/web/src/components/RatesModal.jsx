@@ -1,9 +1,10 @@
 import { useState } from "react";
 
-export default function RatesModal({ rates, onClose, onSave }) {
+export default function RatesModal({ rates, gasSeasonThresholdF, onClose, onSave, onSaveThreshold }) {
   const [gasPricePerTherm, setGasPricePerTherm] = useState(rates.gasPricePerTherm ?? 1.5);
   const [elecPricePerKwh,  setElecPricePerKwh]  = useState(rates.elecPricePerKwh ?? 0.15);
   const [gasAfuePct,       setGasAfuePct]       = useState(Math.round((rates.gasAfue ?? 0.85) * 100));
+  const [seasonThreshold,  setSeasonThreshold]  = useState(gasSeasonThresholdF ?? 50);
 
   function handleSave() {
     onSave({
@@ -11,6 +12,7 @@ export default function RatesModal({ rates, onClose, onSave }) {
       elecPricePerKwh: Math.max(0, Number(elecPricePerKwh) || 0),
       gasAfue: Math.min(100, Math.max(1, Number(gasAfuePct) || 1)) / 100,
     });
+    if (Number(seasonThreshold) !== gasSeasonThresholdF) onSaveThreshold(Number(seasonThreshold) || 50);
     onClose();
   }
 
@@ -21,11 +23,11 @@ export default function RatesModal({ rates, onClose, onSave }) {
       zIndex: 1000, padding: "1rem",
     }}>
       <div style={{
-        background: "white", borderRadius: 16, maxWidth: 420, width: "100%",
+        background: "var(--bg-card)", borderRadius: 16, maxWidth: 420, width: "100%",
         boxShadow: "0 25px 50px rgba(0,0,0,0.2)", overflow: "hidden",
       }}>
         <div style={{
-          background: "linear-gradient(135deg, #3b82f6, #2563eb)",
+          background: "linear-gradient(135deg, var(--accent), var(--accent-dark))",
           padding: "1.25rem 1.5rem", display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
           <h2 style={{ color: "white", margin: 0, fontSize: "1.2rem", fontWeight: 700 }}>Utility Rates</h2>
@@ -35,7 +37,7 @@ export default function RatesModal({ rates, onClose, onSave }) {
           }}>×</button>
         </div>
         <div style={{ padding: "1.5rem" }}>
-          <p style={{ color: "#94a3b8", fontSize: "0.82rem", marginTop: 0, marginBottom: "1.25rem" }}>
+          <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginTop: 0, marginBottom: "1.25rem" }}>
             Used every night to auto-pick the cheapest heat source. These should match your actual
             utility bill, not the defaults — the auto-selection is only as accurate as these numbers.
           </p>
@@ -45,14 +47,25 @@ export default function RatesModal({ rates, onClose, onSave }) {
             { label: "Gas boiler efficiency (AFUE %)", value: gasAfuePct, onChange: setGasAfuePct, step: "1", min: "1", max: "100" },
           ].map(({ label, value, onChange, ...props }) => (
             <div key={label} style={{ marginBottom: "1.25rem" }}>
-              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "#1e293b", marginBottom: 6 }}>{label}</label>
+              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: 6 }}>{label}</label>
               <input type="number" value={value} onChange={e => onChange(e.target.value)} {...props} style={inputStyle} />
             </div>
           ))}
+          <div style={{ marginBottom: 0, paddingTop: "0.5rem", borderTop: "1px solid var(--border)" }}>
+            <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", margin: "1rem 0 6px" }}>
+              Gas heating season threshold (°F)
+            </label>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.78rem", margin: "0 0 6px" }}>
+              When gas mode is selected and the forecast average is below this, the gas boiler's own
+              3-zone system (Great Room / Downstairs / Upstairs) takes over from the air handler's 4
+              zones — see the wiring guide for how that handoff works.
+            </p>
+            <input type="number" value={seasonThreshold} onChange={e => setSeasonThreshold(e.target.value)} step="1" style={inputStyle} />
+          </div>
         </div>
-        <div style={{ display: "flex", gap: "0.75rem", padding: "1rem 1.5rem", background: "#f8fafc" }}>
-          <button onClick={onClose} style={{ flex: 1, padding: "0.7rem", background: "#e2e8f0", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-          <button onClick={handleSave} style={{ flex: 1, padding: "0.7rem", background: "#3b82f6", color: "white", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Save</button>
+        <div style={{ display: "flex", gap: "0.75rem", padding: "1rem 1.5rem", background: "var(--bg-surface)" }}>
+          <button onClick={onClose} style={{ flex: 1, padding: "0.7rem", background: "var(--border)", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+          <button onClick={handleSave} style={{ flex: 1, padding: "0.7rem", background: "var(--accent)", color: "white", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Save</button>
         </div>
       </div>
     </div>
@@ -60,7 +73,7 @@ export default function RatesModal({ rates, onClose, onSave }) {
 }
 
 const inputStyle = {
-  width: "100%", padding: "0.7rem 1rem", background: "#f8fafc",
-  border: "1px solid #e2e8f0", borderRadius: 10, fontSize: "0.95rem",
+  width: "100%", padding: "0.7rem 1rem", background: "var(--bg-surface)",
+  border: "1px solid var(--border)", borderRadius: 10, fontSize: "0.95rem",
   outline: "none", boxSizing: "border-box",
 };

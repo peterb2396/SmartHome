@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
-import { FaLightbulb, FaTv, FaPlug, FaSun, FaMoon, FaPowerOff, FaStarAndCrescent, FaCloudMoon } from "react-icons/fa";
+import { Link } from "react-router-dom";
+import { FaLightbulb, FaTv, FaPlug, FaSun, FaMoon, FaPowerOff, FaStarAndCrescent, FaCloudMoon, FaThermometerHalf, FaCloudSun, FaExclamationTriangle, FaCheckCircle } from "react-icons/fa";
 import { useDevices }  from "../hooks/useDevices";
 import { useSettings } from "../hooks/useSettings";
 import { useCar }      from "../hooks/useCar";
+import { useThermostat } from "../hooks/useThermostat";
+import { useBoiler }   from "../hooks/useBoiler";
 import { formatOperatingState } from "../utils";
 import LightCard            from "../components/LightCard";
 import LightSettingsModal   from "../components/LightSettingsModal";
@@ -12,26 +15,105 @@ import Spinner              from "../components/Spinner";
 import PageHeader           from "../components/PageHeader";
 import { CONTAINER_WIDE, GRID_COMPACT, GRID_WIDE, pageContainerStyle } from "../styles/tokens";
 
+// ── House overview ───────────────────────────────────────────────────────────
+// The at-a-glance "this is actually my home" strip — climate, lights,
+// outside conditions, and anything that needs attention — sitting above the
+// device-control sections below it.
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 5) return "Still up";
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+function OverviewTile({ icon: Icon, label, value, detail, tone = "neutral" }) {
+  const toneColor = {
+    neutral: "var(--accent)", ok: "var(--success)", warn: "var(--warning)", danger: "var(--danger)",
+  }[tone];
+  return (
+    <div style={{
+      background: "var(--bg-card)", borderRadius: 14, border: "1px solid var(--border)",
+      boxShadow: "var(--shadow-card)", padding: "1.1rem 1.25rem",
+      display: "flex", alignItems: "center", gap: "0.9rem",
+    }}>
+      <div style={{
+        width: 42, height: 42, borderRadius: 10, flexShrink: 0,
+        background: `${toneColor}22`, color: toneColor,
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.1rem",
+      }}>
+        <Icon />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.75rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em" }}>{label}</p>
+        <p style={{ margin: "2px 0 0", color: "var(--text-primary)", fontSize: "1.15rem", fontWeight: 700, lineHeight: 1.2 }}>{value}</p>
+        {detail && <p style={{ margin: "1px 0 0", color: "var(--text-muted)", fontSize: "0.78rem" }}>{detail}</p>}
+      </div>
+    </div>
+  );
+}
+
+function HouseOverview({ lightsOn, lightsTotal }) {
+  const { state: thermo } = useThermostat();
+  const { state: boilerState } = useBoiler();
+
+  const is3Zone = thermo?.activeSystem === "3zone";
+  const climateZones = is3Zone ? (boilerState?.zones ?? []) : (thermo?.zones ?? []);
+  const readingZones = climateZones.filter(z => z.sensorOk && typeof z.currentTemp === "number");
+  const avgIndoor = readingZones.length
+    ? Math.round(readingZones.reduce((sum, z) => sum + z.currentTemp, 0) / readingZones.length)
+    : null;
+  const callingCount = climateZones.filter(z => z.calling || z.coolCalling).length;
+  const outsideTemp = thermo?.lastDecision?.avgOutdoorTempF;
+
+  const unresponsive = climateZones.filter(z => !z.sensorOk).length;
+  const inSafety = climateZones.filter(z => z.safety && z.safety !== "normal").length;
+  const issues = unresponsive + inSafety;
+
+  return (
+    <div style={{
+      display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(220px, 1fr))`,
+      gap: "1rem", marginBottom: "1.75rem",
+    }}>
+      <OverviewTile icon={FaThermometerHalf} label="Climate" tone="neutral"
+        value={avgIndoor != null ? `${avgIndoor}°F inside` : "No reading"}
+        detail={callingCount > 0 ? `${callingCount} zone${callingCount === 1 ? "" : "s"} calling` : "All zones idle"} />
+      <OverviewTile icon={FaCloudSun} label="Outside" tone="neutral"
+        value={typeof outsideTemp === "number" ? `${Math.round(outsideTemp)}°F` : "—"}
+        detail="Today's forecast average" />
+      <OverviewTile icon={FaLightbulb} label="Lights" tone={lightsOn > 0 ? "warn" : "neutral"}
+        value={`${lightsOn} of ${lightsTotal} on`}
+        detail={lightsOn > 0 ? "Some lights are on" : "All lights off"} />
+      <OverviewTile
+        icon={issues > 0 ? FaExclamationTriangle : FaCheckCircle}
+        label="Status" tone={issues > 0 ? "danger" : "ok"}
+        value={issues > 0 ? `${issues} issue${issues === 1 ? "" : "s"}` : "All normal"}
+        detail={issues > 0 ? <Link to="/thermostat" style={{ color: "inherit" }}>Check Thermostat →</Link> : "Nothing needs attention"} />
+    </div>
+  );
+}
+
 // ── Sub-displays ──────────────────────────────────────────────────────────────
 
 function WeatherCard({ title, pairs }) {
   return (
     <div style={{
-      background: "white", borderRadius: 12, border: "1px solid #e2e8f0",
+      background: "var(--bg-card)", borderRadius: 12, border: "1px solid var(--border)",
       boxShadow: "0 1px 3px rgba(0,0,0,0.07)", padding: "1.25rem",
     }}>
-      <p style={{ textAlign: "center", color: "#94a3b8", fontWeight: 300, fontSize: "1.1rem", margin: "0 0 1rem" }}>{title}</p>
+      <p style={{ textAlign: "center", color: "var(--text-muted)", fontWeight: 300, fontSize: "1.1rem", margin: "0 0 1rem" }}>{title}</p>
       <div style={{ display: "flex", justifyContent: "space-around" }}>
         {pairs.map(({ icon: Icon, bg, time }) => (
           <div key={time} style={{ textAlign: "center" }}>
             <div style={{
               width: 44, height: 44, borderRadius: 10, background: bg,
               display: "flex", alignItems: "center", justifyContent: "center",
-              color: "#64748b", fontSize: "1.25rem", margin: "0 auto 6px",
+              color: "var(--text-secondary)", fontSize: "1.25rem", margin: "0 auto 6px",
             }}>
               <Icon />
             </div>
-            <span style={{ color: "#64748b", fontSize: "0.85rem", fontWeight: 500 }}>{time || "—"}</span>
+            <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem", fontWeight: 500 }}>{time || "—"}</span>
           </div>
         ))}
       </div>
@@ -93,21 +175,25 @@ export default function Lights() {
   const existingRooms = [...new Set(Object.values(settings.lights || {}).map(l => l.room?.trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
 
+  const lightsOnCount = lightsDevices.filter(d => d.status?.components?.main?.switch?.switch?.value === "on").length;
+
   if (loading) return <Spinner message="Loading your smart home..." />;
 
   return (
     <div className="lights-page" style={pageContainerStyle(CONTAINER_WIDE)}>
-      <PageHeader title="Lights" />
+      <PageHeader title="Home" subtitle={`${greeting()} — here's how the house is doing`} />
       <style>{`
         .device-card-wrapper:hover .settings-button { opacity: 1 !important; }
-        .settings-button:hover { background: #e2e8f0 !important; color: #1e293b !important; }
+        .settings-button:hover { background: var(--border) !important; color: var(--text-primary) !important; }
         .section-header:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.12) !important; }
-        input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:#fbbf24; cursor:pointer; box-shadow:0 2px 6px rgba(251,191,36,0.4); }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:var(--warning); cursor:pointer; box-shadow:0 2px 6px rgba(251,191,36,0.4); }
         @media (max-width: 640px) {
           .lights-page { padding: 0.85rem !important; }
           .section-header { height: auto !important; padding: 0.85rem 1rem !important; }
         }
       `}</style>
+
+      <HouseOverview lightsOn={lightsOnCount} lightsTotal={lightsDevices.length} />
 
       {/* Car controls */}
       <CarControls start={car.start} lock={car.lock} unlock={car.unlock} />
@@ -124,12 +210,12 @@ export default function Lights() {
               <div key={room} style={{ marginBottom: "1.25rem" }}>
                 <div onClick={() => setExpandedRooms(p => ({ ...p, [room]: !expanded }))} style={{
                   display: "flex", justifyContent: "space-between", alignItems: "center",
-                  padding: "0.85rem 1.25rem", background: "white", borderRadius: 10,
-                  border: "1px solid #e2e8f0", cursor: "pointer", marginBottom: "0.75rem",
+                  padding: "0.85rem 1.25rem", background: "var(--bg-card)", borderRadius: 10,
+                  border: "1px solid var(--border)", cursor: "pointer", marginBottom: "0.75rem",
                 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                    <span style={{ fontWeight: 600, color: "#1e293b" }}>{room}</span>
-                    <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>
+                    <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{room}</span>
+                    <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
                       {roomDevices.length} {roomDevices.length === 1 ? "light" : "lights"}
                     </span>
                   </div>
@@ -156,7 +242,7 @@ export default function Lights() {
 
       {/* ── Appliances ── */}
       <SectionHeader title="Appliances" isExpanded={showAppliances} onClick={() => setShowAppliances(v => !v)}
-        icon={FaTv} count={appliancesDevices.length} accentColor="#10b981" />
+        icon={FaTv} count={appliancesDevices.length} accentColor="var(--success)" />
 
       {showAppliances && (
         <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_WIDE}px, 1fr))`, gap: "1rem", marginBottom: "1.5rem" }}>
@@ -168,7 +254,7 @@ export default function Lights() {
 
             return (
               <div key={d.deviceId} style={{
-                background: "white", borderRadius: 14, border: "1px solid #e2e8f0",
+                background: "var(--bg-card)", borderRadius: 14, border: "1px solid var(--border)",
                 boxShadow: "0 1px 3px rgba(0,0,0,0.07)", padding: "1.25rem",
                 opacity: isOffline ? 0.55 : 1,
               }}>
@@ -176,23 +262,23 @@ export default function Lights() {
                   <div style={{
                     width: 44, height: 44, borderRadius: 10, display: "flex",
                     alignItems: "center", justifyContent: "center", fontSize: "1.1rem",
-                    background: "linear-gradient(135deg, #10b981, #059669)", color: "white",
+                    background: "linear-gradient(135deg, var(--success), #059669)", color: "white",
                   }}>
                     <FaTv />
                   </div>
                   <div>
-                    <p style={{ fontWeight: 600, color: "#1e293b", margin: 0 }}>{d.label}</p>
-                    <p style={{ color: "#94a3b8", fontSize: "0.8rem", margin: 0 }}>
+                    <p style={{ fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>{d.label}</p>
+                    <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", margin: 0 }}>
                       {isOffline ? "Offline" : "Connected"}
                     </p>
                   </div>
                 </div>
                 {(dryerState || washerState) && (
-                  <div style={{ background: "#f8fafc", borderRadius: 10, padding: "0.75rem" }}>
+                  <div style={{ background: "var(--bg-surface)", borderRadius: 10, padding: "0.75rem" }}>
                     {[dryerState, washerState].filter(Boolean).map(s => (
                       <div key={s} style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "#64748b", fontSize: "0.85rem" }}>Status</span>
-                        <span style={{ fontWeight: 600, color: "#1e293b", fontSize: "0.85rem" }}>{s}</span>
+                        <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Status</span>
+                        <span style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "0.85rem" }}>{s}</span>
                       </div>
                     ))}
                   </div>
@@ -232,8 +318,8 @@ export default function Lights() {
             const isOffline = main.healthCheck?.["DeviceWatch-DeviceStatus"]?.value === "offline";
             return (
               <div key={d.deviceId} style={{
-                background: isOn ? "linear-gradient(135deg, #eff6ff, white)" : "white",
-                borderRadius: 14, border: `1px solid ${isOn ? "#bfdbfe" : "#e2e8f0"}`,
+                background: isOn ? "linear-gradient(135deg, var(--tint-info), var(--bg-card))" : "var(--bg-card)",
+                borderRadius: 14, border: `1px solid ${isOn ? "#bfdbfe" : "var(--border)"}`,
                 boxShadow: "0 1px 3px rgba(0,0,0,0.07)", padding: "1.25rem",
                 opacity: isOffline ? 0.55 : 1, display: "flex", alignItems: "center",
                 justifyContent: "space-between",
@@ -242,14 +328,14 @@ export default function Lights() {
                   <div style={{
                     width: 44, height: 44, borderRadius: 10, display: "flex",
                     alignItems: "center", justifyContent: "center", fontSize: "1.1rem",
-                    background: isOn ? "#3b82f6" : "#f1f5f9", color: isOn ? "white" : "#9ca3af",
+                    background: isOn ? "var(--accent)" : "var(--bg-surface-alt)", color: isOn ? "white" : "#9ca3af",
                     boxShadow: isOn ? "0 6px 16px rgba(59,130,246,0.3)" : "none",
                   }}>
                     <FaPlug />
                   </div>
                   <div>
-                    <p style={{ fontWeight: 600, color: "#1e293b", margin: 0, fontSize: "0.9rem" }}>{d.label}</p>
-                    <p style={{ color: "#94a3b8", fontSize: "0.78rem", margin: 0 }}>
+                    <p style={{ fontWeight: 600, color: "var(--text-primary)", margin: 0, fontSize: "0.9rem" }}>{d.label}</p>
+                    <p style={{ color: "var(--text-muted)", fontSize: "0.78rem", margin: 0 }}>
                       {isOffline ? "Offline" : isOn ? "Active" : "Inactive"}
                     </p>
                   </div>
@@ -260,7 +346,7 @@ export default function Lights() {
                   style={{
                     width: 42, height: 42, borderRadius: 10, border: "none",
                     cursor: isOffline ? "not-allowed" : "pointer",
-                    background: isOn ? "#10b981" : "#ef4444", color: "white",
+                    background: isOn ? "var(--success)" : "var(--danger)", color: "white",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     boxShadow: `0 4px 12px ${isOn ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`,
                     transition: "all 0.2s",

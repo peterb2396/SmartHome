@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
-  getThermostat, setThermostatZone, setZoneSchedule as apiSetZoneSchedule,
-  setThermostatMode, setThermostatRates, setThermostatAvailability,
+  getThermostat, setThermostatZone, setZoneSchedule as apiSetZoneSchedule, setZoneBalance as apiSetZoneBalance,
+  setThermostatMode, setThermostatRates, setThermostatAvailability, setGasSeasonThreshold as apiSetGasSeasonThreshold,
 } from "../api";
 
 const POLL_MS = 15000;
@@ -25,7 +25,7 @@ const FALLBACK_PRIORITY = ["gas", "air", "electric"];
 
 function defaultState() {
   return {
-    mode: "auto", activeSource: "gas", lastDecision: null,
+    mode: "auto", activeSource: "gas", activeSystem: "4zone", gasSeasonThresholdF: 50, lastDecision: null,
     rates: { gasPricePerTherm: 1.5, elecPricePerKwh: 0.15, gasAfue: 0.85 },
     available: { gas: true, electric: true, air: true },
     safetyRange: { min: 60, max: 75 },
@@ -39,6 +39,7 @@ function defaultState() {
         humidity: { value: null, status: null }, pressure: { value: null, status: null },
         voc: { value: null, status: null }, co2: { value: null, status: null },
       },
+      balancePercent: 100, damperPercent: 0, damperMoving: null,
     })),
   };
 }
@@ -160,6 +161,16 @@ export function useThermostat() {
     () => apiSetZoneSchedule(zoneId, schedule)
   ), [runMutation]);
 
+  const setBalance = useCallback((zoneId, balancePercent) => runMutation(
+    prev => prev && { ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, balancePercent } : z) },
+    () => apiSetZoneBalance(zoneId, balancePercent)
+  ), [runMutation]);
+
+  const setSeasonThreshold = useCallback((gasSeasonThresholdF) => runMutation(
+    prev => prev && { ...prev, gasSeasonThresholdF },
+    () => apiSetGasSeasonThreshold(gasSeasonThresholdF)
+  ), [runMutation]);
+
   const setMode = useCallback((mode) => runMutation(
     prev => {
       if (!prev) return prev;
@@ -200,7 +211,7 @@ export function useThermostat() {
 
   return {
     state, loading, error, offline,
-    setTarget, toggleZone, saveSchedule, setMode, setRates, setAvailability,
+    setTarget, toggleZone, saveSchedule, setBalance, setMode, setRates, setAvailability, setSeasonThreshold,
     refetch: fetchState,
   };
 }

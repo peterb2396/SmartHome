@@ -101,14 +101,14 @@ export default function ThermoDial({
 
   let statusText, statusColor;
   if (safety === "below-min") {
-    statusText = "Freeze Protection"; statusColor = "#ef4444";
+    statusText = "Freeze Protection"; statusColor = "var(--danger)";
   } else if (safety === "above-max") {
-    statusText = "Safety Cooling"; statusColor = "#3b82f6";
+    statusText = "Safety Cooling"; statusColor = "var(--accent)";
   } else if (!on) {
-    statusText = "Off"; statusColor = "#94a3b8";
+    statusText = "Off"; statusColor = "var(--text-muted)";
   } else {
     statusText = coolCalling ? "Cooling" : calling ? "Heating" : "Idle";
-    statusColor = coolCalling ? "#3b82f6" : calling ? "#ef4444" : "#22c55e";
+    statusColor = coolCalling ? "var(--accent)" : calling ? "var(--danger)" : "#22c55e";
   }
 
   return (
@@ -125,13 +125,13 @@ export default function ThermoDial({
         >
           <defs>
             <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#3b82f6" />
+              <stop offset="0%" stopColor="var(--accent)" />
               <stop offset="55%" stopColor="#f59e0b" />
-              <stop offset="100%" stopColor="#ef4444" />
+              <stop offset="100%" stopColor="var(--danger)" />
             </linearGradient>
           </defs>
 
-          <path d={trackPath} fill="none" stroke={active ? "#e2e8f0" : "#e5e7eb"} strokeWidth={14} strokeLinecap="round" />
+          <path d={trackPath} fill="none" stroke={active ? "var(--border)" : "#e5e7eb"} strokeWidth={14} strokeLinecap="round" />
 
           {current != null && (
             <path d={fillPath} fill="none" stroke={active ? `url(#${gradId})` : "#cbd5e1"} strokeWidth={14} strokeLinecap="round"
@@ -140,7 +140,7 @@ export default function ThermoDial({
 
           {/* Target marker — bigger + no transition while actively dragging, so it tracks the pointer exactly */}
           <circle cx={targetPoint.x} cy={targetPoint.y} r={dragValue != null ? 11 : 9}
-            fill="white" stroke={active ? "#1e293b" : "#94a3b8"} strokeWidth={3}
+            fill="white" stroke={active ? "var(--text-primary)" : "var(--text-muted)"} strokeWidth={3}
             style={{ transition: dragValue == null ? "cx 0.15s, cy 0.15s" : "none" }} />
         </svg>
 
@@ -148,10 +148,10 @@ export default function ThermoDial({
           position: "absolute", inset: 0, display: "flex", flexDirection: "column",
           alignItems: "center", justifyContent: "center", pointerEvents: "none",
         }}>
-          <div style={{ fontSize: size * 0.19, fontWeight: 700, color: active ? "#1e293b" : "#9ca3af", lineHeight: 1 }}>
+          <div style={{ fontSize: size * 0.19, fontWeight: 700, color: active ? "var(--text-primary)" : "var(--text-muted)", lineHeight: 1 }}>
             {Math.round(displayTarget)}°
           </div>
-          <div style={{ fontSize: size * 0.075, color: "#94a3b8", marginTop: 4 }}>
+          <div style={{ fontSize: size * 0.075, color: "var(--text-muted)", marginTop: 4 }}>
             {current != null ? `now ${current.toFixed(1)}°` : "no reading"}
           </div>
           <div style={{
@@ -177,7 +177,7 @@ export default function ThermoDial({
 
 const stepBtnStyle = {
   width: 34, height: 34, borderRadius: "50%", border: "none",
-  background: "#f1f5f9", color: "#334155",
+  background: "var(--bg-surface-alt)", color: "var(--text-secondary)",
   display: "flex", alignItems: "center", justifyContent: "center",
   cursor: "pointer", transition: "background 0.15s",
 };

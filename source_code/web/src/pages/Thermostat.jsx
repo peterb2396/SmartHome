@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { FaExclamationTriangle, FaCog } from "react-icons/fa";
+import { FaExclamationTriangle, FaCog, FaFire } from "react-icons/fa";
 import { useThermostat } from "../hooks/useThermostat";
+import { useBoiler } from "../hooks/useBoiler";
 import ZoneCard      from "../components/ZoneCard";
 import ModeToggle    from "../components/ModeToggle";
 import ScheduleModal from "../components/ScheduleModal";
@@ -10,8 +11,15 @@ import PageHeader    from "../components/PageHeader";
 import { CONTAINER_NARROW, CONTAINER_WIDE, GRID_COMPACT, pageContainerStyle } from "../styles/tokens";
 
 export default function Thermostat() {
-  const { state, loading, error, offline, setTarget, toggleZone, saveSchedule, setMode, setAvailability, setRates, refetch } = useThermostat();
-  const [scheduleZoneId, setScheduleZoneId] = useState(null);
+  const {
+    state, loading, error, offline,
+    setTarget, toggleZone, saveSchedule, setBalance, setMode, setAvailability, setRates, setSeasonThreshold, refetch,
+  } = useThermostat();
+  const boiler = useBoiler();
+  // { system: '4zone' | '3zone', id } | null — tracks which system a given
+  // schedule-modal zone id belongs to, since the two systems' zone ids can
+  // otherwise collide (both have a "downstairs").
+  const [scheduleTarget, setScheduleTarget] = useState(null);
   const [showRates, setShowRates] = useState(false);
 
   if (loading) return <Spinner message="Loading thermostat..." />;
@@ -24,7 +32,7 @@ export default function Thermostat() {
       <div style={{ ...pageContainerStyle(CONTAINER_NARROW), marginTop: "3rem" }}>
         <div style={{
           display: "flex", alignItems: "center", gap: 10,
-          background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12,
+          background: "var(--tint-danger)", border: "1px solid #fecaca", borderRadius: 12,
           padding: "1rem 1.25rem", color: "#b91c1c",
         }}>
           <FaExclamationTriangle size={18} />
@@ -43,8 +51,20 @@ export default function Thermostat() {
     );
   }
 
-  const scheduleZone = state.zones.find(z => z.id === scheduleZoneId);
-  const unresponsiveZones = state.zones.filter(z => !z.sensorOk);
+  // Which zone layout is actually live right now (see thermostat.js's
+  // getActiveSystem()) — gas mode + cold-enough weather hands control to
+  // the boiler's 3 zones; otherwise the air handler's 4 zones are shown.
+  const is3Zone = state.activeSystem === "3zone";
+  const zonesToShow = is3Zone ? (boiler.state?.zones ?? []) : state.zones;
+  const zoneStep = is3Zone ? boiler.setTarget : setTarget;
+  const zoneToggle = is3Zone ? boiler.toggleZone : toggleZone;
+
+  const scheduleZone = scheduleTarget && (
+    scheduleTarget.system === "3zone"
+      ? (boiler.state?.zones ?? []).find(z => z.id === scheduleTarget.id)
+      : state.zones.find(z => z.id === scheduleTarget.id)
+  );
+  const unresponsiveZones = zonesToShow.filter(z => !z.sensorOk);
 
   return (
     <div style={pageContainerStyle(CONTAINER_WIDE)}>
@@ -53,7 +73,7 @@ export default function Thermostat() {
         actions={
           <button onClick={() => setShowRates(true)} aria-label="Utility rate settings" title="Utility rate settings" style={{
             width: 34, height: 34, borderRadius: "50%", border: "none",
-            background: "white", boxShadow: "0 1px 3px rgba(0,0,0,0.1)", color: "#64748b",
+            background: "var(--bg-card)", boxShadow: "0 1px 3px rgba(0,0,0,0.1)", color: "var(--text-secondary)",
             display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "0.95rem",
           }}>
             <FaCog />
@@ -61,17 +81,31 @@ export default function Thermostat() {
         }
       />
 
+      {is3Zone && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, marginBottom: "1.25rem",
+          background: "var(--tint-warning)", border: "1px solid #fed7aa", borderRadius: 10,
+          padding: "0.65rem 1rem", color: "#9a3412", fontSize: "0.85rem", fontWeight: 600,
+        }}>
+          <FaFire />
+          Gas boiler heating season — showing the boiler's own Great Room / Downstairs / Upstairs
+          zones. The air handler's 4 zones are idle until gas mode is deselected or it warms back up
+          above the season threshold (set in Settings, the gear icon above).
+        </div>
+      )}
+
       <div style={{
         display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_COMPACT}px, 1fr))`,
         gap: "1.25rem", marginBottom: "1.5rem",
       }}>
-        {state.zones.map(zone => (
+        {zonesToShow.map(zone => (
           <ZoneCard
             key={zone.id}
             zone={zone}
-            onStep={setTarget}
-            onToggle={toggleZone}
-            onOpenSchedule={setScheduleZoneId}
+            onStep={zoneStep}
+            onToggle={zoneToggle}
+            onOpenSchedule={id => setScheduleTarget({ system: is3Zone ? "3zone" : "4zone", id })}
+            onBalanceChange={is3Zone ? undefined : setBalance}
           />
         ))}
       </div>
@@ -79,7 +113,7 @@ export default function Thermostat() {
       {offline && (
         <div style={{
           display: "flex", alignItems: "center", gap: 8, marginBottom: "1rem",
-          background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10,
+          background: "var(--tint-warning)", border: "1px solid #fde68a", borderRadius: 10,
           padding: "0.65rem 1rem", color: "#92400e", fontSize: "0.85rem", fontWeight: 600,
         }}>
           <FaExclamationTriangle />
@@ -97,7 +131,7 @@ export default function Thermostat() {
       {unresponsiveZones.length > 0 && (
         <div style={{
           display: "flex", alignItems: "center", gap: 8, marginBottom: "1rem",
-          background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 10,
+          background: "var(--tint-warning)", border: "1px solid #fed7aa", borderRadius: 10,
           padding: "0.65rem 1rem", color: "#9a3412", fontSize: "0.85rem", fontWeight: 600,
         }}>
           <FaExclamationTriangle />
@@ -122,14 +156,16 @@ export default function Thermostat() {
       {scheduleZone && (
         <ScheduleModal
           zone={scheduleZone}
-          onClose={() => setScheduleZoneId(null)}
-          onSave={saveSchedule}
+          onClose={() => setScheduleTarget(null)}
+          onSave={scheduleTarget?.system === "3zone" ? boiler.saveSchedule : saveSchedule}
         />
       )}
 
       {showRates && (
         <RatesModal
           rates={state.rates}
+          gasSeasonThresholdF={state.gasSeasonThresholdF}
+          onSaveThreshold={setSeasonThreshold}
           onClose={() => setShowRates(false)}
           onSave={setRates}
         />

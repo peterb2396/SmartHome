@@ -1,11 +1,11 @@
 import { FaChevronDown, FaChevronUp } from "react-icons/fa";
 
-export default function SectionHeader({ title, isExpanded, onClick, icon: Icon, count, unitLabel = "devices", accentColor = "#3b82f6" }) {
+export default function SectionHeader({ title, isExpanded, onClick, icon: Icon, count, unitLabel = "devices", accentColor = "var(--accent)" }) {
   return (
     <div className="section-header" onClick={onClick} style={{
       display: "flex", alignItems: "center", justifyContent: "space-between",
-      padding: "1.25rem 1.5rem", background: "white", borderRadius: "12px",
-      boxShadow: "0 1px 3px rgba(0,0,0,0.08)", border: "1px solid #e2e8f0",
+      padding: "1.25rem 1.5rem", background: "var(--bg-card)", borderRadius: "12px",
+      boxShadow: "0 1px 3px rgba(0,0,0,0.08)", border: "1px solid var(--border)",
       cursor: "pointer", marginBottom: "1rem", transition: "box-shadow 0.2s",
       height: "80px",
     }}>
@@ -20,8 +20,8 @@ export default function SectionHeader({ title, isExpanded, onClick, icon: Icon, 
           </div>
         )}
         <div>
-          <h2 style={{ fontSize: "1.2rem", fontWeight: 700, color: "#1e293b", margin: 0 }}>{title}</h2>
-          {count != null && <p style={{ color: "#94a3b8", fontSize: "0.8rem", margin: 0 }}>{count} {unitLabel}</p>}
+          <h2 style={{ fontSize: "1.2rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>{title}</h2>
+          {count != null && <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", margin: 0 }}>{count} {unitLabel}</p>}
         </div>
       </div>
       <div style={{ color: "#cbd5e1" }}>

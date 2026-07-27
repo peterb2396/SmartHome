@@ -53,6 +53,18 @@
     -->
     <title>Smart Home</title>
     <script id="react-dotenv" src="./env.js"></script>
+    <script>
+      // Applied before React mounts so the page never flashes the wrong
+      // theme on load — mirrors useTheme.js's own resolution logic.
+      (function () {
+        try {
+          var stored = localStorage.getItem("smarthome-theme");
+          if (stored === "dark" || stored === "light") {
+            document.documentElement.setAttribute("data-theme", stored);
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>

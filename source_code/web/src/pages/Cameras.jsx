@@ -65,19 +65,19 @@ function LiveModal({ camera, onClose }) {
       {/* Header */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "0.85rem 1.25rem", background: "#0f172a", borderBottom: "1px solid #1e293b",
+        padding: "0.85rem 1.25rem", background: "#0f172a", borderBottom: "1px solid var(--text-primary)",
         flexShrink: 0,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <FaCamera style={{ color: "#94a3b8" }} />
+          <FaCamera style={{ color: "var(--text-muted)" }} />
           <div>
             <span style={{ color: "white", fontWeight: 700 }}>{camera.label}</span>
-            {camera.location && <span style={{ color: "#64748b", fontSize: "0.8rem", marginLeft: 8 }}>{camera.location}</span>}
+            {camera.location && <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem", marginLeft: 8 }}>{camera.location}</span>}
           </div>
           {camera.isRecording && (
-            <div style={{ display: "flex", alignItems: "center", gap: 5, background: "#ef444422", border: "1px solid #ef4444", borderRadius: 20, padding: "2px 8px" }}>
-              <div style={{ width: 6, height: 6, background: "#ef4444", borderRadius: "50%", animation: "recPulse 1.2s ease-in-out infinite" }} />
-              <span style={{ color: "#ef4444", fontSize: "0.72rem", fontWeight: 700 }}>LIVE</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 5, background: "var(--danger)22", border: "1px solid var(--danger)", borderRadius: 20, padding: "2px 8px" }}>
+              <div style={{ width: 6, height: 6, background: "var(--danger)", borderRadius: "50%", animation: "recPulse 1.2s ease-in-out infinite" }} />
+              <span style={{ color: "var(--danger)", fontSize: "0.72rem", fontWeight: 700 }}>LIVE</span>
             </div>
           )}
         </div>
@@ -86,14 +86,14 @@ function LiveModal({ camera, onClose }) {
           {["live", "history"].map(v => (
             <button key={v} onClick={() => setView(v)} style={{
               padding: "0.35rem 0.85rem", borderRadius: 8, border: "none", cursor: "pointer",
-              background: view === v ? "#2563eb" : "#1e293b",
-              color: view === v ? "white" : "#64748b", fontWeight: 600, fontSize: "0.85rem",
+              background: view === v ? "var(--accent-dark)" : "var(--text-primary)",
+              color: view === v ? "white" : "var(--text-secondary)", fontWeight: 600, fontSize: "0.85rem",
               textTransform: "capitalize",
             }}>{v}</button>
           ))}
           <button onClick={onClose} style={{
-            marginLeft: 8, background: "#1e293b", border: "none", borderRadius: 8,
-            color: "#94a3b8", cursor: "pointer", padding: "0.35rem 0.75rem", fontSize: "1.1rem",
+            marginLeft: 8, background: "var(--text-primary)", border: "none", borderRadius: 8,
+            color: "var(--text-muted)", cursor: "pointer", padding: "0.35rem 0.75rem", fontSize: "1.1rem",
           }}>✕</button>
         </div>
       </div>
@@ -111,8 +111,8 @@ function LiveModal({ camera, onClose }) {
                     background: "rgba(0,0,0,0.6)", borderRadius: 8, padding: "4px 10px",
                     display: "flex", alignItems: "center", gap: 6,
                   }}>
-                    <FaSync style={{ color: "#94a3b8", fontSize: "0.75rem" }} />
-                    <span style={{ color: "#94a3b8", fontSize: "0.75rem" }}>Refreshes every 5s</span>
+                    <FaSync style={{ color: "var(--text-muted)", fontSize: "0.75rem" }} />
+                    <span style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>Refreshes every 5s</span>
                   </div>
                   {/* If there's an actual HLS/stream URL, embed it */}
                   {camera.streamUrl?.startsWith("http") && (
@@ -130,7 +130,7 @@ function LiveModal({ camera, onClose }) {
                   <FaVideoSlash style={{ fontSize: "3rem", marginBottom: 12 }} />
                   <p>No snapshot available</p>
                   <button onClick={refreshSnap} style={{
-                    padding: "0.5rem 1.25rem", background: "#2563eb", color: "white",
+                    padding: "0.5rem 1.25rem", background: "var(--accent-dark)", color: "white",
                     border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600,
                   }}>Try Again</button>
                 </div>
@@ -148,8 +148,8 @@ function LiveModal({ camera, onClose }) {
                   style={{ width: "100%", maxHeight: "50vh", borderRadius: 10, background: "#0f172a" }}
                 />
                 <button onClick={() => setPlayingRec(null)} style={{
-                  marginTop: 8, padding: "0.4rem 1rem", background: "#1e293b",
-                  color: "#94a3b8", border: "none", borderRadius: 8, cursor: "pointer", fontSize: "0.85rem",
+                  marginTop: 8, padding: "0.4rem 1rem", background: "var(--text-primary)",
+                  color: "var(--text-muted)", border: "none", borderRadius: 8, cursor: "pointer", fontSize: "0.85rem",
                 }}>
                   Close player
                 </button>
@@ -166,14 +166,14 @@ function LiveModal({ camera, onClose }) {
                 {recordings.map(rec => (
                   <div key={rec._id} style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
-                    background: "#1e293b", borderRadius: 10, padding: "0.75rem 1rem",
-                    border: playingRec === rec._id ? "1px solid #2563eb" : "1px solid #334155",
+                    background: "var(--text-primary)", borderRadius: 10, padding: "0.75rem 1rem",
+                    border: playingRec === rec._id ? "1px solid var(--accent-dark)" : "1px solid #334155",
                   }}>
                     <div>
                       <p style={{ margin: 0, color: "white", fontWeight: 600, fontSize: "0.85rem" }}>
                         {formatDate(rec.startedAt)}
                       </p>
-                      <p style={{ margin: 0, color: "#64748b", fontSize: "0.75rem" }}>
+                      <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.75rem" }}>
                         {rec.filename}
                         {rec.sizeMB ? ` · ${rec.sizeMB.toFixed(1)} MB` : ""}
                         {rec.durationSec ? ` · ${Math.round(rec.durationSec / 60)}m` : ""}
@@ -186,12 +186,12 @@ function LiveModal({ camera, onClose }) {
                         <FaPlay style={{ fontSize: "0.8rem" }} />
                       </button>
                       <a href={streamRecordingUrl(rec._id)} download={rec.filename}
-                        style={{ ...iconBtn("#162032", "#10b981"), display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}
+                        style={{ ...iconBtn("#162032", "var(--success)"), display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}
                         title="Download">
                         <FaDownload style={{ fontSize: "0.8rem" }} />
                       </a>
                       <button onClick={() => handleDelete(rec._id)}
-                        style={iconBtn("#162032", "#ef4444")} title="Delete">
+                        style={iconBtn("#162032", "var(--danger)")} title="Delete">
                         <FaTrash style={{ fontSize: "0.8rem" }} />
                       </button>
                     </div>
@@ -251,12 +251,12 @@ function CameraFormModal({ existing, onClose, onSave }) {
       zIndex: 1100, padding: "1rem",
     }}>
       <div style={{
-        background: "white", borderRadius: 16, maxWidth: 500, width: "100%",
+        background: "var(--bg-card)", borderRadius: 16, maxWidth: 500, width: "100%",
         maxHeight: "90vh", overflow: "auto", boxShadow: "0 25px 50px rgba(0,0,0,0.25)",
       }}>
         <div style={{
           padding: "1.25rem 1.5rem",
-          background: "linear-gradient(135deg, #0f172a, #1e293b)",
+          background: "linear-gradient(135deg, #0f172a, var(--text-primary))",
           display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
           <h2 style={{ color: "white", margin: 0, fontSize: "1.1rem", fontWeight: 700 }}>
@@ -267,7 +267,7 @@ function CameraFormModal({ existing, onClose, onSave }) {
         <div style={{ padding: "1.5rem" }}>
           {fields.map(({ key, label, placeholder, type = "text", disabled = false }) => (
             <div key={key} style={{ marginBottom: "1rem" }}>
-              <label style={{ display: "block", fontWeight: 600, fontSize: "0.82rem", color: "#1e293b", marginBottom: 4 }}>{label}</label>
+              <label style={{ display: "block", fontWeight: 600, fontSize: "0.82rem", color: "var(--text-primary)", marginBottom: 4 }}>{label}</label>
               <input
                 type={type}
                 value={form[key] ?? ""}
@@ -281,15 +281,15 @@ function CameraFormModal({ existing, onClose, onSave }) {
 
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1rem" }}>
             <input type="checkbox" id="enabled" checked={form.enabled} onChange={e => set("enabled", e.target.checked)} />
-            <label htmlFor="enabled" style={{ fontWeight: 600, fontSize: "0.85rem", color: "#1e293b", cursor: "pointer" }}>
+            <label htmlFor="enabled" style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", cursor: "pointer" }}>
               Camera enabled
             </label>
           </div>
 
-          {err && <p style={{ color: "#ef4444", fontSize: "0.85rem", margin: "0 0 1rem" }}>{err}</p>}
+          {err && <p style={{ color: "var(--danger)", fontSize: "0.85rem", margin: "0 0 1rem" }}>{err}</p>}
 
           <div style={{ display: "flex", gap: "0.75rem" }}>
-            <button onClick={onClose} style={{ flex: 1, padding: "0.7rem", background: "#e2e8f0", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+            <button onClick={onClose} style={{ flex: 1, padding: "0.7rem", background: "var(--border)", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
             <button onClick={handleSave} disabled={saving} style={{ flex: 1, padding: "0.7rem", background: "#0f172a", color: "white", border: "none", borderRadius: 10, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.7 : 1 }}>
               {saving ? "Saving..." : "Save Camera"}
             </button>
@@ -369,7 +369,7 @@ export default function Cameras() {
         subtitle={`${cameras.length} camera${cameras.length !== 1 ? "s" : ""} · ${cameras.filter(c => c.isRecording).length} recording`}
         actions={
           <>
-            <button onClick={fetchCameras} style={headerBtn("#f1f5f9", "#64748b")}>
+            <button onClick={fetchCameras} style={headerBtn("var(--bg-surface-alt)", "var(--text-secondary)")}>
               <FaSync style={{ fontSize: "0.8rem" }} /> Refresh
             </button>
             <button onClick={() => { setEditing(null); setShowForm(true); }} style={headerBtn("#0f172a", "white")}>
@@ -382,12 +382,12 @@ export default function Cameras() {
       {/* Empty state */}
       {cameras.length === 0 && (
         <div style={{
-          textAlign: "center", padding: "4rem 2rem", background: "white",
-          borderRadius: 16, border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.07)",
+          textAlign: "center", padding: "4rem 2rem", background: "var(--bg-card)",
+          borderRadius: 16, border: "1px solid var(--border)", boxShadow: "0 1px 3px rgba(0,0,0,0.07)",
         }}>
           <FaCamera style={{ fontSize: "3rem", color: "#cbd5e1", marginBottom: "1rem" }} />
-          <h2 style={{ color: "#1e293b", fontWeight: 700, marginBottom: 8 }}>No cameras yet</h2>
-          <p style={{ color: "#94a3b8", marginBottom: "1.5rem", maxWidth: 360, margin: "0 auto 1.5rem" }}>
+          <h2 style={{ color: "var(--text-primary)", fontWeight: 700, marginBottom: 8 }}>No cameras yet</h2>
+          <p style={{ color: "var(--text-muted)", marginBottom: "1.5rem", maxWidth: 360, margin: "0 auto 1.5rem" }}>
             Add your first camera to start monitoring live feeds and recording history.
           </p>
           <button onClick={() => { setEditing(null); setShowForm(true); }} style={{
@@ -429,16 +429,16 @@ export default function Cameras() {
       {/* Setup guide */}
       {cameras.length > 0 && (
         <div style={{
-          marginTop: "2rem", padding: "1.25rem 1.5rem", background: "white",
-          borderRadius: 12, border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+          marginTop: "2rem", padding: "1.25rem 1.5rem", background: "var(--bg-card)",
+          borderRadius: 12, border: "1px solid var(--border)", boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
         }}>
-          <h3 style={{ margin: "0 0 0.75rem", fontWeight: 700, color: "#1e293b", fontSize: "0.95rem", display: "flex", alignItems: "center", gap: 8 }}>
-            <FaHdd style={{ color: "#94a3b8" }} /> Recording Setup
+          <h3 style={{ margin: "0 0 0.75rem", fontWeight: 700, color: "var(--text-primary)", fontSize: "0.95rem", display: "flex", alignItems: "center", gap: 8 }}>
+            <FaHdd style={{ color: "var(--text-muted)" }} /> Recording Setup
           </h3>
-          <p style={{ margin: 0, color: "#64748b", fontSize: "0.85rem", lineHeight: 1.7 }}>
+          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.7 }}>
             Recordings are saved on the Raspberry Pi via <strong>ffmpeg</strong> in 10-minute segments.
-            Install ffmpeg with <code style={{ background: "#f1f5f9", padding: "1px 6px", borderRadius: 4 }}>sudo apt install ffmpeg</code>.
-            Set a <strong>Recording Path</strong> on each camera (e.g. <code style={{ background: "#f1f5f9", padding: "1px 6px", borderRadius: 4 }}>/mnt/drive/cameras/front-door</code>).
+            Install ffmpeg with <code style={{ background: "var(--bg-surface-alt)", padding: "1px 6px", borderRadius: 4 }}>sudo apt install ffmpeg</code>.
+            Set a <strong>Recording Path</strong> on each camera (e.g. <code style={{ background: "var(--bg-surface-alt)", padding: "1px 6px", borderRadius: 4 }}>/mnt/drive/cameras/front-door</code>).
             When a drive fills to the <strong>Max Storage</strong> limit, the oldest segments are automatically deleted.
           </p>
         </div>
@@ -462,7 +462,7 @@ function headerBtn(bg, color) {
 }
 
 const formInput = {
-  width: "100%", padding: "0.65rem 0.9rem", background: "#f8fafc",
-  border: "1px solid #e2e8f0", borderRadius: 8, fontSize: "0.9rem",
+  width: "100%", padding: "0.65rem 0.9rem", background: "var(--bg-surface)",
+  border: "1px solid var(--border)", borderRadius: 8, fontSize: "0.9rem",
   outline: "none", boxSizing: "border-box",
 };

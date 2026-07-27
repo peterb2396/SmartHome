@@ -12,14 +12,14 @@ function iconBtn(bg, color) {
 
 function StorageBar({ used, max }) {
   const pct = Math.min(100, Math.round((used / (max * 1024)) * 100)) || 0;
-  const color = pct > 85 ? "#ef4444" : pct > 60 ? "#f59e0b" : "#10b981";
+  const color = pct > 85 ? "var(--danger)" : pct > 60 ? "#f59e0b" : "var(--success)";
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "#64748b", marginBottom: 4 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--text-secondary)", marginBottom: 4 }}>
         <span>{(used / 1024).toFixed(1)} GB used</span>
         <span>{max} GB max</span>
       </div>
-      <div style={{ height: 6, background: "#e2e8f0", borderRadius: 3, overflow: "hidden" }}>
+      <div style={{ height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
         <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 3, transition: "width 0.4s" }} />
       </div>
       <div style={{ fontSize: "0.72rem", color, marginTop: 2, fontWeight: 600 }}>{pct}% full</div>
@@ -66,7 +66,7 @@ export default function CameraTile({ camera, onSelect, onSettings, onToggleRecor
 
   return (
     <div style={{
-      background: "white", borderRadius: 16, border: "1px solid #e2e8f0",
+      background: "var(--bg-card)", borderRadius: 16, border: "1px solid var(--border)",
       boxShadow: "0 2px 8px rgba(0,0,0,0.07)", overflow: "hidden",
       opacity: camera.enabled ? 1 : 0.55,
     }}>
@@ -86,7 +86,7 @@ export default function CameraTile({ camera, onSelect, onSettings, onToggleRecor
               alignItems: "center", justifyContent: "center", color: "#475569", gap: 8,
             }}>
               {snapLoading
-                ? <div style={{ width: 28, height: 28, border: "2px solid #475569", borderTop: "2px solid #94a3b8", borderRadius: "50%", animation: "spin 0.9s linear infinite" }} />
+                ? <div style={{ width: 28, height: 28, border: "2px solid #475569", borderTop: "2px solid var(--text-muted)", borderRadius: "50%", animation: "spin 0.9s linear infinite" }} />
                 : <><FaVideoSlash style={{ fontSize: "2rem" }} /><span style={{ fontSize: "0.8rem" }}>{hasStream ? "No preview" : "No stream configured"}</span></>
               }
             </div>
@@ -99,7 +99,7 @@ export default function CameraTile({ camera, onSelect, onSettings, onToggleRecor
             display: "flex", alignItems: "center", gap: 5,
             background: "rgba(0,0,0,0.6)", borderRadius: 20, padding: "3px 8px",
           }}>
-            <div style={{ width: 8, height: 8, background: "#ef4444", borderRadius: "50%", animation: "recPulse 1.2s ease-in-out infinite" }} />
+            <div style={{ width: 8, height: 8, background: "var(--danger)", borderRadius: "50%", animation: "recPulse 1.2s ease-in-out infinite" }} />
             <span style={{ color: "white", fontSize: "0.72rem", fontWeight: 700 }}>REC</span>
           </div>
         )}
@@ -110,7 +110,7 @@ export default function CameraTile({ camera, onSelect, onSettings, onToggleRecor
             title={pinned ? "Unpin from Console" : "Pin to Console"}
             style={{
               position: "absolute", top: 10, right: 10,
-              ...iconBtn(pinned ? "#3b82f6" : "rgba(15,23,42,0.6)", "white"),
+              ...iconBtn(pinned ? "var(--accent)" : "rgba(15,23,42,0.6)", "white"),
               backdropFilter: "blur(4px)",
             }}>
             <FaThumbtack style={{ fontSize: "0.72rem" }} />
@@ -136,13 +136,13 @@ export default function CameraTile({ camera, onSelect, onSettings, onToggleRecor
       <div style={{ padding: "1rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
           <div>
-            <h3 style={{ margin: 0, fontWeight: 700, color: "#1e293b", fontSize: "0.95rem" }}>{camera.label}</h3>
-            {camera.location && <p style={{ margin: 0, fontSize: "0.78rem", color: "#94a3b8" }}>{camera.location}</p>}
+            <h3 style={{ margin: 0, fontWeight: 700, color: "var(--text-primary)", fontSize: "0.95rem" }}>{camera.label}</h3>
+            {camera.location && <p style={{ margin: 0, fontSize: "0.78rem", color: "var(--text-muted)" }}>{camera.location}</p>}
           </div>
           {(onSettings || onToggleRecord || onSelect) && (
             <div style={{ display: "flex", gap: 6 }}>
               {onSettings && (
-                <button onClick={() => onSettings(camera)} title="Configure" style={iconBtn("#f1f5f9", "#64748b")}>
+                <button onClick={() => onSettings(camera)} title="Configure" style={iconBtn("var(--bg-surface-alt)", "var(--text-secondary)")}>
                   <FaCog style={{ fontSize: "0.85rem" }} />
                 </button>
               )}
@@ -150,13 +150,13 @@ export default function CameraTile({ camera, onSelect, onSettings, onToggleRecor
                 <button
                   onClick={() => onToggleRecord(camera)}
                   title={camera.isRecording ? "Stop recording" : "Start recording"}
-                  style={iconBtn(camera.isRecording ? "#fef2f2" : "#f0fdf4", camera.isRecording ? "#ef4444" : "#10b981")}
+                  style={iconBtn(camera.isRecording ? "#fef2f2" : "#f0fdf4", camera.isRecording ? "var(--danger)" : "var(--success)")}
                 >
                   {camera.isRecording ? <FaStop style={{ fontSize: "0.85rem" }} /> : <FaVideo style={{ fontSize: "0.85rem" }} />}
                 </button>
               )}
               {onSelect && (
-                <button onClick={() => onSelect(camera)} title="View history" style={iconBtn("#eff6ff", "#2563eb")}>
+                <button onClick={() => onSelect(camera)} title="View history" style={iconBtn("#eff6ff", "var(--accent-dark)")}>
                   <FaHistory style={{ fontSize: "0.85rem" }} />
                 </button>
               )}

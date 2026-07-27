@@ -15,32 +15,34 @@ function formatCountdown(untilIso) {
   return hours === 0 ? `${minutes}m` : `${hours}h ${minutes}m`;
 }
 
-export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule }) {
+export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBalanceChange }) {
   const {
     id, label, on, target, currentTemp: current, calling, coolCalling,
     safety = "normal", overridden, overrideUntil, environment,
+    damperPercent, damperMoving, balancePercent,
   } = zone;
   const inSafetyOverride = safety !== "normal";
+  const hasDamper = damperPercent != null; // boiler zones (simple on/off valves) don't have this
 
   return (
     <div style={{
       background: inSafetyOverride
-        ? "linear-gradient(160deg, #fef2f2 0%, white 60%)"
-        : calling ? "linear-gradient(160deg, #fff7ed 0%, white 60%)"
-        : coolCalling ? "linear-gradient(160deg, #eff6ff 0%, white 60%)"
-        : "white",
+        ? "linear-gradient(160deg, var(--tint-danger) 0%, var(--bg-card) 60%)"
+        : calling ? "linear-gradient(160deg, var(--tint-warning) 0%, var(--bg-card) 60%)"
+        : coolCalling ? "linear-gradient(160deg, var(--tint-info) 0%, var(--bg-card) 60%)"
+        : "var(--bg-card)",
       borderRadius: 16,
-      border: `1px solid ${inSafetyOverride ? "#fca5a5" : calling ? "#fed7aa" : coolCalling ? "#bfdbfe" : "#e2e8f0"}`,
+      border: `1px solid ${inSafetyOverride ? "#fca5a5" : calling ? "#fed7aa" : coolCalling ? "#bfdbfe" : "var(--border)"}`,
       boxShadow: "0 1px 3px rgba(0,0,0,0.07)", padding: "1.25rem",
       display: "flex", flexDirection: "column", alignItems: "center", gap: 14,
       transition: "all 0.25s",
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
-        <span style={{ fontWeight: 700, color: "#1e293b", fontSize: "1.02rem" }}>{label}</span>
+        <span style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "1.02rem" }}>{label}</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button onClick={() => onOpenSchedule(id)} aria-label={`${label} schedule`} style={{
             width: 30, height: 30, borderRadius: "50%", border: "none",
-            background: "#f1f5f9", color: "#94a3b8", display: "flex",
+            background: "var(--bg-surface-alt)", color: "var(--text-muted)", display: "flex",
             alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "0.8rem",
           }}>
             <FaCog />
@@ -48,8 +50,8 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule }) {
           <button onClick={() => onToggle(id, !on)} aria-label={`${label} ${on ? "on" : "off"}`} style={{
             padding: "0.3rem 0.75rem", borderRadius: 999, border: "none",
             fontWeight: 600, fontSize: "0.78rem", cursor: "pointer",
-            background: on ? "#fb923c" : "#e2e8f0",
-            color: on ? "white" : "#64748b",
+            background: on ? "#fb923c" : "var(--border)",
+            color: on ? "white" : "var(--text-secondary)",
             boxShadow: on ? "0 4px 12px rgba(251,146,60,0.35)" : "none",
             transition: "all 0.2s",
           }}>
@@ -82,10 +84,26 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule }) {
         </div>
       )}
 
+      {hasDamper && (
+        <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+            <span>Damper {damperMoving ? `${damperMoving}…` : `${damperPercent}% open`}</span>
+            <span>Balance {balancePercent ?? 100}%</span>
+          </div>
+          <input
+            type="range" min={0} max={100} step={5}
+            value={balancePercent ?? 100}
+            onChange={e => onBalanceChange(id, Number(e.target.value))}
+            aria-label={`${label} damper balance`}
+            style={{ width: "100%", accentColor: "var(--accent)" }}
+          />
+        </div>
+      )}
+
       {on && overridden && overrideUntil && !inSafetyOverride && (
         <div style={{
           display: "flex", alignItems: "center", gap: 6, width: "100%",
-          background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10,
+          background: "var(--tint-info)", border: "1px solid #bfdbfe", borderRadius: 10,
           padding: "0.5rem 0.7rem", color: "#1d4ed8", fontSize: "0.78rem", fontWeight: 600,
         }}>
           Manual override until next schedule: {formatCountdown(overrideUntil)}
@@ -95,7 +113,7 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule }) {
       {inSafetyOverride && (
         <div style={{
           display: "flex", alignItems: "center", gap: 6, width: "100%",
-          background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10,
+          background: "var(--tint-danger)", border: "1px solid #fca5a5", borderRadius: 10,
           padding: "0.5rem 0.7rem", color: "#b91c1c", fontSize: "0.78rem", fontWeight: 700,
         }}>
           <FaExclamationTriangle />

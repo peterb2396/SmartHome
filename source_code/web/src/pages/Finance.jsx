@@ -285,7 +285,7 @@ export default function Finance() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                 <XAxis dataKey="month" stroke="#6b7280" />
                 <YAxis stroke="#6b7280" />
-                <Tooltip contentStyle={{ backgroundColor: "#fff", border: "1px solid #e5e7eb", borderRadius: 8 }} formatter={v => formatCurrency(v)} />
+                <Tooltip contentStyle={{ backgroundColor: "var(--bg-card)", border: "1px solid #e5e7eb", borderRadius: 8 }} formatter={v => formatCurrency(v)} />
                 <Legend />
                 {Object.keys(CATEGORY_COLORS).map(cat => visibleCategories[cat] && (
                   <Line key={cat} type="monotone" dataKey={cat} stroke={CATEGORY_COLORS[cat]} strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} />

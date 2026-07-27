@@ -30,7 +30,7 @@ export default function Maintenance() {
         actions={
           <button onClick={() => setModalTask({})} style={{
             display: "flex", alignItems: "center", gap: 8,
-            background: "#3b82f6", color: "white", border: "none",
+            background: "var(--accent)", color: "white", border: "none",
             borderRadius: 10, padding: "0.65rem 1.1rem", fontWeight: 600, fontSize: "0.88rem",
             cursor: "pointer", whiteSpace: "nowrap",
           }}>
@@ -41,7 +41,7 @@ export default function Maintenance() {
 
       {error && (
         <div style={{
-          background: "#fffbeb", border: "1px solid #fbbf24", color: "#b45309",
+          background: "#fffbeb", border: "1px solid var(--warning)", color: "#b45309",
           borderRadius: 10, padding: "0.75rem 1rem", marginBottom: "1.25rem", fontSize: "0.85rem",
         }}>
           {error}
@@ -51,7 +51,7 @@ export default function Maintenance() {
       {tasks.length === 0 ? (
         <div style={{
           display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
-          color: "#94a3b8", padding: "3rem 1rem", textAlign: "center",
+          color: "var(--text-muted)", padding: "3rem 1rem", textAlign: "center",
         }}>
           <FaTools size={28} />
           <p style={{ margin: 0 }}>No maintenance tasks yet — add one to start tracking it.</p>
@@ -86,15 +86,15 @@ export default function Maintenance() {
           zIndex: 1000, padding: "1rem",
         }}>
           <div style={{
-            background: "white", borderRadius: 16, maxWidth: 360, width: "100%",
+            background: "var(--bg-card)", borderRadius: 16, maxWidth: 360, width: "100%",
             boxShadow: "0 25px 50px rgba(0,0,0,0.2)", padding: "1.5rem",
           }}>
-            <p style={{ margin: "0 0 1.25rem", color: "#1e293b", fontWeight: 600 }}>
+            <p style={{ margin: "0 0 1.25rem", color: "var(--text-primary)", fontWeight: 600 }}>
               Delete this maintenance task? This can't be undone.
             </p>
             <div style={{ display: "flex", gap: "0.75rem" }}>
-              <button onClick={() => setConfirmDeleteId(null)} style={{ flex: 1, padding: "0.7rem", background: "#e2e8f0", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-              <button onClick={() => { removeTask(confirmDeleteId); setConfirmDeleteId(null); }} style={{ flex: 1, padding: "0.7rem", background: "#ef4444", color: "white", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Delete</button>
+              <button onClick={() => setConfirmDeleteId(null)} style={{ flex: 1, padding: "0.7rem", background: "var(--border)", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+              <button onClick={() => { removeTask(confirmDeleteId); setConfirmDeleteId(null); }} style={{ flex: 1, padding: "0.7rem", background: "var(--danger)", color: "white", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Delete</button>
             </div>
           </div>
         </div>

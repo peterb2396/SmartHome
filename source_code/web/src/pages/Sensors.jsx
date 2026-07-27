@@ -57,7 +57,7 @@ function StatusBadge({ value }) {
     }}>CLOSED</span>
   );
   return (
-    <span style={{ fontWeight: 700, color: "#1e293b", fontSize: "1rem" }}>
+    <span style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "1rem" }}>
       {value ?? "—"}
     </span>
   );
@@ -73,17 +73,17 @@ function SensorRow({ sensor }) {
   return (
     <div style={{
       display: "flex", justifyContent: "space-between", alignItems: "center",
-      padding: "0.85rem 1rem", borderBottom: "1px solid #f1f5f9",
+      padding: "0.85rem 1rem", borderBottom: "1px solid var(--bg-surface-alt)",
     }}>
       <div>
-        <p style={{ fontWeight: 600, color: "#1e293b", margin: 0, fontSize: "0.9rem" }}>{label}</p>
-        <p style={{ color: "#94a3b8", fontSize: "0.75rem", margin: 0 }}>
+        <p style={{ fontWeight: 600, color: "var(--text-primary)", margin: 0, fontSize: "0.9rem" }}>{label}</p>
+        <p style={{ color: "var(--text-muted)", fontSize: "0.75rem", margin: 0 }}>
           Updated {formatRelativeTime(sensor.updatedAt)}
         </p>
       </div>
       <div style={{ textAlign: "right" }}>
         {isNumeric
-          ? <span style={{ fontWeight: 700, color: "#1e293b", fontSize: "1.05rem" }}>
+          ? <span style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "1.05rem" }}>
               {sensor.value}{sensor.unit ? ` ${sensor.unit}` : ""}
             </span>
           : <StatusBadge value={sensor.value} />
@@ -98,12 +98,11 @@ function VehicleCard({ carStatus }) {
   const isOn      = carStatus?.value === "on";
   const isUnknown = !carStatus || carStatus.value === "unknown";
 
-  const accentColor   = isOn ? "#10b981" : "#64748b";
   const bgGradient    = isOn
-    ? "linear-gradient(135deg, #f0fdf4, white)"
-    : "linear-gradient(135deg, #f8fafc, white)";
-  const borderColor   = isOn ? "#bbf7d0" : "#e2e8f0";
-  const iconBg        = isOn ? "#10b981" : "#94a3b8";
+    ? "linear-gradient(135deg, var(--tint-success), var(--bg-card))"
+    : "linear-gradient(135deg, var(--bg-surface), var(--bg-card))";
+  const borderColor   = isOn ? "#bbf7d0" : "var(--border)";
+  const iconBg        = isOn ? "var(--success)" : "var(--text-muted)";
   const iconShadow    = isOn ? "0 6px 18px rgba(16,185,129,0.35)" : "none";
 
   return (
@@ -126,8 +125,8 @@ function VehicleCard({ carStatus }) {
             <FaCar />
           </div>
           <div>
-            <h3 style={{ margin: 0, fontWeight: 700, color: "#1e293b" }}>Suburban</h3>
-            <p style={{ margin: 0, fontSize: "0.8rem", color: "#94a3b8" }}>
+            <h3 style={{ margin: 0, fontWeight: 700, color: "var(--text-primary)" }}>Suburban</h3>
+            <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-muted)" }}>
               {isUnknown
                 ? "No data yet — car will report on next poll"
                 : `Last updated ${formatRelativeTime(carStatus.updatedAt)}`
@@ -139,20 +138,20 @@ function VehicleCard({ carStatus }) {
         {/* Status badge */}
         <div style={{ textAlign: "right" }}>
           {isUnknown ? (
-            <span style={{ color: "#94a3b8", fontWeight: 600, fontSize: "0.9rem" }}>Unknown</span>
+            <span style={{ color: "var(--text-muted)", fontWeight: 600, fontSize: "0.9rem" }}>Unknown</span>
           ) : (
             <span style={{
               padding: "6px 16px", borderRadius: 20, fontSize: "0.85rem", fontWeight: 700,
-              background: isOn ? "#d1fae5" : "#f1f5f9",
+              background: isOn ? "#d1fae5" : "var(--bg-surface-alt)",
               color:      isOn ? "#065f46" : "#475569",
-              border:     `1px solid ${isOn ? "#6ee7b7" : "#e2e8f0"}`,
+              border:     `1px solid ${isOn ? "#6ee7b7" : "var(--border)"}`,
               display: "flex", alignItems: "center", gap: 6,
             }}>
               {/* Pulsing dot when engine is on */}
               {isOn && (
                 <span style={{
                   width: 8, height: 8, borderRadius: "50%",
-                  background: "#10b981", display: "inline-block",
+                  background: "var(--success)", display: "inline-block",
                   animation: "enginePulse 1.4s ease-in-out infinite",
                 }} />
               )}
@@ -172,12 +171,12 @@ function CategoryCard({ category, sensors: list }) {
 
   return (
     <div style={{
-      background: "white", borderRadius: 14, border: "1px solid #e2e8f0",
+      background: "var(--bg-card)", borderRadius: 14, border: "1px solid var(--border)",
       boxShadow: "0 1px 3px rgba(0,0,0,0.07)", marginBottom: "1.25rem", overflow: "hidden",
     }}>
       <div style={{
         display: "flex", alignItems: "center", gap: "0.85rem",
-        padding: "1rem 1.25rem", borderBottom: "1px solid #f1f5f9",
+        padding: "1rem 1.25rem", borderBottom: "1px solid var(--bg-surface-alt)",
         background: `${category.color}0a`,
       }}>
         <div style={{
@@ -187,9 +186,9 @@ function CategoryCard({ category, sensors: list }) {
         }}>
           <Icon />
         </div>
-        <h3 style={{ margin: 0, fontWeight: 700, color: "#1e293b", fontSize: "1rem" }}>
+        <h3 style={{ margin: 0, fontWeight: 700, color: "var(--text-primary)", fontSize: "1rem" }}>
           {category.label}
-          <span style={{ fontWeight: 400, color: "#94a3b8", fontSize: "0.8rem", marginLeft: 8 }}>
+          <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: "0.8rem", marginLeft: 8 }}>
             {list.length} sensor{list.length !== 1 ? "s" : ""}
           </span>
         </h3>
@@ -228,8 +227,8 @@ export default function Sensors() {
             onClick={refetch}
             style={{
               display: "flex", alignItems: "center", gap: 6, padding: "0.5rem 1rem",
-              background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 8,
-              cursor: "pointer", color: "#64748b", fontWeight: 600, fontSize: "0.85rem",
+              background: "var(--bg-surface-alt)", border: "1px solid var(--border)", borderRadius: 8,
+              cursor: "pointer", color: "var(--text-secondary)", fontWeight: 600, fontSize: "0.85rem",
             }}>
             <FaSync style={{ fontSize: "0.8rem" }} /> Refresh
           </button>
@@ -242,8 +241,8 @@ export default function Sensors() {
       {/* Sensor categories */}
       {sensorCount === 0 && (
         <div style={{
-          textAlign: "center", padding: "3rem", color: "#94a3b8",
-          background: "white", borderRadius: 14, border: "1px solid #e2e8f0",
+          textAlign: "center", padding: "3rem", color: "var(--text-muted)",
+          background: "var(--bg-card)", borderRadius: 14, border: "1px solid var(--border)",
         }}>
           <FaWifi style={{ fontSize: "2.5rem", marginBottom: "0.75rem", opacity: 0.4 }} />
           <p style={{ fontWeight: 600, margin: 0 }}>No sensor data yet</p>

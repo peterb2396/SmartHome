@@ -59,9 +59,9 @@ export default function Settings() {
           {filteredKeys.map(key => (
             <div key={key} style={{
               display: "flex", justifyContent: "space-between", alignItems: "center",
-              padding: "0.75rem 0", borderBottom: "1px solid #f1f5f9",
+              padding: "0.75rem 0", borderBottom: "1px solid var(--bg-surface-alt)",
             }}>
-              <label style={{ fontWeight: 600, color: "#1e293b", fontSize: "0.9rem" }}>
+              <label style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "0.9rem" }}>
                 {LABEL_MAP[key] || key}
               </label>
               <input
@@ -76,8 +76,8 @@ export default function Settings() {
           ))}
         </div>
 
-        <div style={{ marginTop: "1.5rem", paddingTop: "1.5rem", borderTop: "1px solid #f1f5f9" }}>
-          <h3 style={{ fontWeight: 600, color: "#1e293b", marginBottom: "0.75rem", fontSize: "0.95rem" }}>Add Setting</h3>
+        <div style={{ marginTop: "1.5rem", paddingTop: "1.5rem", borderTop: "1px solid var(--bg-surface-alt)" }}>
+          <h3 style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "0.75rem", fontSize: "0.95rem" }}>Add Setting</h3>
           <div style={{ display: "flex", gap: 8 }}>
             <input placeholder="Key" value={newKey} onChange={e => setNewKey(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
             <input placeholder="Value" value={newValue} onChange={e => setNewValue(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
@@ -94,8 +94,8 @@ export default function Settings() {
             value={name} onChange={e => setName(e.target.value)}
             placeholder="Name" style={{ ...inputStyle, flex: 1 }}
           />
-          <button onClick={() => handleTransit("arrive")} style={{ ...btnPrimary, background: "#10b981" }}>Arrive</button>
-          <button onClick={() => handleTransit("leave")}  style={{ ...btnPrimary, background: "#ef4444" }}>Leave</button>
+          <button onClick={() => handleTransit("arrive")} style={{ ...btnPrimary, background: "var(--success)" }}>Arrive</button>
+          <button onClick={() => handleTransit("leave")}  style={{ ...btnPrimary, background: "var(--danger)" }}>Leave</button>
         </div>
       </div>
     </div>

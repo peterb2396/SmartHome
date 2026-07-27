@@ -4,19 +4,23 @@
 // them one source of truth for color/spacing/card-shape decisions instead of
 // hand-copying the same hex codes and style objects everywhere.
 
+// Values are CSS custom properties (see styles/index.css) so every consumer
+// is automatically dark-mode-reactive with zero per-file changes — the
+// browser resolves var() at paint time against whatever `data-theme` (or
+// prefers-color-scheme) is currently active, inline styles included.
 export const colors = {
-  textPrimary: "#1e293b",
-  textSecondary: "#64748b",
-  textMuted: "#94a3b8",
-  border: "#e2e8f0",
-  surface: "#f8fafc",
-  surfaceAlt: "#f1f5f9",
-  card: "#ffffff",
-  accent: "#3b82f6",
-  accentDark: "#2563eb",
-  danger: "#ef4444",
-  success: "#10b981",
-  warning: "#fbbf24",
+  textPrimary: "var(--text-primary)",
+  textSecondary: "var(--text-secondary)",
+  textMuted: "var(--text-muted)",
+  border: "var(--border)",
+  surface: "var(--bg-surface)",
+  surfaceAlt: "var(--bg-surface-alt)",
+  card: "var(--bg-card)",
+  accent: "var(--accent)",
+  accentDark: "var(--accent-dark)",
+  danger: "var(--danger)",
+  success: "var(--success)",
+  warning: "var(--warning)",
 };
 
 // Named container widths — pick the one that matches the page's content
@@ -38,5 +42,5 @@ export const card = {
   background: colors.card,
   border: `1px solid ${colors.border}`,
   borderRadius: 14,
-  boxShadow: "0 1px 3px rgba(0,0,0,0.07)",
+  boxShadow: "var(--shadow-card)",
 };

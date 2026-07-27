@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { FaBars, FaTimes } from "react-icons/fa";
+import ThemeToggle from "./components/ThemeToggle";
 
 const LINKS = [
   { to: "/",        label: "Home"     },
@@ -31,35 +32,36 @@ export default function Nav() {
     fontSize: "0.88rem",
     textDecoration: "none",
     transition: "all 0.15s",
-    background: isActive ? "#eff6ff" : "transparent",
-    color: isActive ? "#2563eb" : "#64748b",
+    background: isActive ? "var(--bg-surface-alt)" : "transparent",
+    color: isActive ? "var(--accent-dark)" : "var(--text-secondary)",
   });
 
   return (
     <nav style={{
-      background: "white",
-      borderBottom: "1px solid #e2e8f0",
-      boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+      background: "var(--bg-card)",
+      borderBottom: "1px solid var(--border)",
+      boxShadow: "var(--shadow-card)",
       position: "sticky", top: 0, zIndex: 100,
       width: "100%",
     }}>
       <style>{`
-        .nav-links { display: flex; gap: 0.15rem; }
+        .nav-links { display: flex; gap: 0.15rem; align-items: center; }
         .nav-current, .nav-toggle { display: none; }
         @media (max-width: 720px) {
           .nav-links {
             display: none;
             position: absolute; top: 52px; left: 0; right: 0;
             flex-direction: column;
+            align-items: stretch;
             gap: 2px;
-            background: white;
+            background: var(--bg-card);
             padding: 0.5rem;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid var(--border);
             box-shadow: 0 8px 20px rgba(0,0,0,0.1);
           }
           .nav-links.open { display: flex; }
           .nav-links a { padding: 0.7rem 0.9rem !important; }
-          .nav-current { display: block; font-weight: 700; color: #1e293b; font-size: 0.95rem; }
+          .nav-current { display: block; font-weight: 700; color: var(--text-primary); font-size: 0.95rem; }
           .nav-toggle { display: flex; }
         }
       `}</style>
@@ -71,6 +73,7 @@ export default function Nav() {
         height: 52,
         boxSizing: "border-box",
         position: "relative",
+        gap: "0.6rem",
       }}>
         <span className="nav-current">{current.label}</span>
 
@@ -82,19 +85,22 @@ export default function Nav() {
           ))}
         </div>
 
-        <button
-          className="nav-toggle"
-          onClick={() => setOpen(o => !o)}
-          aria-label="Toggle navigation menu"
-          style={{
-            background: "none", border: "none", color: "#64748b",
-            fontSize: "1.1rem", cursor: "pointer",
-            alignItems: "center", justifyContent: "center",
-            width: 36, height: 36, padding: 0,
-          }}
-        >
-          {open ? <FaTimes /> : <FaBars />}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginLeft: "auto" }}>
+          <ThemeToggle />
+          <button
+            className="nav-toggle"
+            onClick={() => setOpen(o => !o)}
+            aria-label="Toggle navigation menu"
+            style={{
+              background: "none", border: "none", color: "var(--text-secondary)",
+              fontSize: "1.1rem", cursor: "pointer",
+              alignItems: "center", justifyContent: "center",
+              width: 36, height: 36, padding: 0,
+            }}
+          >
+            {open ? <FaTimes /> : <FaBars />}
+          </button>
+        </div>
       </div>
     </nav>
   );
