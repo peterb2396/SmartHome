@@ -5,6 +5,15 @@
  *   • PIR motion sensor (GPIO 22) — foyer light automation
  *   • Fault LED (GPIO 5 red, GPIO 6 yellow) — see faultLed.js, which owns
  *     the blink logic but uses createPin() from here like everything else
+ *   • HVAC fault input (GPIO 26) — see setupHvacFault() below. Reads the
+ *     air handler's `ALARM` output (CN33) — a passive dry contact, normally
+ *     open, closing when the AHU detects a fault. Being passive (unlike the
+ *     `L` terminal, which actively outputs 24V) it's wired straight to the
+ *     Pi's own 3.3V with no relay/opto-isolator needed: COM to 3.3V, NO to
+ *     GPIO 26. Pull-down is GPIO 26's *internal* pull (configured via
+ *     `gpio=26=ip,pd` in /boot/firmware/config.txt, since `onoff` doesn't
+ *     set pulls itself) rather than an external resistor. See the wiring
+ *     guide.
  *
  * Pin numbering: BCM GPIO numbers.
  * onoff uses /sys/class/gpio — createPin() handles the offset.
@@ -50,6 +59,7 @@ function init() {
   process.on('SIGINT', () => { pins.forEach(p => p.unexport()); process.exit(); });
 
   setupPIR();
+  setupHvacFault();
 }
 
 // ── PIR motion sensor ────────────────────────────────────────────────────────
@@ -112,6 +122,43 @@ function setupPIR() {
   console.log('[GPIO] PIR sensor active on GPIO 22.');
 }
 
+// ── HVAC fault input ─────────────────────────────────────────────────────────
+// Direct 3.3V read of the air handler's `ALARM` output (CN33) — a passive
+// dry contact (normally open, closes on fault), so it's wired straight to
+// the Pi's own 3.3V with no relay/opto-isolator needed — see the wiring
+// guide. HIGH = the AHU currently has an active fault; LOW = normal.
+// Latched into hvacFaultActive so faults.js can read it synchronously
+// without touching GPIO internals, exactly like sensorStore/thermostat's
+// runtime state.
+let hvacFaultActive = false;
+
+function setupHvacFault() {
+  const { sendPush } = require('./mail');
+
+  const pin = createPin(26, 'in', 'both');
+  hvacFaultActive = !!pin.readSync(); // pick up a fault that was already active before boot, not just future edges
+
+  pin.watch((err, value) => {
+    if (err) { console.error('[GPIO] HVAC fault pin error:', err); return; }
+    const active = !!value;
+    if (active === hvacFaultActive) return;
+    hvacFaultActive = active;
+    if (active) {
+      console.warn('[GPIO] HVAC fault signal (ALARM) active.');
+      sendPush('The air handler is reporting an active fault (ALARM signal).', 'CRITICAL: HVAC Fault');
+    } else {
+      console.log('[GPIO] HVAC fault signal (ALARM) cleared.');
+      sendPush('The air handler fault signal has cleared.', 'HVAC: Resolved');
+    }
+  });
+
+  console.log(`[GPIO] HVAC fault input active on GPIO 26 (currently ${hvacFaultActive ? 'FAULT' : 'normal'}).`);
+}
+
+function isHvacFaultActive() {
+  return hvacFaultActive;
+}
+
 // ── Generic button helper ────────────────────────────────────────────────────
 function pressButton(pin, durationMs) {
   return new Promise(resolve => {
@@ -120,4 +167,4 @@ function pressButton(pin, durationMs) {
   });
 }
 
-module.exports = { init, createPin, pressButton };
+module.exports = { init, createPin, pressButton, isHvacFaultActive };

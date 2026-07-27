@@ -39,36 +39,58 @@
  *                         order matches the physical board left-to-right:
  *                         Primary Suite open/close, Upstairs open/close,
  *                         Downstairs open/close, Office open/close.
- *   AIR_HANDLER_BOARD (0x21)  8 terminal positions, one per 24V control
- *                         wire, in the order they run left-to-right off the
- *                         terminal strip: red(R) orange(O/B) yellow(Y1)
- *                         green(G) blue(C) brown(Y2) white(W1) black(W2) —
- *                         this is the ACiQ AHD's real "8-wire to 2-wire
- *                         conventional thermostat" terminal layout (read off
- *                         the unit's own install manual, not guessed). Y1/Y2
- *                         are two compressor-demand stages (this is a
- *                         variable-capacity inverter compressor); W1/W2 are
- *                         two electric-aux-heat stages. Real 2-stage timing
- *                         is implemented (see driveAirHandler(),
- *                         COMPRESSOR_STAGE2_DELAY_MS/ELECTRIC_STAGE2_DELAY_MS):
- *                         stage 1 (Y1/W1) engages immediately on a call;
- *                         stage 2 (Y2/W2) only joins if that call outlasts
- *                         its delay running on stage 1 alone, and always
- *                         drops the instant stage 1 does. 6 of these 8
- *                         terminals are real I2C-driven relay channels —
- *                         O/B, Y1, Y2, G, W1,
- *                         W2. R and C are NOT wired through a relay at all:
- *                         the air handler's internal transformer supplies R
- *                         as constant hot, and a thermostat (or this board,
- *                         standing in for one) never generates its own
- *                         24VAC — it only switches R through to whichever
- *                         call wire needs it. So R lands on the CH1
- *                         terminal purely as a junction point, physically
- *                         jumpered (plain wire, no relay) to the COM
- *                         terminal of the 6 switching relays; C similarly
- *                         bypasses the relay board entirely. Nothing in
- *                         code ever touches R or C's channel — see AH_CH's
- *                         comment.
+ *   AIR_HANDLER_BOARD (0x21)  7 of 8 terminal positions used, one per 24V
+ *                         control wire, in the order they run left-to-right
+ *                         off the terminal strip: red(R) orange(B)
+ *                         yellow(Y1) green(G) blue(Y2) brown(W1) black(W2) —
+ *                         CH8 is spare, and C is deliberately not run at all
+ *                         (it's not required for any call to work — see the
+ *                         wiring guide). This intentionally departs from the
+ *                         ACiQ AHD's own wire-color convention (which uses
+ *                         blue/brown/white for C/Y2/W1) — the function that
+ *                         matters is whichever terminal a wire lands on at
+ *                         each end, not its color, so this reordering is
+ *                         just this project's own choice of which spare
+ *                         wire-color slots to reuse for Y2/W1/W2 once C was
+ *                         dropped. These names (R/B/Y1/G/Y2/W1/W2, plus C/W/
+ *                         E-AUX/DH/DS/L which this build doesn't use) are the
+ *                         AHU mainboard's own official terminal names, read
+ *                         directly off its indoor-unit connector table and
+ *                         24V Signal Chart — not a guess. Two things that
+ *                         table corrected from earlier assumptions:
+ *                         (1) B is energized DURING heat-pump HEATING, not
+ *                         cooling — the opposite of a generic "O" terminal's
+ *                         convention, and a real bug this codebase had until
+ *                         it was cross-checked against the chart. (2) Y1/Y2
+ *                         are labeled "Low Demand"/"High Demand", not simply
+ *                         "stage 1/2" — same practical effect as this code's
+ *                         staged usage. W1/W2 are two electric-aux-heat
+ *                         stages; real 2-stage timing is implemented for
+ *                         both Y1/Y2 and W1/W2 (see driveAirHandler(),
+ *                         COMPRESSOR_STAGE2_DELAY_MS/ELECTRIC_STAGE2_DELAY_MS)
+ *                         — stage 1 engages immediately on a call, stage 2
+ *                         only joins if that call outlasts its delay running
+ *                         on stage 1 alone, and always drops the instant
+ *                         stage 1 does. IMPORTANT: on this board, W1/W2 are
+ *                         electrically SHORTED TOGETHER by default (DIP
+ *                         switch S4-4 = ON, the factory default) — meaning
+ *                         the 2-stage electric timing this code implements
+ *                         has NO effect on the equipment until S4-4 is
+ *                         switched OFF (power off first) to actually
+ *                         separate the two stages. No equivalent DIP switch
+ *                         gates Y1/Y2 — those are independent inputs already.
+ *                         All 6 non-R terminals used (B, Y1, Y2, G, W1, W2)
+ *                         are real I2C-driven relay channels. R is NOT wired
+ *                         through a relay at all: the air handler's internal
+ *                         transformer supplies R as constant hot, and a
+ *                         thermostat (or this board, standing in for one)
+ *                         never generates its own 24VAC — it only switches R
+ *                         through to whichever call wire needs it. So R
+ *                         lands on the CH1 terminal purely as a junction
+ *                         point, physically jumpered (plain wire, no relay)
+ *                         to the COM terminal of the 6 switching relays.
+ *                         Nothing in code ever touches R's channel — see
+ *                         AH_CH's comment.
  *
  *                         IMPORTANT — this mode also needs, separately from
  *                         anything the Pi/relay board touches: (1) the AHU's
@@ -157,13 +179,16 @@ const ZONES = [
 const MIN_DAMPER_MOVE_PERCENT = 3;
 
 // ── Air handler wire-color -> function map (AIR_HANDLER_BOARD channels) ─────
-// Only O, Y1, Y2, G, W1, W2 are real, code-driven relay channels. R
-// (terminal 0) and C (terminal 4) are deliberately absent from this map —
-// they're never switched, just physically jumpered on the terminal block
-// (see the header comment above) — so there's nothing for code to
-// reference for them. Every terminal on this board is spoken for; there
-// are no spares (matches the ACiQ AHD's real 8-wire layout).
-const AH_CH = { O: 1, Y1: 2, G: 3, Y2: 5, W1: 6, W2: 7 };
+// Only B, Y1, Y2, G, W1, W2 are real, code-driven relay channels. R
+// (terminal 0) is deliberately absent from this map — it's never switched,
+// just physically jumpered on the terminal block (see the header comment
+// above) — so there's nothing for code to reference for it. C isn't run at
+// all in this build (not required for any call — see the wiring guide), and
+// terminal 7 (CH8) is a genuine spare, also unreferenced. B is confirmed
+// (against the AHU's own 24V Signal Chart) to be energized DURING heat-pump
+// heating — not during cooling like a generic "O" terminal would be — see
+// driveAirHandler()'s reversing-valve logic.
+const AH_CH = { B: 1, Y1: 2, G: 3, Y2: 4, W1: 5, W2: 6 };
 
 // Short-cycle protection + sequencing timing for the compressor.
 const MIN_COMPRESSOR_ON_MS = 5 * 60 * 1000;
@@ -287,7 +312,7 @@ const runtime = Object.fromEntries(
 // turned off" for short-cycle purposes, so equipment can't be slammed
 // straight back on ahead of its own minimum-off timer by a crash/restart.
 const compressorState = { on: false, lastOnAt: 0, lastOffAt: 0 };
-let reversingValveCool = false; // physical valve position — only ever changed while compressor is off
+let reversingValveHeating = false; // is B (heating reversing valve) energized — only ever changed while compressor is off
 const fanState = { on: false, purgeUntil: 0 };
 // Tracks when W1 (stage 1 electric heat) most recently turned on, purely
 // for the stage-2 escalation timer — no short-cycle protection on the
@@ -585,28 +610,34 @@ function setElectricChannels(on, now) {
 }
 
 // Air handler control: compressor (Y1/Y2, staged) with short-cycle
-// prevention, the reversing valve (O/B) which only ever moves while the
+// prevention, the reversing valve (B) which only ever moves while the
 // compressor is confirmed off (flipping it under load wears/damages it),
 // the aux electric coil (W1/W2, staged the same way), and the fan (G) with
 // a purge period after the last call ends. R and C are the transformer
 // hot/common feed — jumpered, never touched here (see the module header
 // comment).
 function driveAirHandler(settings, activeSource, anyCooling, anyHeatCalling, now) {
-  const wantCoolMode = anyCooling;
-  const wantCompressor = (anyCooling || (anyHeatCalling && activeSource === 'air' && !anyCooling)) && settings.available.air !== false;
+  const wantHeatViaAir = anyHeatCalling && activeSource === 'air' && !anyCooling;
+  const wantCompressor = (anyCooling || wantHeatViaAir) && settings.available.air !== false;
   const wantElectric = anyHeatCalling && activeSource === 'electric' && settings.available.electric !== false;
 
-  // The reversing valve may only move while the compressor is physically
+  // B ("Heating Reversing Valve" on this unit's board — confirmed energized
+  // DURING heat-pump heating, not during cooling, against the AHU's own
+  // 24V Signal Chart) may only move while the compressor is physically
   // off. If a mode flip is needed, shut the compressor down first (subject
   // to its own minimum-on-time) and let the valve flip on a later tick once
-  // REVERSING_VALVE_LEAD_MS has actually elapsed since it went off.
-  if (wantCoolMode !== reversingValveCool) {
+  // REVERSING_VALVE_LEAD_MS has actually elapsed since it went off. Only
+  // driven for actual heat-via-air calls (not cooling, not idle, not
+  // electric-only) — de-energized is already the correct resting state for
+  // everything except an active heat-pump-heating call, so there's no
+  // reason to hold the coil energized outside of one.
+  if (wantHeatViaAir !== reversingValveHeating) {
     if (compressorState.on) {
       applyMinRunTime(compressorState, false, now, MIN_COMPRESSOR_ON_MS, 0);
       setCompressorChannels(compressorState.on, now);
     } else if (now - compressorState.lastOffAt >= REVERSING_VALVE_LEAD_MS) {
-      reversingValveCool = wantCoolMode;
-      i2cRelay.setChannel(AIR_HANDLER_BOARD, AH_CH.O, reversingValveCool);
+      reversingValveHeating = wantHeatViaAir;
+      i2cRelay.setChannel(AIR_HANDLER_BOARD, AH_CH.B, reversingValveHeating);
     }
   } else {
     const valveSettled = now - compressorState.lastOffAt >= REVERSING_VALVE_LEAD_MS;

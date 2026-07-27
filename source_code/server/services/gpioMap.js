@@ -12,9 +12,12 @@
  * i2cRelay.js's header comment and the wiring guide for that mapping
  * (board address + channel, not a Pi pin, so it doesn't belong in this
  * pin-specific map). What's left here is genuinely just Pi GPIO: PIR
- * motion sensing and the two fault-status LEDs. The RS485 bus doesn't use
- * a Pi GPIO pin either — it connects via a USB-to-RS485 adapter (see
- * rs485.js), so it has no entry here.
+ * motion sensing, the two fault-status LEDs, and the air handler's ALARM
+ * (CN33) fault-signal input — a passive dry contact wired straight to the
+ * Pi's own 3.3V, no isolation relay needed (see gpio.js's
+ * setupHvacFault()). The RS485 bus doesn't use a Pi GPIO pin either — it
+ * connects via a USB-to-RS485 adapter (see rs485.js), so it has no entry
+ * here.
  *
  * Seeded once from every createPin() call that exists in the code today
  * (gpio.js + faultLed.js). After the first read this is fully user-managed
@@ -27,6 +30,7 @@ const settingsSvc = require('./settings');
 const GROUPS = {
   'motion':             { label: 'Motion',              color: '#14b8a6' },
   'status-led':         { label: 'Status LED',          color: '#ef4444' },
+  'hvac-fault':         { label: 'HVAC Fault Input',    color: '#f59e0b' },
   'other':              { label: 'Other',                color: '#94a3b8' },
 };
 
@@ -36,6 +40,7 @@ const SEED_PINS = [
   { pin: 22, label: 'PIR motion sensor',                direction: 'in',  group: 'motion' },
   { pin: 5,  label: 'Fault LED (red)',                  direction: 'out', group: 'status-led' },
   { pin: 6,  label: 'Fault LED (yellow)',               direction: 'out', group: 'status-led' },
+  { pin: 26, label: 'HVAC fault input (AHU ALARM/CN33 dry contact)', direction: 'in', group: 'hvac-fault' },
 ];
 
 function getSettings() {

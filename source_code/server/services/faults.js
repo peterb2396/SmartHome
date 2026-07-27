@@ -9,10 +9,18 @@
 
 const thermostatSvc = require('./thermostat');
 const sensors = require('./sensorStore');
+const gpioSvc = require('./gpio');
 
 function getFaults() {
   const faults = [];
   const { zones } = thermostatSvc.getState();
+
+  // Air handler's own ALARM dry contact (CN33), read directly onto GPIO 26
+  // — see gpio.js's setupHvacFault(). A single latched flag, not per-zone,
+  // since the AHU doesn't tell us which zone (if any) it relates to.
+  if (gpioSvc.isHvacFaultActive()) {
+    faults.push({ id: 'hvac-fault', message: 'Air handler is reporting an active fault (ALARM signal)' });
+  }
 
   for (const z of zones) {
     if (z.safety === 'below-min') {
