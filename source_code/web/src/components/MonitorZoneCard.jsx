@@ -1,11 +1,15 @@
-import { FaTint, FaEye } from "react-icons/fa";
+import { FaTint, FaEye, FaTachometerAlt, FaSmog, FaWind } from "react-icons/fa";
+import EnvironmentRow from "./EnvironmentRow";
 
 // Read-only counterpart to ZoneCard for monitor-only zones (basement/attic —
-// see server/services/monitorZones.js): temp + humidity, no target/on-off/
-// schedule/damper, since these have no actuator at all. Visually matches
-// ZoneCard's card shell so it sits naturally in the same grid.
+// see server/services/monitorZones.js): temp + the same humidity/pressure/
+// voc/co2 range-bar rows ZoneCard renders for real zones (same
+// EnvironmentRow component, same envSensors.js status thresholds), just no
+// target/on-off/schedule/damper, since these have no actuator at all.
+// Visually matches ZoneCard's card shell so it sits naturally in the same
+// grid.
 export default function MonitorZoneCard({ zone }) {
-  const { label, temperature, humidity } = zone;
+  const { label, temperature, environment } = zone;
   const hasReading = temperature.value != null;
 
   return (
@@ -34,12 +38,16 @@ export default function MonitorZoneCard({ zone }) {
         <div style={{ fontSize: "0.9rem", color: "var(--text-muted)", padding: "0.5rem 0" }}>No reading</div>
       )}
 
-      {humidity.value != null && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 6, width: "100%",
-          fontSize: "0.82rem", color: "var(--text-secondary)",
-        }}>
-          <FaTint color="var(--text-muted)" /> Humidity: {humidity.value.toFixed(0)}%
+      {environment && (
+        <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
+          <EnvironmentRow icon={FaTint} label="Humidity" unit="%" precision={0}
+            min={0} max={100} value={environment.humidity.value} status={environment.humidity.status} />
+          <EnvironmentRow icon={FaTachometerAlt} label="Pressure" unit=" hPa" precision={0}
+            min={950} max={1050} value={environment.pressure.value} status={environment.pressure.status} />
+          <EnvironmentRow icon={FaSmog} label="VOC" unit="" precision={0}
+            min={0} max={100} value={environment.voc.value} status={environment.voc.status} />
+          <EnvironmentRow icon={FaWind} label="CO2" unit=" ppm" precision={0}
+            min={400} max={3000} value={environment.co2.value} status={environment.co2.status} />
         </div>
       )}
 

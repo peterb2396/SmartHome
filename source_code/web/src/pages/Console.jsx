@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   FaExclamationTriangle, FaLightbulb,
   FaThermometerHalf, FaMicrochip, FaTerminal, FaThumbtack, FaTrash, FaCog,
@@ -16,6 +16,7 @@ import Spinner from "../components/Spinner";
 import { colors, card, CONTAINER_WIDE, GRID_COMPACT, GRID_WIDE, pageContainerStyle } from "../styles/tokens";
 
 const cardStyle = { ...card, padding: "1.25rem" };
+const HIDDEN_LOG_SOURCES_KEY = "console.hiddenLogSources";
 
 function StatTile({ icon: Icon, label, value, accent = colors.accent }) {
   return (
@@ -55,11 +56,36 @@ export default function Console() {
   const { settings, updateSetting } = useSettings();
   const [setupNode, setSetupNode] = useState(null);
   const terminalRef = useRef(null);
+  // Which log sources (the "[ServiceName]" prefix every service already
+  // logs with — see server/services/logStream.js) to hide from the
+  // terminal. Stores the hidden set, not the visible one, so a source that
+  // starts logging for the first time shows up by default instead of
+  // silently staying invisible until someone notices and opts in.
+  const [hiddenLogSources, setHiddenLogSources] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_LOG_SOURCES_KEY) || "[]")); }
+    catch { return new Set(); }
+  });
+  const logSources = useMemo(
+    () => Array.from(new Set(logLines.map(l => l.source || "other"))).sort(),
+    [logLines]
+  );
+  const visibleLogLines = useMemo(
+    () => logLines.filter(l => !hiddenLogSources.has(l.source || "other")),
+    [logLines, hiddenLogSources]
+  );
+  function toggleLogSource(source) {
+    setHiddenLogSources(prev => {
+      const next = new Set(prev);
+      if (next.has(source)) next.delete(source); else next.add(source);
+      localStorage.setItem(HIDDEN_LOG_SOURCES_KEY, JSON.stringify(Array.from(next)));
+      return next;
+    });
+  }
 
   useEffect(() => {
     const el = terminalRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [logLines]);
+  }, [visibleLogLines]);
 
   if (loading) return <Spinner message="Loading console..." />;
 
@@ -104,13 +130,34 @@ export default function Console() {
             {logsConnected ? "LIVE" : "connecting…"}
           </span>
         </h2>
+        {logSources.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 0.9rem", marginBottom: "0.65rem" }}>
+            {logSources.map(source => (
+              <label key={source} style={{
+                display: "flex", alignItems: "center", gap: 5, fontSize: "0.75rem",
+                color: hiddenLogSources.has(source) ? colors.textMuted : colors.textSecondary,
+                fontWeight: 600, cursor: "pointer", userSelect: "none",
+              }}>
+                <input
+                  type="checkbox"
+                  checked={!hiddenLogSources.has(source)}
+                  onChange={() => toggleLogSource(source)}
+                  style={{ accentColor: colors.accent }}
+                />
+                {source}
+              </label>
+            ))}
+          </div>
+        )}
         <div ref={terminalRef} style={{
           background: "#0f172a", borderRadius: 14, padding: "1rem 1.25rem",
           maxHeight: 340, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2,
         }}>
-          {logLines.length === 0
-            ? <span style={{ color: "#475569", fontSize: "0.8rem", fontFamily: "monospace" }}>No log output yet.</span>
-            : logLines.map((entry, i) => <LogLine key={i} entry={entry} />)
+          {visibleLogLines.length === 0
+            ? <span style={{ color: "#475569", fontSize: "0.8rem", fontFamily: "monospace" }}>
+                {logLines.length === 0 ? "No log output yet." : "No log lines match the selected sources."}
+              </span>
+            : visibleLogLines.map((entry, i) => <LogLine key={i} entry={entry} />)
           }
         </div>
       </div>
@@ -178,7 +225,7 @@ export default function Console() {
               <div style={{ fontWeight: 700, color: colors.textPrimary, fontSize: "0.9rem" }}>{z.label}</div>
               <div style={{ fontSize: "0.8rem", color: colors.textMuted }}>
                 {z.temperature.value != null ? `${z.temperature.value.toFixed(1)}°` : "no reading"}
-                {z.humidity.value != null ? ` · ${z.humidity.value}% RH` : ""}
+                {z.environment.humidity.value != null ? ` · ${z.environment.humidity.value.toFixed(0)}% RH` : ""}
               </div>
             </div>
           ))}
