@@ -21,9 +21,19 @@ const buffer = [];
 const subscribers = new Set(); // Set<express.Response>
 let installed = false;
 
+// Every service in this app already logs with a `[ServiceName] ...` prefix
+// by convention (see gpio.js, rs485.js, boiler.js, etc.) — reuse that
+// instead of threading an explicit source tag through every console.log
+// call. Lines with no bracket prefix (rare — the odd bare console.log)
+// group under 'other'.
+function sourceFor(message) {
+  const match = message.match(/^\[([^\]]+)\]/);
+  return match ? match[1] : 'other';
+}
+
 function push(level, args) {
   const message = args.map(a => (typeof a === 'string' ? a : safeStringify(a))).join(' ');
-  const entry = { level, message, timestamp: new Date().toISOString() };
+  const entry = { level, message, timestamp: new Date().toISOString(), source: sourceFor(message) };
   buffer.push(entry);
   if (buffer.length > MAX_LINES) buffer.shift();
   for (const res of subscribers) writeEvent(res, entry);

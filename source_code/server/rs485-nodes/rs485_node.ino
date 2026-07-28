@@ -269,7 +269,14 @@ void setup() {
 
 #if HAS_SCD41
   scd41Ready = scd41.begin();
-  if (!scd41Ready) Serial.println("[RS485 Node] SCD41 not found.");
+  if (!scd41Ready) {
+    Serial.println("[RS485 Node] SCD41 not found.");
+  } else {
+    // begin() only initializes the sensor — it doesn't start sampling.
+    // Without this, readMeasurement() always returns false (no new data
+    // ready) and CO2 never makes it into a REPORT.
+    scd41.startPeriodicMeasurement();
+  }
 #endif
 
   Serial.printf("[RS485 Node] Boot complete. Address: %d\n", busAddress);
