@@ -143,6 +143,12 @@ function onData(chunk) {
 }
 
 function handleFrame(addr, cmd, payload) {
+  // TEMP DIAGNOSTIC — remove once nodes are confirmed reporting. Logs every
+  // frame the master actually receives, regardless of type, so silence vs.
+  // "receiving the wrong thing" vs. "receiving fine but not being logged"
+  // are distinguishable from the terminal.
+  console.log(`[RS485] RX addr=${addr} cmd=0x${cmd.toString(16)} len=${payload.length}`);
+
   if (cmd === CMD.ANNOUNCE && addr === 0x00) {
     const uniqueId = payload.subarray(0, 8).toString('hex');
     pendingNodes.set(uniqueId, { uniqueId, lastSeenAt: Date.now() });
@@ -156,8 +162,10 @@ function handleFrame(addr, cmd, payload) {
       const typeName = SENSOR_TYPE_NAME[typeByte];
       if (typeName) readings.push({ type: typeName, value });
     }
+    console.log('[RS485] REPORT parsed:', readings); // TEMP DIAGNOSTIC
     const resolve = pendingReportResolvers.get(addr);
     if (resolve) { resolve(readings); pendingReportResolvers.delete(addr); }
+    else console.log(`[RS485] REPORT from addr=${addr} arrived with no pending POLL waiting on it (timed out already?)`); // TEMP DIAGNOSTIC
   }
 }
 
@@ -165,8 +173,13 @@ function handleFrame(addr, cmd, payload) {
 function pollNode(address, zoneId) {
   return new Promise((resolve) => {
     if (usingMock) return resolve([]); // nothing to poll without real hardware
-    const timeout = setTimeout(() => { pendingReportResolvers.delete(address); resolve([]); }, ANNOUNCE_TIMEOUT_MS);
+    const timeout = setTimeout(() => {
+      pendingReportResolvers.delete(address);
+      console.log(`[RS485] POLL to addr=${address} (zone=${zoneId}) timed out — no REPORT within ${ANNOUNCE_TIMEOUT_MS}ms`); // TEMP DIAGNOSTIC
+      resolve([]);
+    }, ANNOUNCE_TIMEOUT_MS);
     pendingReportResolvers.set(address, (readings) => { clearTimeout(timeout); resolve(readings); });
+    console.log(`[RS485] TX POLL addr=${address} (zone=${zoneId})`); // TEMP DIAGNOSTIC
     writeFrame(buildFrame(address, CMD.POLL));
   });
 }
