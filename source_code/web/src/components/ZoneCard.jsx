@@ -1,4 +1,4 @@
-import { FaCog, FaExclamationTriangle, FaTint, FaTachometerAlt, FaSmog, FaWind } from "react-icons/fa";
+import { FaCog, FaExclamationTriangle, FaTint, FaSmog, FaWind } from "react-icons/fa";
 import ThermoDial from "./ThermoDial";
 import EnvironmentRow from "./EnvironmentRow";
 
@@ -75,8 +75,6 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBal
         <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
           <EnvironmentRow icon={FaTint} label="Humidity" unit="%" precision={0}
             min={0} max={100} value={environment.humidity.value} status={environment.humidity.status} />
-          <EnvironmentRow icon={FaTachometerAlt} label="Pressure" unit=" hPa" precision={0}
-            min={950} max={1050} value={environment.pressure.value} status={environment.pressure.status} />
           <EnvironmentRow icon={FaSmog} label="VOC" unit="" precision={0}
             min={0} max={100} value={environment.voc.value} status={environment.voc.status} />
           <EnvironmentRow icon={FaWind} label="CO2" unit=" ppm" precision={0}

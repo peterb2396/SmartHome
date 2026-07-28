@@ -1,12 +1,19 @@
 const STATUS_COLOR = { ok: "var(--success)", warn: "var(--warning)", danger: "var(--danger)" };
+// A reading that exists but isn't health-classified (pressure — see
+// envSensors.js's classifyEnv, which deliberately never returns a status
+// for it) gets a distinct neutral color instead of the same pale placeholder
+// used for "no reading at all" — otherwise a real value renders nearly
+// invisible, blending into the track.
+const NEUTRAL_COLOR = "var(--accent)";
+const NO_READING_COLOR = "#cbd5e1";
 
 // One environmental reading as a compact horizontal range indicator — icon,
 // label, a colored safe/warn/danger bar, and the live value. Deliberately
 // not a second ThermoDial: these are read-only, and four dials would
 // roughly double the card's height for no benefit over a slim bar.
 export default function EnvironmentRow({ icon: Icon, label, value, unit, status, min, max, precision = 0 }) {
-  const color = status ? STATUS_COLOR[status] : "#cbd5e1";
   const hasReading = value != null;
+  const color = status ? STATUS_COLOR[status] : (hasReading ? NEUTRAL_COLOR : NO_READING_COLOR);
   const pct = hasReading ? Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100)) : 0;
 
   return (
