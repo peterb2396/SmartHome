@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { FaExclamationTriangle, FaCog, FaFire } from "react-icons/fa";
+import { FaExclamationTriangle, FaCog, FaFire, FaEye } from "react-icons/fa";
 import { useThermostat } from "../hooks/useThermostat";
 import { useBoiler } from "../hooks/useBoiler";
-import ZoneCard      from "../components/ZoneCard";
+import { useMonitorZones } from "../hooks/useMonitorZones";
+import ZoneCard        from "../components/ZoneCard";
+import MonitorZoneCard  from "../components/MonitorZoneCard";
 import ModeToggle    from "../components/ModeToggle";
 import ScheduleModal from "../components/ScheduleModal";
 import RatesModal    from "../components/RatesModal";
@@ -10,17 +12,33 @@ import Spinner       from "../components/Spinner";
 import PageHeader    from "../components/PageHeader";
 import { CONTAINER_NARROW, CONTAINER_WIDE, GRID_COMPACT, pageContainerStyle } from "../styles/tokens";
 
+const SHOW_MONITOR_ZONES_KEY = "thermostat.showMonitorZones";
+
 export default function Thermostat() {
   const {
     state, loading, error, offline,
     setTarget, toggleZone, saveSchedule, setBalance, setMode, setAvailability, setRates, setSeasonThreshold, refetch,
   } = useThermostat();
   const boiler = useBoiler();
+  const { zones: monitorZones } = useMonitorZones();
   // { system: '4zone' | '3zone', id } | null — tracks which system a given
   // schedule-modal zone id belongs to, since the two systems' zone ids can
   // otherwise collide (both have a "downstairs").
   const [scheduleTarget, setScheduleTarget] = useState(null);
   const [showRates, setShowRates] = useState(false);
+  // Local display preference only, not synced anywhere — basement/attic are
+  // read-only monitor zones (no actuator, see monitorZones.js), so whether
+  // to clutter this page with them is purely a per-browser choice.
+  const [showMonitorZones, setShowMonitorZones] = useState(
+    () => localStorage.getItem(SHOW_MONITOR_ZONES_KEY) === "true"
+  );
+  function toggleShowMonitorZones() {
+    setShowMonitorZones(prev => {
+      const next = !prev;
+      localStorage.setItem(SHOW_MONITOR_ZONES_KEY, String(next));
+      return next;
+    });
+  }
 
   if (loading) return <Spinner message="Loading thermostat..." />;
 
@@ -71,13 +89,27 @@ export default function Thermostat() {
       <PageHeader
         title="Thermostat"
         actions={
-          <button onClick={() => setShowRates(true)} aria-label="Utility rate settings" title="Utility rate settings" style={{
-            width: 34, height: 34, borderRadius: "50%", border: "none",
-            background: "var(--bg-card)", boxShadow: "0 1px 3px rgba(0,0,0,0.1)", color: "var(--text-secondary)",
-            display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "0.95rem",
-          }}>
-            <FaCog />
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {monitorZones.length > 0 && (
+              <button onClick={toggleShowMonitorZones} aria-pressed={showMonitorZones}
+                title="Show basement/attic monitor zones" style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "0.4rem 0.85rem", borderRadius: 999,
+                border: "none", fontWeight: 600, fontSize: "0.78rem", cursor: "pointer",
+                background: showMonitorZones ? "var(--accent)" : "var(--bg-card)",
+                color: showMonitorZones ? "white" : "var(--text-secondary)",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+              }}>
+                <FaEye size={11} /> Basement/Attic
+              </button>
+            )}
+            <button onClick={() => setShowRates(true)} aria-label="Utility rate settings" title="Utility rate settings" style={{
+              width: 34, height: 34, borderRadius: "50%", border: "none",
+              background: "var(--bg-card)", boxShadow: "0 1px 3px rgba(0,0,0,0.1)", color: "var(--text-secondary)",
+              display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "0.95rem",
+            }}>
+              <FaCog />
+            </button>
+          </div>
         }
       />
 
@@ -107,6 +139,9 @@ export default function Thermostat() {
             onOpenSchedule={id => setScheduleTarget({ system: is3Zone ? "3zone" : "4zone", id })}
             onBalanceChange={is3Zone ? undefined : setBalance}
           />
+        ))}
+        {showMonitorZones && monitorZones.map(zone => (
+          <MonitorZoneCard key={zone.id} zone={zone} />
         ))}
       </div>
 
