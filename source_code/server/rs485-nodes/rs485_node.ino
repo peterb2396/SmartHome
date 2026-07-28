@@ -1,11 +1,10 @@
 /**
  * RS485 Sensor Node (RP2040)
  * ─────────────────────────────────────────────────────────────────
- * NOT YET FLASHED/COMPILE-TESTED — written against documented Arduino-Pico
- * core / library APIs, but there's no hardware in this loop to verify
- * against. Treat first flash as a bring-up: watch Serial monitor output,
- * confirm ANNOUNCE frames arrive at the Pi (`server/services/rs485.js`
- * logs `[RS485] ...` lines you can also watch live on the Console page's
+ * Confirmed working against real hardware (basement node) — temp, humidity,
+ * VOC, and CO2 all landing in REPORTs and reaching the frontend. New nodes:
+ * watch Serial monitor output, confirm ANNOUNCE frames arrive at the Pi
+ * (`server/services/rs485.js`, also visible live on the Console page's
  * Terminal panel), then confirm sensor values land on a REPORT.
  *
  * Pure I/O transport, same role as server/esp32/suburban_node.ino's
@@ -30,7 +29,8 @@
  * ── Libraries (Arduino Library Manager) ───────────────────────────
  *   Adafruit BME680 Library     by Adafruit
  *   Adafruit Unified Sensor     by Adafruit
- *   SparkFun SCD4x Arduino Library   by SparkFun (only if HAS_SCD41)
+ *   SparkFun SCD4x Arduino Library   by SparkFun (needed for every build,
+ *     even HAS_SCD41=false ones — see the note on HAS_SCD41 below for why)
  *   EEPROM                      bundled with arduino-pico core
  *
  * ── Wiring ───────────────────────────────────────────────────────
@@ -56,6 +56,12 @@
 #include "pico/unique_id.h"
 
 // ── Config — edit if your wiring differs ──────────────────────────
+// A runtime bool, deliberately NOT gated behind #if — HAS_SCD41 is a real
+// C++ variable, not a #define, so #if HAS_SCD41 would silently evaluate as
+// #if 0 (the preprocessor treats any non-macro identifier as 0) and strip
+// this entire feature out of every build regardless of this value. Learned
+// that the hard way — see git history. The library/object below now always
+// compile in; scd41 just never gets begin()'d or read when this is false.
 const bool HAS_SCD41 = true; // false for basement/attic monitor nodes
 
 const int RS485_DE_RE_PIN = 2;
@@ -64,11 +70,9 @@ const unsigned long ANNOUNCE_INTERVAL_MS = 5000;  // while unconfigured
 const unsigned long EEPROM_SIZE = 8;
 const int EEPROM_ADDR_BYTE = 0; // where the assigned bus address lives
 
-#if HAS_SCD41
 #include <SparkFun_SCD4x_Arduino_Library.h>
 SCD4x scd41;
 bool scd41Ready = false;
-#endif
 
 Adafruit_BME680 bme;
 bool bmeReady = false;
@@ -150,11 +154,9 @@ void sendReport() {
     Serial.println("[RS485 Node] BME680 read failed, skipping this report's readings.");
   }
 
-#if HAS_SCD41
-  if (scd41Ready && scd41.readMeasurement()) {
+  if (HAS_SCD41 && scd41Ready && scd41.readMeasurement()) {
     appendReading(payload, offset, SENSOR_CO2, (float)scd41.getCO2());
   }
-#endif
 
   sendFrame(busAddress, CMD_REPORT, payload, offset);
 }
@@ -262,22 +264,22 @@ void setup() {
     bme.setHumidityOversampling(BME680_OS_2X);
     bme.setPressureOversampling(BME680_OS_4X);
     bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
-    bme.setGasHeater(320, 150); // 320°C for 150ms, standard BSEC-independent profile
+    bme.setGasHeater(320, 150); // 320°C for 150ms, standard B  SEC-independent profile
   } else {
     Serial.println("[RS485 Node] BME680 not found.");
   }
 
-#if HAS_SCD41
-  scd41Ready = scd41.begin();
-  if (!scd41Ready) {
-    Serial.println("[RS485 Node] SCD41 not found.");
-  } else {
-    // begin() only initializes the sensor — it doesn't start sampling.
-    // Without this, readMeasurement() always returns false (no new data
-    // ready) and CO2 never makes it into a REPORT.
-    scd41.startPeriodicMeasurement();
+  if (HAS_SCD41) {
+    scd41Ready = scd41.begin();
+    if (!scd41Ready) {
+      Serial.println("[RS485 Node] SCD41 not found.");
+    } else {
+      // begin() only initializes the sensor — it doesn't start sampling.
+      // Without this, readMeasurement() always returns false (no new data
+      // ready) and CO2 never makes it into a REPORT.
+      scd41.startPeriodicMeasurement();
+    }
   }
-#endif
 
   Serial.printf("[RS485 Node] Boot complete. Address: %d\n", busAddress);
 }
