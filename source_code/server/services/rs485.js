@@ -60,7 +60,12 @@ const BAUD_RATE = 9600;
 const POLL_INTERVAL_MS = 10000;
 const ANNOUNCE_STALE_MS = 30000; // drop a pending node from the list if it stops announcing
 
-const ANNOUNCE_TIMEOUT_MS = 300; // how long to wait for a REPORT after POLL before giving up
+// How long to wait for a REPORT after a POLL before giving up. Sized for a
+// real sensor read, not a quick ack — the BME680's forced-mode conversion
+// (oversampling + its ~150ms gas heater cycle) routinely runs past a couple
+// hundred ms, and the node can't answer until that completes. Generous is
+// fine here since it's nowhere near POLL_INTERVAL_MS (10s) either way.
+const POLL_RESPONSE_TIMEOUT_MS = 2000;
 
 let port = null;
 let usingMock = true;
@@ -175,9 +180,9 @@ function pollNode(address, zoneId) {
     if (usingMock) return resolve([]); // nothing to poll without real hardware
     const timeout = setTimeout(() => {
       pendingReportResolvers.delete(address);
-      console.log(`[RS485] POLL to addr=${address} (zone=${zoneId}) timed out — no REPORT within ${ANNOUNCE_TIMEOUT_MS}ms`); // TEMP DIAGNOSTIC
+      console.log(`[RS485] POLL to addr=${address} (zone=${zoneId}) timed out — no REPORT within ${POLL_RESPONSE_TIMEOUT_MS}ms`); // TEMP DIAGNOSTIC
       resolve([]);
-    }, ANNOUNCE_TIMEOUT_MS);
+    }, POLL_RESPONSE_TIMEOUT_MS);
     pendingReportResolvers.set(address, (readings) => { clearTimeout(timeout); resolve(readings); });
     console.log(`[RS485] TX POLL addr=${address} (zone=${zoneId})`); // TEMP DIAGNOSTIC
     writeFrame(buildFrame(address, CMD.POLL));
