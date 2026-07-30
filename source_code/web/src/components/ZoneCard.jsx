@@ -1,4 +1,4 @@
-import { FaCog, FaExclamationTriangle, FaTint, FaSmog, FaWind } from "react-icons/fa";
+import { FaCog, FaExclamationTriangle, FaInfoCircle, FaTint, FaSmog, FaWind } from "react-icons/fa";
 import ThermoDial from "./ThermoDial";
 import EnvironmentRow from "./EnvironmentRow";
 
@@ -15,7 +15,15 @@ function formatCountdown(untilIso) {
   return hours === 0 ? `${minutes}m` : `${hours}h ${minutes}m`;
 }
 
-export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBalanceChange }) {
+// idleReason: set when this zone's equipment isn't currently being acted on
+// at all (e.g. an air-handler-only zone while gas mode has handed control
+// to the boiler, which can't serve or cool this room). The zone's own
+// settings (target/schedule/on) still fully work while idle — they just
+// take effect again once idle clears — so controls stay live, this only
+// adds a visible explanation. onIdleAction, if given, renders a small
+// button in that banner (e.g. a shortcut to the mode switch that would
+// clear the idle state).
+export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBalanceChange, idleReason, onIdleAction }) {
   const {
     id, label, on, target, currentTemp: current, calling, coolCalling,
     safety = "normal", overridden, overrideUntil, environment,
@@ -32,7 +40,9 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBal
         : coolCalling ? "linear-gradient(160deg, var(--tint-info) 0%, var(--bg-card) 60%)"
         : "var(--bg-card)",
       borderRadius: 16,
-      border: `1px solid ${inSafetyOverride ? "#fca5a5" : calling ? "#fed7aa" : coolCalling ? "#bfdbfe" : "var(--border)"}`,
+      border: idleReason
+        ? "1px dashed var(--border)"
+        : `1px solid ${inSafetyOverride ? "#fca5a5" : calling ? "#fed7aa" : coolCalling ? "#bfdbfe" : "var(--border)"}`,
       boxShadow: "0 1px 3px rgba(0,0,0,0.07)", padding: "1.25rem",
       display: "flex", flexDirection: "column", alignItems: "center", gap: 14,
       transition: "all 0.25s",
@@ -59,6 +69,25 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBal
           </button>
         </div>
       </div>
+
+      {idleReason && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, width: "100%", flexWrap: "wrap",
+          background: "var(--bg-surface-alt)", border: "1px solid var(--border)", borderRadius: 10,
+          padding: "0.5rem 0.7rem", color: "var(--text-secondary)", fontSize: "0.78rem", fontWeight: 600,
+        }}>
+          <FaInfoCircle style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>{idleReason}</span>
+          {onIdleAction && (
+            <button onClick={onIdleAction.onClick} style={{
+              padding: "0.25rem 0.6rem", borderRadius: 999, border: "none",
+              background: "var(--accent)", color: "white", fontWeight: 700, fontSize: "0.72rem", cursor: "pointer",
+            }}>
+              {onIdleAction.label}
+            </button>
+          )}
+        </div>
+      )}
 
       <ThermoDial
         current={current}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { FaExclamationTriangle, FaCog, FaFire, FaEye } from "react-icons/fa";
 import { useThermostat } from "../hooks/useThermostat";
 import { useBoiler } from "../hooks/useBoiler";
@@ -26,6 +26,10 @@ export default function Thermostat() {
   // otherwise collide (both have a "downstairs").
   const [scheduleTarget, setScheduleTarget] = useState(null);
   const [showRates, setShowRates] = useState(false);
+  const modeToggleRef = useRef(null);
+  function scrollToModeToggle() {
+    modeToggleRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
   // Local display preference only, not synced anywhere — basement/attic are
   // read-only monitor zones (no actuator, see monitorZones.js), so whether
   // to clutter this page with them is purely a per-browser choice.
@@ -77,6 +81,17 @@ export default function Thermostat() {
   const zoneStep = is3Zone ? boiler.setTarget : setTarget;
   const zoneToggle = is3Zone ? boiler.toggleZone : toggleZone;
 
+  // Air-handler zones with no boiler equivalent (e.g. Primary Suite, Office
+  // today) go fully idle while the boiler's 3-zone layout is active — the
+  // boiler can't serve or cool them at all, they just vanish from
+  // zonesToShow above. Rather than hardcoding which zones those are,
+  // derive it from the actual id overlap between the two systems: once
+  // boiler.js's zone list is unified with the air handler's (matching ids
+  // for all 4), this list naturally becomes empty and every zone just
+  // resumes showing normally via zonesToShow — no other change needed here.
+  const boilerZoneIds = new Set((boiler.state?.zones ?? []).map(z => z.id));
+  const orphanedZones = is3Zone ? state.zones.filter(z => !boilerZoneIds.has(z.id)) : [];
+
   const scheduleZone = scheduleTarget && (
     scheduleTarget.system === "3zone"
       ? (boiler.state?.zones ?? []).find(z => z.id === scheduleTarget.id)
@@ -120,9 +135,9 @@ export default function Thermostat() {
           padding: "0.65rem 1rem", color: "#9a3412", fontSize: "0.85rem", fontWeight: 600,
         }}>
           <FaFire />
-          Gas boiler heating season — showing the boiler's own Great Room / Downstairs / Upstairs
-          zones. The air handler's 4 zones are idle until gas mode is deselected or it warms back up
-          above the season threshold (set in Settings, the gear icon above).
+          Gas boiler heating season — Great Room / Downstairs / Upstairs are being served by the
+          boiler below. The air handler (and any cooling) is fully idle until gas mode is deselected
+          or it warms back up above the season threshold (set in Settings, the gear icon above).
         </div>
       )}
 
@@ -138,6 +153,18 @@ export default function Thermostat() {
             onToggle={zoneToggle}
             onOpenSchedule={id => setScheduleTarget({ system: is3Zone ? "3zone" : "4zone", id })}
             onBalanceChange={is3Zone ? undefined : setBalance}
+          />
+        ))}
+        {orphanedZones.map(zone => (
+          <ZoneCard
+            key={zone.id}
+            zone={zone}
+            onStep={setTarget}
+            onToggle={toggleZone}
+            onOpenSchedule={id => setScheduleTarget({ system: "4zone", id })}
+            onBalanceChange={setBalance}
+            idleReason="Gas heat active elsewhere in the house — this zone has no gas equivalent and can't heat or cool until that clears."
+            onIdleAction={{ label: "Switch heat source", onClick: scrollToModeToggle }}
           />
         ))}
         {showMonitorZones && monitorZones.map(zone => (
@@ -175,7 +202,7 @@ export default function Thermostat() {
         </div>
       )}
 
-      <div style={{ marginBottom: "1.5rem" }}>
+      <div ref={modeToggleRef} style={{ marginBottom: "1.5rem" }}>
         <ModeToggle
           mode={state.mode}
           activeSource={state.activeSource}
