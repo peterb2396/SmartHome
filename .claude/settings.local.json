@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node drive3.js)",
+      "Bash(node drive-rates.js)"
+    ]
+  }
+}
