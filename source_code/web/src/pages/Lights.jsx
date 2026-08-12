@@ -1,14 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { FaLightbulb, FaTv, FaPlug, FaSun, FaMoon, FaPowerOff, FaStarAndCrescent, FaCloudMoon, FaThermometerHalf, FaCloudSun, FaExclamationTriangle, FaCheckCircle } from "react-icons/fa";
+import { FaLightbulb, FaTv, FaPlug, FaSun, FaMoon, FaPowerOff, FaStarAndCrescent, FaCloudMoon, FaThermometerHalf, FaCloudSun, FaExclamationTriangle, FaCheckCircle, FaPlus } from "react-icons/fa";
 import { useDevices }  from "../hooks/useDevices";
+import { useLutron }   from "../hooks/useLutron";
 import { useSettings } from "../hooks/useSettings";
 import { useCar }      from "../hooks/useCar";
 import { useThermostat } from "../hooks/useThermostat";
 import { useBoiler }   from "../hooks/useBoiler";
 import { formatOperatingState } from "../utils";
-import LightCard            from "../components/LightCard";
-import LightSettingsModal   from "../components/LightSettingsModal";
+import LutronDeviceCard      from "../components/LutronDeviceCard";
+import LutronDeviceModal     from "../components/LutronDeviceModal";
 import CarControls          from "../components/CarControls";
 import SectionHeader        from "../components/SectionHeader";
 import Spinner              from "../components/Spinner";
@@ -54,7 +55,7 @@ function OverviewTile({ icon: Icon, label, value, detail, tone = "neutral" }) {
   );
 }
 
-function HouseOverview({ lightsOn, lightsTotal }) {
+function HouseOverview({ lightsOn, lightsTotal, bridgeConnected }) {
   const { state: thermo } = useThermostat();
   const { state: boilerState } = useBoiler();
 
@@ -69,7 +70,7 @@ function HouseOverview({ lightsOn, lightsTotal }) {
 
   const unresponsive = climateZones.filter(z => !z.sensorOk).length;
   const inSafety = climateZones.filter(z => z.safety && z.safety !== "normal").length;
-  const issues = unresponsive + inSafety;
+  const issues = unresponsive + inSafety + (bridgeConnected ? 0 : 1);
 
   return (
     <div style={{
@@ -82,9 +83,9 @@ function HouseOverview({ lightsOn, lightsTotal }) {
       <OverviewTile icon={FaCloudSun} label="Outside" tone="neutral"
         value={typeof outsideTemp === "number" ? `${Math.round(outsideTemp)}°F` : "—"}
         detail="Today's forecast average" />
-      <OverviewTile icon={FaLightbulb} label="Lights" tone={lightsOn > 0 ? "warn" : "neutral"}
-        value={`${lightsOn} of ${lightsTotal} on`}
-        detail={lightsOn > 0 ? "Some lights are on" : "All lights off"} />
+      <OverviewTile icon={FaLightbulb} label="Lights" tone={!bridgeConnected ? "danger" : lightsOn > 0 ? "warn" : "neutral"}
+        value={bridgeConnected ? `${lightsOn} of ${lightsTotal} on` : "Bridge unreachable"}
+        detail={bridgeConnected ? (lightsOn > 0 ? "Some lights are on" : "All lights off") : "Lutron bridge is offline"} />
       <OverviewTile
         icon={issues > 0 ? FaExclamationTriangle : FaCheckCircle}
         label="Status" tone={issues > 0 ? "danger" : "ok"}
@@ -124,8 +125,11 @@ function WeatherCard({ title, pairs }) {
 // ── Main Lights page ──────────────────────────────────────────────────────────
 
 export default function Lights() {
-  const { devices, loading, setDeviceState, previewLevel } = useDevices();
-  const { settings, users, updateSetting } = useSettings();
+  // Appliances/Smart Plugs are still SmartThings — untouched by the Lutron move.
+  const { devices, loading: devicesLoading, setDeviceState } = useDevices();
+  // Actual light/fan switches — all Lutron Caseta now, local Telnet, no SmartThings.
+  const { state: lutronState, loading: lutronLoading, setDevice, previewLevel, saveDevice, removeDevice } = useLutron();
+  const { settings, users } = useSettings();
   const car = useCar();
 
   const [showLights,     setShowLights]     = useState(true);
@@ -133,49 +137,32 @@ export default function Lights() {
   const [showPlugs,      setShowPlugs]      = useState(false);
   const [showWeather,    setShowWeather]    = useState(true);
   const [expandedRooms,  setExpandedRooms]  = useState({});
-  const [modalDevice,    setModalDevice]    = useState(null);
-  const [initedSettings, setInitedSettings] = useState(false);
+  const [modalDevice,    setModalDevice]    = useState(null); // null=closed, {}=add new, {...}=editing
+  const loading = devicesLoading || lutronLoading;
 
-  // Seed settings.lights once
-  useEffect(() => {
-    if (!loading && settings && devices.length && !initedSettings) {
-      const existing = settings.lights || {};
-      const merged   = { ...existing };
-      devices
-        .filter(d => d.name?.toLowerCase().startsWith("c2c") && !d.name.toLowerCase().includes("switch"))
-        .forEach(d => {
-          if (!merged[d.deviceId]) {
-            merged[d.deviceId] = {
-              deviceId: d.deviceId, label: d.label,
-              lutronId: "", owner: "", room: "Uncategorized",
-            };
-          }
-        });
-      updateSetting("lights", merged);
-      setInitedSettings(true);
-    }
-  }, [loading, settings, devices, initedSettings, updateSetting]);
+  // Device classification (appliances/plugs — SmartThings, unchanged)
+  // Lutron devices are still bridged into SmartThings too (that's how they
+  // originally showed up as "c2c"-prefixed entries) — now that the Lights
+  // section above sources them directly from lutron.js instead, explicitly
+  // excluding anything c2c-prefixed here is what stops the same physical
+  // light from also showing up a second time under Appliances/Plugs.
+  const isLutronBridged   = d => d.name?.toLowerCase().startsWith("c2c");
+  const appliancesDevices = devices.filter(d => !isLutronBridged(d) && d.deviceTypeName?.toLowerCase().includes("samsung"));
+  const plugsDevices      = devices.filter(d => !isLutronBridged(d) && !d.deviceTypeName?.toLowerCase().includes("samsung") && d.name?.toLowerCase().includes("switch"));
 
-  const saveDeviceSettings = (deviceId, patch) => {
-    const updated = { ...settings.lights, [deviceId]: { ...settings.lights?.[deviceId], ...patch } };
-    updateSetting("lights", updated);
-  };
+  const lutronDevices = lutronState?.devices ?? [];
+  const bridgeConnected = lutronState?.bridgeConnected ?? false;
 
-  // Device classification
-  const lightsDevices     = devices.filter(d => d.name?.toLowerCase().startsWith("c2c") && !d.name.toLowerCase().includes("switch"));
-  const appliancesDevices = devices.filter(d => d.deviceTypeName?.toLowerCase().includes("samsung"));
-  const plugsDevices      = devices.filter(d => !d.deviceTypeName?.toLowerCase().includes("samsung") && d.name?.toLowerCase().includes("switch"));
-
-  const lightsByRoom = lightsDevices.reduce((acc, d) => {
-    const room = settings.lights?.[d.deviceId]?.room?.trim() || "Uncategorized";
+  const lightsByRoom = lutronDevices.reduce((acc, d) => {
+    const room = d.room?.trim() || "Uncategorized";
     (acc[room] = acc[room] || []).push(d);
     return acc;
   }, {});
 
-  const existingRooms = [...new Set(Object.values(settings.lights || {}).map(l => l.room?.trim()).filter(Boolean))]
+  const existingRooms = [...new Set(lutronDevices.map(d => d.room?.trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
 
-  const lightsOnCount = lightsDevices.filter(d => d.status?.components?.main?.switch?.switch?.value === "on").length;
+  const lightsOnCount = lutronDevices.filter(d => d.on).length;
 
   if (loading) return <Spinner message="Loading your smart home..." />;
 
@@ -193,50 +180,83 @@ export default function Lights() {
         }
       `}</style>
 
-      <HouseOverview lightsOn={lightsOnCount} lightsTotal={lightsDevices.length} />
+      <HouseOverview lightsOn={lightsOnCount} lightsTotal={lutronDevices.length} bridgeConnected={bridgeConnected} />
 
       {/* Car controls */}
       <CarControls start={car.start} lock={car.lock} unlock={car.unlock} />
 
       {/* ── Lights ── */}
-      <SectionHeader title="Lights" isExpanded={showLights} onClick={() => setShowLights(v => !v)}
-        icon={FaLightbulb} count={lightsDevices.length} />
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+        <div style={{ flex: 1 }}>
+          <SectionHeader title="Lights" isExpanded={showLights} onClick={() => setShowLights(v => !v)}
+            icon={FaLightbulb} count={lutronDevices.length} />
+        </div>
+        <button onClick={() => setModalDevice({})} title="Add a Lutron device" style={{
+          display: "flex", alignItems: "center", gap: 6, padding: "0.5rem 0.9rem",
+          background: "var(--accent)", color: "white", border: "none", borderRadius: 10,
+          fontWeight: 600, fontSize: "0.82rem", cursor: "pointer", flexShrink: 0,
+        }}>
+          <FaPlus size={11} /> Add Device
+        </button>
+      </div>
+
+      {!bridgeConnected && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, margin: "0.75rem 0",
+          background: "var(--tint-danger)", border: "1px solid #fca5a5", borderRadius: 10,
+          padding: "0.65rem 1rem", color: "var(--danger)", fontSize: "0.85rem", fontWeight: 600,
+        }}>
+          <FaExclamationTriangle />
+          Lutron bridge is unreachable — lights/fans can't be controlled right now. Check the bridge's
+          network connection; see the Console page for details.
+        </div>
+      )}
 
       {showLights && (
-        <div style={{ marginBottom: "2rem" }}>
-          {Object.entries(lightsByRoom).sort(([a], [b]) => a.localeCompare(b)).map(([room, roomDevices]) => {
-            const expanded = expandedRooms[room] !== false;
-            return (
-              <div key={room} style={{ marginBottom: "1.25rem" }}>
-                <div onClick={() => setExpandedRooms(p => ({ ...p, [room]: !expanded }))} style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                  padding: "0.85rem 1.25rem", background: "var(--bg-card)", borderRadius: 10,
-                  border: "1px solid var(--border)", cursor: "pointer", marginBottom: "0.75rem",
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                    <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{room}</span>
-                    <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-                      {roomDevices.length} {roomDevices.length === 1 ? "light" : "lights"}
-                    </span>
+        <div style={{ marginBottom: "2rem", marginTop: "0.75rem" }}>
+          {lutronDevices.length === 0 ? (
+            <div style={{
+              background: "var(--bg-card)", border: "1px dashed var(--border)", borderRadius: 12,
+              padding: "1.5rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.9rem",
+            }}>
+              No Lutron devices added yet — click "Add Device" and enter the Integration ID from the
+              Lutron app's Send Integration Report.
+            </div>
+          ) : (
+            Object.entries(lightsByRoom).sort(([a], [b]) => a.localeCompare(b)).map(([room, roomDevices]) => {
+              const expanded = expandedRooms[room] !== false;
+              return (
+                <div key={room} style={{ marginBottom: "1.25rem" }}>
+                  <div onClick={() => setExpandedRooms(p => ({ ...p, [room]: !expanded }))} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "0.85rem 1.25rem", background: "var(--bg-card)", borderRadius: 10,
+                    border: "1px solid var(--border)", cursor: "pointer", marginBottom: "0.75rem",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                      <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{room}</span>
+                      <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                        {roomDevices.length} {roomDevices.length === 1 ? "light" : "lights"}
+                      </span>
+                    </div>
+                    <span style={{ color: "#cbd5e1", fontSize: "0.8rem" }}>{expanded ? "▲" : "▼"}</span>
                   </div>
-                  <span style={{ color: "#cbd5e1", fontSize: "0.8rem" }}>{expanded ? "▲" : "▼"}</span>
+                  {expanded && (
+                    <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_WIDE}px, 1fr))`, gap: "1rem" }}>
+                      {roomDevices.map(d => (
+                        <LutronDeviceCard
+                          key={d.integrationId} device={d} bridgeConnected={bridgeConnected}
+                          onToggle={(id, on, level) => setDevice(id, on, level)}
+                          onPreview={previewLevel}
+                          onCommit={(id, on, level) => setDevice(id, on, level)}
+                          onSettings={id => setModalDevice(lutronDevices.find(x => x.integrationId === id))}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
-                {expanded && (
-                  <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_WIDE}px, 1fr))`, gap: "1rem" }}>
-                    {roomDevices.map(d => (
-                      <LightCard
-                        key={d.deviceId} device={d}
-                        onToggle={(id, on, level) => setDeviceState(id, on, level)}
-                        onPreview={previewLevel}
-                        onCommit={(id, on, level) => setDeviceState(id, on, level)}
-                        onSettings={id => setModalDevice(id)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
       )}
 
@@ -359,15 +379,15 @@ export default function Lights() {
         </div>
       )}
 
-      {/* Light settings modal */}
+      {/* Lutron device add/edit modal */}
       {modalDevice && (
-        <LightSettingsModal
-          deviceId={modalDevice}
-          settings={settings}
+        <LutronDeviceModal
+          device={modalDevice.integrationId != null ? modalDevice : null}
           users={users}
           existingRooms={existingRooms}
           onClose={() => setModalDevice(null)}
-          onSave={saveDeviceSettings}
+          onSave={saveDevice}
+          onDelete={removeDevice}
         />
       )}
     </div>

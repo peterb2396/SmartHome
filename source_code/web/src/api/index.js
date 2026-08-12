@@ -14,10 +14,17 @@ export const getSettings    = () => api.get("/settings");
 export const putSetting     = (key, value) => api.post("/settings", { key, value });
 export const getUsers       = () => api.get("/users");
 
-// ── Devices / Lights ─────────────────────────────────────────────────────────
+// ── Devices / Lights (SmartThings — smart plugs / appliances only now) ───────
 export const listDevices    = () => api.get("/list-devices");
 export const controlLights  = (devices, on, level) =>
   api.post("/lights", { devices, on, level, password: token() });
+
+// ── Lutron Caseta (local, no SmartThings — actual light/fan switches) ───────
+export const getLutronDevices   = () => api.get("/lutron/devices");
+export const upsertLutronDevice = (device) => api.post("/lutron/devices", device);
+export const deleteLutronDevice = (integrationId) => api.delete(`/lutron/devices/${integrationId}`);
+export const controlLutronDevice = (integrationId, on, level) =>
+  api.post(`/lutron/devices/${integrationId}/control`, { on, level });
 
 // ── Presence ─────────────────────────────────────────────────────────────────
 export const arrive = (who) => api.post("/arrive", { who, password: token() });
