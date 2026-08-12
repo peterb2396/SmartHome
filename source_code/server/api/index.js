@@ -45,7 +45,10 @@ logStream.install();
   maintenance.init();
   await sound.init();
   spotify.init();
-  await lutron.init();
+  // lutron.init() disabled — lights/fans are back on SmartThings and the
+  // physical bridge connection was flapping (repeated connect/disconnect),
+  // spamming push notifications on every flap. Not calling init() means it
+  // never opens the Telnet connection at all, so no more reconnect churn.
   rs485.init(() => nodeRegistry.getState().configured);
   faultLed.init();
   await cameraSvc.initRecorders(); // start recording for all enabled cameras

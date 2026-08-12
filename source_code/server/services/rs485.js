@@ -283,14 +283,29 @@ function handleFrame(addr, cmd, payload) {
 }
 
 // ── Polling loop ─────────────────────────────────────────────────────────
-function pollNode(address) {
+// Logs every poll's outcome (response or timeout) so a bus that goes quiet
+// after a while can actually be diagnosed from the logs — which node
+// stopped answering, and when — instead of just observing "it stopped
+// working" with no record of where.
+let consecutiveMisses = new Map(); // busAddress -> count, reset to 0 on any response
+
+function pollNode(address, zoneId) {
   return new Promise((resolve) => {
     if (usingMock) return resolve([]); // nothing to poll without real hardware
+    const label = `addr=${address}${zoneId ? ` zone=${zoneId}` : ''}`;
     const timeout = setTimeout(() => {
       pendingReportResolvers.delete(address);
+      const misses = (consecutiveMisses.get(address) || 0) + 1;
+      consecutiveMisses.set(address, misses);
+      console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row)`);
       resolve([]);
     }, POLL_RESPONSE_TIMEOUT_MS);
-    pendingReportResolvers.set(address, (readings) => { clearTimeout(timeout); resolve(readings); });
+    pendingReportResolvers.set(address, (readings) => {
+      clearTimeout(timeout);
+      consecutiveMisses.set(address, 0);
+      console.log(`[RS485] Poll ${label} — OK (${readings.length} readings)`);
+      resolve(readings);
+    });
     writeFrame(buildFrame(address, CMD.POLL));
   });
 }
@@ -298,7 +313,7 @@ function pollNode(address) {
 async function pollAll(configuredNodes) {
   for (const node of configuredNodes) {
     if (node.busAddress == null || !node.zoneId) continue;
-    const readings = await pollNode(node.busAddress);
+    const readings = await pollNode(node.busAddress, node.zoneId);
     for (const { type, value } of readings) {
       sensors.set(`${SENSOR_KEY_PREFIX[type]}-${node.zoneId}`, value, SENSOR_UNIT[type], { source: 'rs485', nodeId: node.uniqueId });
     }
