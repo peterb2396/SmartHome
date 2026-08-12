@@ -15,9 +15,12 @@
  *
  * Same commissioning flow as every other RS485 node (see rs485_node.ino):
  * announces on address 0x00 with its unique chip ID until assigned an
- * address + `zoneId` from the Console's "New Nodes" panel — set `kind` to
- * "dial" there so the server polls it on the fast dial loop
+ * address from the Console's "New Nodes" panel — set `kind` to "dial"
+ * there so the server polls it on the fast dial loop
  * (server/services/rs485.js's pollAllDials()), not the 10s sensor loop.
+ * Thermostat zone and sound zone are separate id spaces (see
+ * server/services/sound.js's header) — the Console lets a dial be
+ * assigned a thermostat zone, a sound zone, or both.
  *
  * ── Hardware ────────────────────────────────────────────────────────
  *   ESP32-S3 (needs the RAM/clock for a 480x480 LVGL framebuffer — a
@@ -53,8 +56,12 @@
  *    header comment for the authoritative spec) ──────────────────────
  * POLL_DIAL (0x04, master→dial, 25B): targetF, currentF, humidity, co2,
  * outdoorF (5x float32) + flags (1B: bit0 callingHeat, bit1 callingCool,
- * bit2 safetyActive, bit3 weatherStale) + hour, minute (1B each) +
- * volumePercent, source (1B each: 0=off,1=spotify,2=tv).
+ * bit2 safetyActive, bit3 weatherStale, bit4 spotifyEnabled) + hour,
+ * minute (1B each) + volumePercent, activeSource (1B each: 0=off,
+ * 1=spotify,2=override1,3=override2). activeSource is that zone's own
+ * audio hardware's CURRENT hardware-detected input (a separate zoneAudio
+ * node, not this dial) — display-only here, same as on the website; this
+ * dial has no say in which input wins.
  *
  * DIAL_STATE (0x84, dial→master reply, 8B): mode (1B: 0=thermostat,
  * 1=sound) + newTargetF (float32) + changed (1B) + tapEvent (1B) +
@@ -63,6 +70,9 @@
  * pushes the current value down every cycle specifically so a dropped
  * frame can't cause drift; this node just keeps incrementing its local
  * copy from encoder turns and reports where it currently sits.
+ * tapEvent: 0=none, 1=wake, 2=menuSelect, 3=toggle Spotify-enabled for
+ * this dial's sound zone (tapping the Sound screen itself — see onTap()).
+ * That's strictly a Spotify on/off gate; it never touches override inputs.
  */
 
 #include <Wire.h>
@@ -123,11 +133,13 @@ struct DialState {
   float targetF = 68, currentF = 0, humidity = 0, co2 = 0, outdoorF = 0;
   bool callingHeat = false, callingCool = false, safetyActive = false, weatherStale = true;
   uint8_t hour = 0, minute = 0;
-  uint8_t volumePercent = 0, source = 0; // 0=off,1=spotify,2=tv
+  uint8_t volumePercent = 0;
+  uint8_t activeSource = 0;   // 0=off,1=spotify,2=override1,3=override2 — hardware-detected, read-only here
+  bool spotifyEnabled = false; // this dial's own optimistic copy — see onTap()'s SCREEN_SOUND case
 } state;
 
 bool pendingChange = false;   // set when the encoder has moved something since the last poll reply
-uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect — informational, consumed locally too
+uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect,3=toggleSpotifyEnabled
 
 // ── Screen state machine ────────────────────────────────────────────────
 enum Screen { SCREEN_IDLE, SCREEN_CLOCK, SCREEN_MENU, SCREEN_THERMOSTAT, SCREEN_SOUND };
@@ -194,14 +206,15 @@ void applyPollDialPayload(const uint8_t* p, uint8_t len) {
   memcpy(&state.co2,      p + 12, 4);
   memcpy(&state.outdoorF, p + 16, 4);
   uint8_t flags = p[20];
-  state.callingHeat  = flags & 0x01;
-  state.callingCool  = flags & 0x02;
-  state.safetyActive = flags & 0x04;
-  state.weatherStale = flags & 0x08;
+  state.callingHeat    = flags & 0x01;
+  state.callingCool    = flags & 0x02;
+  state.safetyActive   = flags & 0x04;
+  state.weatherStale   = flags & 0x08;
+  state.spotifyEnabled = flags & 0x10; // authoritative — overwrites any optimistic tap-toggle
   state.hour   = p[21];
   state.minute = p[22];
   state.volumePercent = p[23];
-  state.source = p[24];
+  state.activeSource = p[24];
 }
 
 void loadAddressFromEEPROM() {
@@ -331,6 +344,16 @@ void onTap() {
     pendingTapEvent = 2; // menuSelect
     currentScreen = (menuSelection == 0) ? SCREEN_SOUND : SCREEN_THERMOSTAT;
     if (currentScreen == SCREEN_SOUND) showSoundScreen(); else showThermostatScreen();
+  } else if (currentScreen == SCREEN_SOUND) {
+    // Tapping the Sound screen toggles this zone's Spotify enable gate —
+    // strictly that, never the override inputs (see this file's header).
+    // Flips the local copy immediately so the UI responds without waiting
+    // for a round trip; the next POLL_DIAL push's flags byte is
+    // authoritative and will correct it if the toggle is ever rejected
+    // server-side (e.g. no soundZoneId configured for this dial).
+    pendingTapEvent = 3; // toggleSpotifyEnabled
+    state.spotifyEnabled = !state.spotifyEnabled;
+    showSoundScreen();
   }
 }
 
@@ -459,7 +482,14 @@ void showSoundScreen() {
   lv_obj_clean(screenSound);
   lv_obj_set_style_bg_color(screenSound, COLOR_BG, 0);
 
-  lv_color_t sourceColor = state.source == 1 ? COLOR_SPOTIFY : state.source == 2 ? COLOR_ACCENT : COLOR_MUTED;
+  // activeSource is hardware-detected reality (what's actually audible
+  // right now); spotifyEnabled is the setting this screen's tap controls.
+  // They're shown as two separate lines since they can disagree — e.g.
+  // Spotify enabled=true but activeSource=override1 while the TV's on.
+  lv_color_t sourceColor = state.activeSource == 1 ? COLOR_SPOTIFY
+    : state.activeSource == 2 ? COLOR_ACCENT
+    : state.activeSource == 3 ? COLOR_DANGER
+    : COLOR_MUTED;
 
   lv_obj_t* arc = lv_arc_create(screenSound);
   lv_obj_set_size(arc, 260, 260);
@@ -478,11 +508,24 @@ void showSoundScreen() {
   lv_obj_set_style_text_color(volLabel, COLOR_TEXT, 0);
   lv_obj_align(volLabel, LV_ALIGN_CENTER, 0, -10);
 
-  const char* sourceLabel = state.source == 1 ? "Spotify" : state.source == 2 ? "TV" : "Off";
+  const char* sourceLabel = state.activeSource == 1 ? "Spotify"
+    : state.activeSource == 2 ? "TV"
+    : state.activeSource == 3 ? "Priority Override"
+    : "Off";
   lv_obj_t* src = lv_label_create(screenSound);
   lv_label_set_text(src, sourceLabel);
   lv_obj_set_style_text_color(src, sourceColor, 0);
   lv_obj_align(src, LV_ALIGN_CENTER, 0, 35);
+
+  // Tap target for the Spotify enable gate — see onTap()'s SCREEN_SOUND
+  // case. Whole screen is tappable already (LVGL's default indev on the
+  // active screen), this label is just what that tap visually means here.
+  char enabledStr[24];
+  snprintf(enabledStr, sizeof(enabledStr), "Spotify: %s (tap)", state.spotifyEnabled ? "On" : "Off");
+  lv_obj_t* enabledLabel = lv_label_create(screenSound);
+  lv_label_set_text(enabledLabel, enabledStr);
+  lv_obj_set_style_text_color(enabledLabel, state.spotifyEnabled ? COLOR_SPOTIFY : COLOR_MUTED, 0);
+  lv_obj_align(enabledLabel, LV_ALIGN_BOTTOM_MID, 0, -20);
 
   lv_scr_load(screenSound);
 }

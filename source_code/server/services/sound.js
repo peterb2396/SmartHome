@@ -1,40 +1,79 @@
 /**
  * Sound Service
  * ─────────────────────────────────────────────────────────────────
- * SOFTWARE SCAFFOLD — no speaker/amp/audio-routing hardware exists yet
- * ("in the future I will have a speaker zone in each room"). This builds
- * the real data model, API, and RS485 dial-volume protocol now so the
- * wiring is already correct once real zone amps are chosen — but actually
- * carrying PCM audio into a physical zone is not implemented here; see
- * spotify.js's header for exactly where that gap is.
+ * Each zone's physical audio hardware (a "zoneAudio" RS485 node — see
+ * rs485.js's protocol header) has 3 audio inputs, fixed priority, LOCAL
+ * hardware-level switching:
+ *   0 (lowest)  Spotify  — the shared Pi-routed stream, only present at
+ *                          all if this zone has Spotify enabled
+ *   1           Override input 1 — e.g. a TV's audio out, wired straight
+ *                          into the zone box
+ *   2 (highest) Override input 2 — reserved for a future Pi-triggered
+ *                          "force audio to every zone" alarm/announcement
+ *                          feed, not wired yet
  *
- * Zone ids intentionally match thermostat.js's 4 air-handler zones (not
- * imported directly, to keep this module standalone/independently
- * testable, same as boiler.js/monitorZones.js each defining their own zone
- * list rather than sharing thermostat.js's) — a dial node's single
- * `zoneId` (see nodeRegistry.js) identifies both its HVAC zone and its
- * sound zone, one id space, not two to keep in sync.
+ * The zone hardware itself decides which input is actually audible, by
+ * locally detecting signal presence on whichever override input(s) have
+ * one — the same "must keep working with zero WiFi/server dependency"
+ * requirement the HVAC dial protocol was built around applies here too:
+ * turning a TV on has to instantly win over Spotify with no round-trip to
+ * this server. This service and the RS485 link to each zone are NOT in
+ * that decision path at all. Their job is narrower:
+ *   - tell each zone whether Spotify is allowed to be its lowest-priority
+ *     input right now (setZoneEnabled() below — the web/dial "zone on/off"
+ *     control is strictly a Spotify gate, never touches override inputs;
+ *     the TV in a room always works whether or not anyone's ever opened
+ *     this app)
+ *   - carry that zone's desired Spotify volume down
+ *   - receive back which input the hardware is CURRENTLY actually playing
+ *     (reportActiveSource(), called by rs485.js after each poll reply),
+ *     purely for display on the web app / dial — read-only from here,
+ *     never commanded
  *
- * Same schema-less settings-blob pattern as boiler.js/thermostat.js
- * (settings key 'sound').
+ * activeSource is therefore live hardware-observed state, not a user
+ * preference — kept in an in-memory Map like lutron.js's deviceState, not
+ * in the persisted settings blob (volumePercent/spotifyEnabled ARE user
+ * preferences and go through the normal settings-blob pattern below, same
+ * as boiler.js/thermostat.js).
+ *
+ * Zone ids are audio-zone-specific, deliberately NOT shared with
+ * thermostat.js's 4 air-handler zones — audio zoning follows room-by-room
+ * speaker wiring, HVAC zoning follows ductwork, and this house's actual
+ * rooms don't line up 1:1 with its duct zones. A dial node that controls
+ * both needs a thermostat zoneId AND a sound-zone id — see
+ * nodeRegistry.js's `soundZoneId` field.
  */
 
 const settingsSvc = require('./settings');
 
 const MIN_VOLUME = 0;
 const MAX_VOLUME = 100;
-const SOURCES = ['off', 'spotify', 'tv'];
+
+// Matches the wire values rs485.js's ZONE_AUDIO_STATE parsing uses —
+// keep in sync with that file's ACTIVE_SOURCE map.
+const ACTIVE_SOURCE_NAME = { 0: 'off', 1: 'spotify', 2: 'override1', 3: 'override2' };
 
 const ZONES = [
-  { id: 'primary-suite', label: 'Primary Suite' },
-  { id: 'upstairs',      label: 'Upstairs' },
-  { id: 'downstairs',    label: 'Downstairs' },
-  { id: 'office',        label: 'Office' },
+  { id: 'primary-bedroom',  label: 'Primary Bedroom' },
+  { id: 'primary-bathroom', label: 'Primary Bathroom' },
+  { id: 'foyer',            label: 'Foyer' },
+  { id: 'lounge',           label: 'Lounge' },
+  { id: 'office',           label: 'Office' },
+  { id: 'kitchen',          label: 'Kitchen' },
+  { id: 'great-room',       label: 'Great Room' },
+  { id: 'pavillion',        label: 'Pavillion' },
 ];
+const ZONE_IDS = new Set(ZONES.map(z => z.id));
 
 const DEFAULT_SETTINGS = {
-  zones: Object.fromEntries(ZONES.map(z => [z.id, { volumePercent: 30, source: 'off' }])),
+  zones: Object.fromEntries(ZONES.map(z => [z.id, { volumePercent: 30, spotifyEnabled: false }])),
 };
+
+// Live, hardware-reported — never persisted, never user-set directly.
+// zoneId -> 'off'|'spotify'|'override1'|'override2'. Absent (not yet
+// reported, e.g. no zoneAudio node configured for that zone) reads as
+// 'off' via getState() below rather than throwing.
+const activeSourceByZone = new Map();
 
 function clampVolume(v) {
   return Math.min(MAX_VOLUME, Math.max(MIN_VOLUME, Math.round(v)));
@@ -64,43 +103,59 @@ function getState() {
       id: zone.id,
       label: zone.label,
       volumePercent: settings.zones[zone.id].volumePercent,
-      source: settings.zones[zone.id].source,
+      spotifyEnabled: settings.zones[zone.id].spotifyEnabled,
+      activeSource: activeSourceByZone.get(zone.id) || 'off',
     })),
   };
 }
 
-// Always absolute, never a delta — one function, two callers (the web API's
-// POST /sound/zone/:id, and rs485.js's dial handling). A dial reports its
-// own locally-tracked absolute volume each poll (the master pushes the
-// current value down every cycle so the dial always has something correct
-// to increment from), exactly the same pattern as thermostat.js's
-// setZone()/target — avoids the drift risk a delta-based approach would
-// have if a frame is ever dropped.
+// Always absolute, never a delta — one function, three callers (the web
+// API's POST /sound/zone/:id, rs485.js's dial volume handling, and the
+// zoneAudio push payload builder below reads it back out). Same
+// drop-a-frame-safe reasoning as thermostat.js's setZone()/target.
 async function setZoneVolume(zoneId, volumePercent) {
   const settings = getSettings();
-  if (!settings.zones[zoneId]) throw new Error(`Unknown sound zone ${zoneId}`);
+  if (!ZONE_IDS.has(zoneId)) throw new Error(`Unknown sound zone ${zoneId}`);
   const zs = { ...settings.zones[zoneId], volumePercent: clampVolume(volumePercent) };
   await saveSettings({ ...settings, zones: { ...settings.zones, [zoneId]: zs } });
   return getState();
 }
 
-async function setZoneSource(zoneId, source) {
+// The "zone on/off" control — strictly a Spotify gate, see this file's
+// header. Called from the web API, and from a dial's tapEvent==3 on its
+// Sound screen (see rs485.js's pollAllDials()).
+async function setZoneEnabled(zoneId, enabled) {
   const settings = getSettings();
-  if (!settings.zones[zoneId]) throw new Error(`Unknown sound zone ${zoneId}`);
-  if (!SOURCES.includes(source)) throw new Error(`Unknown source ${source}`);
-  // 'tv' is accepted and stored, but there's no physical audio-routing
-  // hardware to actually act on it yet — see this file's header comment.
-  // Not silently pretending it works: the zone just records the selection.
-  const zs = { ...settings.zones[zoneId], source };
+  if (!ZONE_IDS.has(zoneId)) throw new Error(`Unknown sound zone ${zoneId}`);
+  const zs = { ...settings.zones[zoneId], spotifyEnabled: !!enabled };
   await saveSettings({ ...settings, zones: { ...settings.zones, [zoneId]: zs } });
   return getState();
+}
+
+// Called by rs485.js after each zoneAudio node's poll reply — pure status
+// intake, not a mutation of anything a user configured.
+function reportActiveSource(zoneId, sourceByte) {
+  if (!ZONE_IDS.has(zoneId)) return;
+  activeSourceByZone.set(zoneId, ACTIVE_SOURCE_NAME[sourceByte] || 'off');
+}
+
+// What rs485.js pushes down to a zone's audio node each poll — see this
+// file's header for why it's only these two fields (spotifyEnabled +
+// volume), never a commanded source.
+function getZoneAudioPush(zoneId) {
+  const settings = getSettings();
+  const zs = settings.zones[zoneId];
+  if (!zs) return { spotifyEnabled: false, volumePercent: 0 };
+  return { spotifyEnabled: zs.spotifyEnabled, volumePercent: zs.volumePercent };
 }
 
 async function init() {
   if (!settingsSvc.get()?.sound) {
     await saveSettings(DEFAULT_SETTINGS);
   }
-  console.log('[Sound] Initialized (software scaffold — no zone amp hardware wired yet).');
+  console.log('[Sound] Initialized.');
 }
 
-module.exports = { init, getState, setZoneVolume, setZoneSource, ZONES, SOURCES };
+module.exports = {
+  init, getState, setZoneVolume, setZoneEnabled, reportActiveSource, getZoneAudioPush, ZONES,
+};

@@ -33,7 +33,7 @@ function getState() {
   };
 }
 
-async function configureNode(uniqueId, { name, kind, zoneId, sensors }) {
+async function configureNode(uniqueId, { name, kind, zoneId, soundZoneId, sensors }) {
   if (!uniqueId) throw new Error('uniqueId is required');
   if (!name || !name.trim()) throw new Error('name is required');
   const nodes = getSettings();
@@ -46,7 +46,13 @@ async function configureNode(uniqueId, { name, kind, zoneId, sensors }) {
     uniqueId,
     name: name.trim(),
     kind: kind || 'other',
+    // `zoneId` is a thermostat zone; `soundZoneId` is a sound zone —
+    // separate id spaces (see sound.js's header comment for why). A
+    // `dial` node may use either or both; a `zoneAudio` node only ever
+    // uses `zoneId`, reused there to mean its (sound) zone rather than
+    // adding a third field for what's otherwise a single-purpose node.
     zoneId: zoneId || null,
+    soundZoneId: soundZoneId || null,
     sensors: Array.isArray(sensors) ? sensors : [],
     busAddress,
     configuredAt: existing?.configuredAt || new Date().toISOString(),
