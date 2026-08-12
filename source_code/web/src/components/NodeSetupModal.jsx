@@ -3,20 +3,41 @@ import { useState } from "react";
 const KIND_OPTIONS = [
   { value: "thermostat", label: "Thermostat zone (BME680 + SCD41)" },
   { value: "monitor",    label: "Monitor-only zone (temp + humidity)" },
+  { value: "dial",       label: "Wall dial (thermostat + sound control)" },
+  { value: "zoneAudio",  label: "Zone audio hardware (speaker amp)" },
   { value: "other",      label: "Other" },
 ];
 
+// Thermostat zone and sound zone are separate id spaces (HVAC zoning
+// follows ductwork, audio zoning follows room-by-room speaker wiring —
+// see server/services/sound.js's header) — which zone picker(s) show
+// depends on the node kind: a dial can drive both, a zoneAudio node only
+// ever needs a sound zone (reusing the single zoneId field for it, same
+// as this modal already did before sound zones existed), a
+// thermostat/monitor node only ever needs a thermostat zone.
+function needsThermostatZone(kind) {
+  return kind === "thermostat" || kind === "monitor" || kind === "dial";
+}
+function needsSoundZone(kind) {
+  return kind === "dial" || kind === "zoneAudio";
+}
+
 // Naming/setup portal for a node discovered on the RS485 bus. Fully wired
-// to the real node-registry API — it simply has nothing to configure until
-// server/services/rs485.js (not built yet) starts reporting pending nodes.
-export default function NodeSetupModal({ node, zones, onClose, onSave }) {
+// to the real node-registry API.
+export default function NodeSetupModal({ node, zones, soundZones, onClose, onSave }) {
   const [name, setName] = useState(node.name || "");
   const [kind, setKind] = useState(node.kind || "thermostat");
   const [zoneId, setZoneId] = useState(node.zoneId || "");
+  const [soundZoneId, setSoundZoneId] = useState(node.soundZoneId || "");
 
   function handleSave() {
     if (!name.trim()) return;
-    onSave(node.uniqueId, { name: name.trim(), kind, zoneId: zoneId || null });
+    onSave(node.uniqueId, {
+      name: name.trim(),
+      kind,
+      zoneId: needsThermostatZone(kind) || kind === "zoneAudio" ? (zoneId || null) : null,
+      soundZoneId: kind === "dial" ? (soundZoneId || null) : null,
+    });
     onClose();
   }
 
@@ -62,12 +83,30 @@ export default function NodeSetupModal({ node, zones, onClose, onSave }) {
             </select>
           </div>
 
-          {zones?.length > 0 && (
-            <div>
-              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: 6 }}>Zone</label>
+          {needsThermostatZone(kind) && zones?.length > 0 && (
+            <div style={{ marginBottom: needsSoundZone(kind) ? "1.25rem" : 0 }}>
+              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: 6 }}>
+                Thermostat zone
+              </label>
               <select value={zoneId} onChange={e => setZoneId(e.target.value)} style={inputStyle}>
                 <option value="">— None —</option>
                 {zones.map(z => <option key={z.id} value={z.id}>{z.label}</option>)}
+              </select>
+            </div>
+          )}
+
+          {needsSoundZone(kind) && soundZones?.length > 0 && (
+            <div>
+              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: 6 }}>
+                Sound zone
+              </label>
+              <select
+                value={kind === "zoneAudio" ? zoneId : soundZoneId}
+                onChange={e => (kind === "zoneAudio" ? setZoneId : setSoundZoneId)(e.target.value)}
+                style={inputStyle}
+              >
+                <option value="">— None —</option>
+                {soundZones.map(z => <option key={z.id} value={z.id}>{z.label}</option>)}
               </select>
             </div>
           )}

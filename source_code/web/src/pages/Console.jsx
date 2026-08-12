@@ -49,7 +49,7 @@ function LogLine({ entry }) {
 
 export default function Console() {
   const {
-    loading, faults, zones, monitorZones, lights,
+    loading, faults, zones, monitorZones, soundZones, lights,
     nodes, cameras, refetch,
   } = useConsole();
   const { lines: logLines, connected: logsConnected } = useConsoleLogs();
@@ -301,6 +301,7 @@ export default function Console() {
         <NodeSetupModal
           node={setupNode}
           zones={zoneOptions}
+          soundZones={soundZones}
           onClose={() => setSetupNode(null)}
           onSave={handleConfigureNode}
         />

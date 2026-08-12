@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useThermostat } from "./useThermostat";
 import { useDevices } from "./useDevices";
-import { getConsoleNodes, getMonitorZones, getCameras, getConsoleFaults } from "../api";
+import { getConsoleNodes, getMonitorZones, getCameras, getConsoleFaults, getSound } from "../api";
 
 const POLL_MS = 15000;
 
@@ -15,19 +15,21 @@ export function useConsole() {
   const { devices, loading: devicesLoading } = useDevices();
   const [nodes, setNodes] = useState({ configured: [], pending: [] });
   const [monitorZones, setMonitorZones] = useState([]);
+  const [soundZones, setSoundZones] = useState([]);
   const [cameras, setCameras] = useState([]);
   const [faults, setFaults] = useState([]);
   const [extrasLoading, setExtrasLoading] = useState(true);
 
   const fetchExtras = useCallback(async () => {
     try {
-      const [nodesRes, zonesRes, camerasRes, faultsRes] = await Promise.all([
-        getConsoleNodes(), getMonitorZones(), getCameras(), getConsoleFaults(),
+      const [nodesRes, zonesRes, camerasRes, faultsRes, soundRes] = await Promise.all([
+        getConsoleNodes(), getMonitorZones(), getCameras(), getConsoleFaults(), getSound(),
       ]);
       setNodes(nodesRes.data);
       setMonitorZones(zonesRes.data);
       setCameras(camerasRes.data);
       setFaults(faultsRes.data.faults);
+      setSoundZones((soundRes.data.zones || []).map(z => ({ id: z.id, label: z.label })));
     } catch (e) {
       console.error("useConsole:", e);
     } finally {
@@ -54,6 +56,7 @@ export function useConsole() {
     faults,
     zones,
     monitorZones,
+    soundZones,
     lights: { on: lightsOn, total: lightDevices.length },
     nodes,
     cameras,

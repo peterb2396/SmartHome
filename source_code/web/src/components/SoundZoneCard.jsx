@@ -1,27 +1,32 @@
-import { FaVolumeUp, FaVolumeMute, FaSpotify, FaTv, FaPowerOff } from "react-icons/fa";
+import { FaVolumeUp, FaVolumeMute, FaSpotify, FaTv, FaBell, FaPowerOff } from "react-icons/fa";
 
-const SOURCES = [
-  { id: "off",     label: "Off",     icon: FaPowerOff, color: "var(--text-muted)" },
-  { id: "spotify", label: "Spotify", icon: FaSpotify,  color: "#1DB954" },
-  { id: "tv",      label: "TV",      icon: FaTv,       color: "var(--accent)" },
-];
+// What a zone's own audio hardware is CURRENTLY actually playing — decided
+// locally by that hardware (fixed priority: override2 > override1 >
+// spotify), reported back over RS485 purely for display. Read-only here;
+// there is no control that sets this directly.
+const ACTIVE_SOURCE = {
+  off:       { label: "Off",               icon: FaPowerOff, color: "var(--text-muted)" },
+  spotify:   { label: "Spotify",           icon: FaSpotify,  color: "#1DB954" },
+  override1: { label: "TV",                icon: FaTv,       color: "var(--accent)" },
+  override2: { label: "Priority Override", icon: FaBell,     color: "var(--danger)" },
+};
 
-// Software scaffold — see server/services/sound.js. Fully interactive
-// (volume/source both persist and round-trip through the API and any
-// RS485 dial assigned to this zone), there's just no physical zone amp
-// yet to actually hear it change.
-export default function SoundZoneCard({ zone, onVolumeChange, onSourceChange }) {
-  const { id, label, volumePercent, source } = zone;
-  const active = SOURCES.find(s => s.id === source) ?? SOURCES[0];
-  const muted = volumePercent === 0 || source === "off";
+// The only thing this card actually controls is the Spotify-enable gate
+// and Spotify's volume for this zone — see server/services/sound.js's
+// header for the full 3-tier priority design. A TV plugged into this
+// zone's override input always works, whether or not this toggle is on.
+export default function SoundZoneCard({ zone, onVolumeChange, onEnabledChange }) {
+  const { id, label, volumePercent, spotifyEnabled, activeSource } = zone;
+  const active = ACTIVE_SOURCE[activeSource] ?? ACTIVE_SOURCE.off;
+  const muted = volumePercent === 0 || activeSource === "off";
 
   return (
     <div style={{
-      background: source !== "off"
+      background: activeSource !== "off"
         ? `linear-gradient(160deg, ${active.color}1a 0%, var(--bg-card) 60%)`
         : "var(--bg-card)",
       borderRadius: 16,
-      border: `1px solid ${source !== "off" ? `${active.color}55` : "var(--border)"}`,
+      border: `1px solid ${activeSource !== "off" ? `${active.color}55` : "var(--border)"}`,
       boxShadow: "0 1px 3px rgba(0,0,0,0.07)", padding: "1.25rem",
       display: "flex", flexDirection: "column", gap: 14,
       transition: "all 0.25s",
@@ -30,8 +35,8 @@ export default function SoundZoneCard({ zone, onVolumeChange, onSourceChange }) 
         <span style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: "1.02rem" }}>{label}</span>
         <span style={{
           display: "flex", alignItems: "center", gap: 6, padding: "0.25rem 0.6rem", borderRadius: 999,
-          background: source !== "off" ? `${active.color}22` : "var(--bg-surface-alt)",
-          color: source !== "off" ? active.color : "var(--text-muted)",
+          background: activeSource !== "off" ? `${active.color}22` : "var(--bg-surface-alt)",
+          color: activeSource !== "off" ? active.color : "var(--text-muted)",
           fontSize: "0.72rem", fontWeight: 700,
         }}>
           <active.icon size={11} /> {active.label}
@@ -44,7 +49,7 @@ export default function SoundZoneCard({ zone, onVolumeChange, onSourceChange }) 
           type="range" min={0} max={100} step={1}
           value={volumePercent}
           onChange={e => onVolumeChange(id, Number(e.target.value))}
-          aria-label={`${label} volume`}
+          aria-label={`${label} Spotify volume`}
           style={{ flex: 1, accentColor: active.color }}
         />
         <span style={{
@@ -55,20 +60,30 @@ export default function SoundZoneCard({ zone, onVolumeChange, onSourceChange }) 
         </span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
-        {SOURCES.map(s => (
-          <button key={s.id} onClick={() => onSourceChange(id, s.id)} style={{
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-            padding: "0.45rem 0.5rem", borderRadius: 10, border: "none", cursor: "pointer",
-            fontSize: "0.78rem", fontWeight: 600,
-            background: source === s.id ? s.color : "var(--bg-surface-alt)",
-            color: source === s.id ? "white" : "var(--text-secondary)",
-            transition: "all 0.15s",
-          }}>
-            <s.icon size={12} /> {s.label}
-          </button>
-        ))}
-      </div>
+      <label style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "0.55rem 0.7rem", borderRadius: 10, background: "var(--bg-surface-alt)",
+        cursor: "pointer",
+      }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.82rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+          <FaSpotify color={spotifyEnabled ? "#1DB954" : "var(--text-muted)"} size={13} />
+          Spotify enabled
+        </span>
+        <span
+          onClick={() => onEnabledChange(id, !spotifyEnabled)}
+          role="switch" aria-checked={spotifyEnabled} aria-label={`Spotify enabled in ${label}`}
+          style={{
+            width: 40, height: 22, borderRadius: 999, position: "relative", cursor: "pointer",
+            background: spotifyEnabled ? "#1DB954" : "var(--border)", transition: "background 0.2s",
+          }}
+        >
+          <span style={{
+            position: "absolute", top: 2, left: spotifyEnabled ? 20 : 2,
+            width: 18, height: 18, borderRadius: "50%", background: "white",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.3)", transition: "left 0.2s",
+          }} />
+        </span>
+      </label>
     </div>
   );
 }

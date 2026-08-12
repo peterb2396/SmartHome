@@ -4,9 +4,10 @@ import { getSound, setSoundZone } from "../api";
 const POLL_MS = 15000;
 const PAUSE_MS = 2000;
 
-// Software scaffold — see server/services/sound.js. Same optimistic-update/
-// pause-after-mutation pattern as useBoiler.js, so a slider drag doesn't
-// visibly snap back before the next poll catches up.
+// Same optimistic-update/pause-after-mutation pattern as useBoiler.js, so
+// a slider drag doesn't visibly snap back before the next poll catches up.
+// activeSource is hardware-reported (see server/services/sound.js) — this
+// hook never sets it, only reads whatever the last poll reported.
 export function useSound() {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -47,10 +48,10 @@ export function useSound() {
     { zoneId, volumePercent }
   ), [runMutation]);
 
-  const setSource = useCallback((zoneId, source) => runMutation(
-    prev => ({ ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, source } : z) }),
-    { zoneId, source }
+  const setEnabled = useCallback((zoneId, spotifyEnabled) => runMutation(
+    prev => ({ ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, spotifyEnabled } : z) }),
+    { zoneId, spotifyEnabled }
   ), [runMutation]);
 
-  return { state, loading, setVolume, setSource, refetch: fetchState };
+  return { state, loading, setVolume, setEnabled, refetch: fetchState };
 }
