@@ -10,6 +10,7 @@
 const thermostatSvc = require('./thermostat');
 const sensors = require('./sensorStore');
 const gpioSvc = require('./gpio');
+const rs485Svc = require('./rs485');
 
 function getFaults() {
   const faults = [];
@@ -20,6 +21,13 @@ function getFaults() {
   // since the AHU doesn't tell us which zone (if any) it relates to.
   if (gpioSvc.isHvacFaultActive()) {
     faults.push({ id: 'hvac-fault', message: 'Air handler is reporting an active fault (ALARM signal)' });
+  }
+
+  // USB-RS485 dongle unplugged/errored — see rs485.js's auto-reconnect.
+  // Zone sensor readings will go stale (already covered separately below)
+  // but this gives the actual cause, not just the symptom.
+  if (rs485Svc.isBusDown()) {
+    faults.push({ id: 'rs485-bus-down', message: 'RS485 sensor bus is unreachable — zone sensors are not updating' });
   }
 
   for (const z of zones) {

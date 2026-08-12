@@ -86,6 +86,39 @@ async function getTempFAt7am(date) {
   return temps[idx];
 }
 
+// ── Outdoor conditions cache — for RS485 dial nodes (rs485.js) ───────────────────
+// getHourlyForecast() above fetches live every call, which is fine for the
+// existing cron/car-start use, but a dial's fast poll loop needs an instant
+// value with no internet round-trip — that's also what keeps a dial's
+// weather display working while the Pi itself is offline (there's no such
+// thing as offline weather, but "last known reading" degrades gracefully
+// instead of the dial hanging on a fetch or showing nothing).
+let cachedOutdoor = { tempF: null, fetchedAt: 0 };
+const OUTDOOR_CACHE_MAX_AGE_MS = 2 * 60 * 60 * 1000; // stale past this, but still shown (flagged stale)
+
+async function refreshOutdoorCache() {
+  try {
+    const now = new Date();
+    const { times, temps } = await getHourlyForecast(now);
+    const target = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T${String(now.getHours()).padStart(2, '0')}:00`;
+    const idx = times.indexOf(target);
+    if (idx !== -1) {
+      cachedOutdoor = { tempF: temps[idx], fetchedAt: Date.now() };
+    }
+  } catch (err) {
+    console.warn('[Astro] Outdoor cache refresh failed (keeping last known value):', err.message);
+  }
+}
+
+// { tempF, stale } — tempF is null only if we've never once successfully
+// fetched since boot; stale means "still the last real reading, just old."
+function getCachedOutdoorConditions() {
+  return {
+    tempF: cachedOutdoor.tempF,
+    stale: cachedOutdoor.tempF === null || (Date.now() - cachedOutdoor.fetchedAt) > OUTDOOR_CACHE_MAX_AGE_MS,
+  };
+}
+
 // ── Car start helper ────────────────────────────────────────────────────────────
 async function maybeStartCar(tag) {
   const now = new Date();
@@ -136,6 +169,10 @@ function scheduleCronJobs() {
     }
   }, CRON_OPTS);
 
+  // Keep the dial nodes' outdoor-conditions cache fresh — see
+  // refreshOutdoorCache()'s comment above.
+  cron.schedule('0 * * * *', refreshOutdoorCache, CRON_OPTS);
+
   // Auto-start car at 7:00 AM — await so unhandled rejections can't escape
 //   cron.schedule('0 7 * * *', async () => {
 //     console.log('[Cron] 07:00 triggered');
@@ -177,8 +214,12 @@ function schedulePing() {
 
 async function init() {
   await fetchAstroData();
+  await refreshOutdoorCache(); // populate before anything polls a dial, not just on the next hourly tick
   scheduleCronJobs();
   schedulePing();
 }
 
-module.exports = { init, fetchAstroData, isAfterSunset, getTempFAt7am, getHourlyForecast, LAT, LNG, TZ };
+module.exports = {
+  init, fetchAstroData, isAfterSunset, getTempFAt7am, getHourlyForecast,
+  getCachedOutdoorConditions, LAT, LNG, TZ,
+};
