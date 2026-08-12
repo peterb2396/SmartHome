@@ -54,22 +54,32 @@ function handleLogLine(line) {
 
 function start() {
   if (proc) return; // already running
-  try {
-    // No --username/--password — deliberately left in librespot's default
-    // zeroconf-discoverable mode, so pairing happens from the Spotify app's
-    // own device picker (like adding a Sonos), not by storing account
-    // credentials in this codebase.
-    proc = spawn(LIBRESPOT_BIN, ['--name', DEVICE_NAME, '--bitrate', '160', '--backend', 'alsa'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch (err) {
-    console.warn(`[Spotify] Couldn't start librespot (${err.message}) — is it installed? This is expected off the Pi / before setup.`);
+  // No --username/--password — deliberately left in librespot's default
+  // zeroconf-discoverable mode, so pairing happens from the Spotify app's
+  // own device picker (like adding a Sonos), not by storing account
+  // credentials in this codebase.
+  const child = spawn(LIBRESPOT_BIN, ['--name', DEVICE_NAME, '--bitrate', '160', '--backend', 'alsa'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  proc = child;
+
+  // spawn() does NOT throw synchronously for a missing binary — ENOENT
+  // (and any other launch failure) only ever surfaces as an async 'error'
+  // event on the child process. An EventEmitter's 'error' event with no
+  // listener is treated as an uncaught exception and crashes the whole
+  // Node process — this listener is what stops a missing/misconfigured
+  // librespot from taking the entire server down with it.
+  child.on('error', (err) => {
+    if (err.code === 'ENOENT') {
+      console.warn(`[Spotify] librespot binary not found (looked for "${LIBRESPOT_BIN}") — is it installed? This is expected before setup. Set LIBRESPOT_BIN if it's not on PATH.`);
+    } else {
+      console.warn('[Spotify] Failed to start librespot:', err.message);
+    }
     proc = null;
-    return;
-  }
-  proc.stdout.on('data', (d) => d.toString().split('\n').forEach(handleLogLine));
-  proc.stderr.on('data', (d) => d.toString().split('\n').forEach(handleLogLine));
-  proc.on('exit', (code) => {
+  });
+  child.stdout.on('data', (d) => d.toString().split('\n').forEach(handleLogLine));
+  child.stderr.on('data', (d) => d.toString().split('\n').forEach(handleLogLine));
+  child.on('exit', (code) => {
     console.warn(`[Spotify] librespot exited (code ${code}).`);
     proc = null;
     playState = { playing: false, track: null, artist: null };
