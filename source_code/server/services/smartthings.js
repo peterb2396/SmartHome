@@ -62,8 +62,11 @@ const tokenStore = {
     return { refreshToken: s?.refreshToken || '', clientId: CLIENT_ID, clientSecret: CLIENT_SECRET };
   },
   async putAuthData({ authToken, refreshToken }) {
-    await settingsSvc.updateSetting('accessToken', authToken);
-    await settingsSvc.updateSetting('refreshToken', refreshToken);
+    // One atomic write — see settings.js's updateSettings() comment. Two
+    // separate updateSetting() calls here is what left the access/refresh
+    // token pair able to land mismatched (fresh access token, stale
+    // already-consumed refresh token) if anything landed between them.
+    await settingsSvc.updateSettings({ accessToken: authToken, refreshToken });
     console.log('[SmartThings] Token refreshed.');
   },
 };

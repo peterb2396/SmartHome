@@ -11,9 +11,19 @@ async function init() {
 }
 
 async function updateSetting(key, value) {
+  return updateSettings({ [key]: value });
+}
+
+// Multi-key version of updateSetting — one atomic Mongo write instead of N
+// sequential ones. Matters anywhere two or more fields must land together
+// or not at all (e.g. smartthings.js's access+refresh token pair — writing
+// them as two separate updateSetting() calls left a real window where a
+// restart or a concurrent write landing between them could persist a fresh
+// access token next to an already-consumed, dead refresh token).
+async function updateSettings(patch) {
   const result = await Settings.findOneAndUpdate(
     {},
-    { [key]: value },
+    patch,
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
   settings = result.toObject();
@@ -28,4 +38,4 @@ function get() {
   return settings;
 }
 
-module.exports = { init, get, refresh, updateSetting, Settings };
+module.exports = { init, get, refresh, updateSetting, updateSettings, Settings };
