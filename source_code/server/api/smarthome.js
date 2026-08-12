@@ -31,6 +31,7 @@
 const router      = require('express').Router();
 const settingsSvc = require('../services/settings');
 const smartthings = require('../services/smartthings');
+const smartthingsLifecycle = require('../services/smartthingsLifecycle');
 const lightsSvc   = require('../services/lights');
 const tuya        = require('../services/tuya');
 const sensors     = require('../services/sensorStore');
@@ -123,10 +124,17 @@ router.post('/power', tuya.tokenMiddleware, async (req, res) => {
 });
 
 // ── SmartThings webhook ──────────────────────────────────────────────────────
+// "SmartHomeNode" is registered in the SmartThings developer workspace as a
+// Webhook-hosted app, not a browser-redirect OAuth app — SmartThings calls
+// this URL directly with lifecycle events (PING/CONFIRMATION/INSTALL/
+// UPDATE/UNINSTALL), and INSTALL/UPDATE is what actually delivers a fresh
+// access/refresh token pair. See services/smartthingsLifecycle.js for the
+// real handler (an earlier version of this route was a bare stub, and this
+// codebase briefly had a separate browser-redirect OAuth flow built against
+// the wrong integration model — both replaced by this).
 
 router.post('/smartthings-webhook', (req, res) => {
-  console.log('[SmartThings Webhook]', JSON.stringify(req.body));
-  res.sendStatus(200);
+  smartthingsLifecycle.handleWebhook(req, res);
 });
 
 // ── Remote log (from ESP32 / other devices) ──────────────────────────────────

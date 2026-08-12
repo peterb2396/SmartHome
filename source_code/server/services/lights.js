@@ -1,4 +1,3 @@
-const net      = require('net');
 const User     = require('../db/userModel');
 const settingsSvc   = require('./settings');
 const smartthings   = require('./smartthings');
@@ -15,30 +14,14 @@ async function validatePassword(password) {
   }
 }
 
-// ── Lutron control (Telnet) ─────────────────────────────────────────────────────
-
-function lutron(id, brightness) {
-  return new Promise((resolve, reject) => {
-    const client = new net.Socket();
-    client.connect(23, '192.168.4.32', () => {
-      client.write('login: lutron\r\n');
-      setTimeout(() => client.write('integration\r\n'), 500);
-      setTimeout(() => {
-        const cmd = `#OUTPUT,${id},1,${brightness}\r\n`;
-        client.write(cmd);
-        console.log(`[Lutron] Sent: ${cmd.trim()}`);
-      }, 1000);
-      setTimeout(() => { client.destroy(); resolve(true); }, 1500);
-    });
-    client.on('error', err => { console.error('[Lutron] Error:', err); reject(err); });
-    client.on('close', () => console.log(`[Lutron] Connection closed for device ${id}`));
-  });
-}
-
 // ── Main lights controller ──────────────────────────────────────────────────────
+// SmartThings-only — actual Lutron Caseta switches/fans are controlled
+// directly via lutron.js/api/lutron.js now (local Telnet, no SmartThings
+// dependency at all). This function is what's left for smart plugs and
+// anything else still routed through SmartThings.
 
 /**
- * Control one or more lights.
+ * Control one or more devices via SmartThings.
  * @param {string[]|Object[]|null} lightDevices  Array of deviceIds, device objects, or null for all
  * @param {boolean}  on       Turn on (true) or off (false)
  * @param {string}   password Auth password or user _id
@@ -48,25 +31,11 @@ async function lights(lightDevices = null, on = true, password, level) {
   if (!await validatePassword(password)) return;
 
   await settingsSvc.refresh();
-  const settings  = settingsSvc.get();
   const allLights = await smartthings.listDevices();
   const targets   = lightDevices ?? allLights;
 
   for (const light of targets) {
-    const deviceId     = light.deviceId ?? light;
-    const deviceConfig = settings.lights?.[deviceId];
-
-    // Try Lutron first if configured
-    if (deviceConfig?.lutronId) {
-      try {
-        await lutron(deviceConfig.lutronId, on ? (level ?? 100) : 0);
-        continue;
-      } catch {
-        // fall through to SmartThings
-      }
-    }
-
-    // SmartThings fallback
+    const deviceId = light.deviceId ?? light;
     const lightObj = allLights.find(d => d.deviceId === deviceId);
     const isFan    = lightObj?.name?.toLowerCase().includes('fan');
 
@@ -85,4 +54,4 @@ async function lights(lightDevices = null, on = true, password, level) {
   }
 }
 
-module.exports = { lights, validatePassword, lutron };
+module.exports = { lights, validatePassword };

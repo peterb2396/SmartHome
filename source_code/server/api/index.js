@@ -14,6 +14,7 @@ const nodeRegistry = require('../services/nodeRegistry');
 const faultLed = require('../services/faultLed');
 const sound = require('../services/sound');
 const spotify = require('../services/spotify');
+const lutron = require('../services/lutron');
 
 // Route modules
 const smarthome = require('./smarthome');
@@ -28,6 +29,7 @@ const maintenanceRoutes = require('./maintenance');
 const consoleRoutes     = require('./console');
 const logRoutes         = require('./logs');
 const soundRoutes       = require('./sound');
+const lutronRoutes      = require('./lutron');
 
 // Installed synchronously, before anything else logs, so the Console
 // terminal's history starts from the very first boot message.
@@ -43,6 +45,7 @@ logStream.install();
   maintenance.init();
   await sound.init();
   spotify.init();
+  await lutron.init();
   rs485.init(() => nodeRegistry.getState().configured);
   faultLed.init();
   await cameraSvc.initRecorders(); // start recording for all enabled cameras
@@ -60,5 +63,6 @@ router.use(maintenanceRoutes);
 router.use(consoleRoutes);
 router.use(logRoutes);
 router.use(soundRoutes);
+router.use(lutronRoutes);
 
 module.exports = router;

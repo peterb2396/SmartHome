@@ -11,6 +11,7 @@ const thermostatSvc = require('./thermostat');
 const sensors = require('./sensorStore');
 const gpioSvc = require('./gpio');
 const rs485Svc = require('./rs485');
+const lutronSvc = require('./lutron');
 
 function getFaults() {
   const faults = [];
@@ -28,6 +29,12 @@ function getFaults() {
   // but this gives the actual cause, not just the symptom.
   if (rs485Svc.isBusDown()) {
     faults.push({ id: 'rs485-bus-down', message: 'RS485 sensor bus is unreachable — zone sensors are not updating' });
+  }
+
+  // Lutron Smart Bridge unreachable (network/IP change, power loss, etc.) —
+  // see lutron.js's auto-reconnect.
+  if (lutronSvc.isBridgeDown()) {
+    faults.push({ id: 'lutron-bridge-down', message: 'Lutron bridge is unreachable — lights/fans cannot be controlled' });
   }
 
   for (const z of zones) {

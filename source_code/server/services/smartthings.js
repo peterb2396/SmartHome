@@ -1,66 +1,102 @@
-const axios   = require('axios');
+/**
+ * SmartThings Service
+ * ─────────────────────────────────────────────────────────────────
+ * Smart plugs + appliances only now — actual light/fan switches are all
+ * Lutron Caseta, controlled locally via lutron.js instead (see that file).
+ * This still needs to work for whatever SmartThings devices exist today
+ * and any added later.
+ *
+ * Uses the official @smartthings/core-sdk (confirmed to load and run fine
+ * on this Pi's Node 20.19.4 despite its package.json claiming node>=22 —
+ * tested directly before relying on it) for both the device REST calls
+ * (list/status/commands) AND token refresh, via a single shared
+ * SequentialRefreshTokenAuthenticator instance.
+ *
+ * Earlier this file kept its own hand-rolled refresh + 401-catch-retry
+ * logic, reasoning that the SDK's authenticator had no concurrency
+ * protection. That was wrong — re-read after tracing the actual call path
+ * (node_modules/@smartthings/core-sdk/dist/endpoint-client.js's request()):
+ * on a 401, if the configured authenticator exposes acquireRefreshMutex(),
+ * the SDK automatically acquires it, calls refresh(), and releases it
+ * before retrying the original request — genuine protection against the
+ * exact race (concurrent 401s both consuming the same single-use rotating
+ * refresh token) that killed the token which started this rewrite, as long
+ * as every call shares the SAME authenticator instance below (never
+ * construct a fresh one per call — that would give each call its own
+ * mutex, defeating the point).
+ */
+
+const { SmartThingsClient, SequentialRefreshTokenAuthenticator, globalSmartThingsURLProvider } = require('@smartthings/core-sdk');
+const { Mutex } = require('async-mutex');
 const settingsSvc = require('./settings');
 
 const CLIENT_ID     = process.env.SMART_CLIENT_ID;
 const CLIENT_SECRET = process.env.SMART_CLIENT_SECRET;
-const BASE_URL      = 'https://api.smartthings.com/v1';
+// Overridable for testing against a fake local server — always the real
+// SmartThings API in production.
+const urlProvider = process.env.SMARTTHINGS_BASE_URL
+  ? { baseURL: process.env.SMARTTHINGS_BASE_URL }
+  : globalSmartThingsURLProvider;
 
-function headers() {
-  return { Authorization: `Bearer ${settingsSvc.get().accessToken}` };
+// Reads/writes the token pair via the exact same settings keys the rest of
+// this app already uses (and that smartthingsLifecycle.js's webhook
+// handler writes to on INSTALL/UPDATE).
+const tokenStore = {
+  async getRefreshData() {
+    const s = settingsSvc.get();
+    return { refreshToken: s?.refreshToken || '', clientId: CLIENT_ID, clientSecret: CLIENT_SECRET };
+  },
+  async putAuthData({ authToken, refreshToken }) {
+    await settingsSvc.updateSetting('accessToken', authToken);
+    await settingsSvc.updateSetting('refreshToken', refreshToken);
+    console.log('[SmartThings] Token refreshed.');
+  },
+};
+
+// One shared Mutex + one shared authenticator instance for the whole
+// process — see this file's header comment for why "shared" is the part
+// that actually matters here.
+const refreshMutex = new Mutex();
+const authenticator = new SequentialRefreshTokenAuthenticator(
+  settingsSvc.get()?.accessToken || '', // may be empty at module-load time if settings.init() hasn't finished yet — self-corrects on the first 401
+  tokenStore,
+  refreshMutex
+);
+
+function client() {
+  return new SmartThingsClient(authenticator, { urlProvider });
 }
 
-// ── Token management ────────────────────────────────────────────────────────────
-
+// Exposed for astro.js's midnight cron — some OAuth providers quietly
+// invalidate a refresh token after a long stretch of it never being used,
+// even if it was never actually expired-and-401'd, so proactively
+// exercising it periodically (not just reactively on a 401) has real
+// value on top of the SDK's own automatic on-401 refresh above.
 async function refreshToken() {
-  try {
-    const { data } = await axios.post(
-      'https://api.smartthings.com/oauth/token',
-      new URLSearchParams({
-        grant_type:    'refresh_token',
-        client_id:     CLIENT_ID,
-        refresh_token: settingsSvc.get().refreshToken || '',
-      }),
-      {
-        auth:    { username: CLIENT_ID, password: CLIENT_SECRET },
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      }
-    );
-    await settingsSvc.updateSetting('accessToken',  data.access_token);
-    await settingsSvc.updateSetting('refreshToken', data.refresh_token);
-    console.log('[SmartThings] Token refreshed.');
-    return data.access_token;
-  } catch (err) {
-    console.error('[SmartThings] Token refresh failed:', err.response?.data ?? err.message);
-  }
+  await authenticator.refresh({ authenticator, urlProvider });
 }
 
 // ── Device listing ───────────────────────────────────────────────────────────────
 
 async function listDevices() {
   try {
-    const { data } = await axios.get(`${BASE_URL}/devices`, { headers: headers() });
-
-    const devicesWithStatus = await Promise.all(
-      data.items.map(async device => {
+    const st = client();
+    const devices = await st.devices.list();
+    return await Promise.all(
+      devices.map(async device => {
         try {
-          const { data: status } = await axios.get(
-            `${BASE_URL}/devices/${device.deviceId}/status`,
-            { headers: headers() }
-          );
+          const status = await st.devices.getStatus(device.deviceId);
           return { ...device, status };
         } catch {
           return device;
         }
       })
     );
-
-    return devicesWithStatus;
   } catch (err) {
-    if (err.response?.status === 401) {
-      console.log('[SmartThings] Unauthorized — refreshing token and retrying…');
-      await refreshToken();
-      return listDevices();
-    }
+    // A dead refresh token (invalid_grant) surfaces here, since the SDK's
+    // own automatic refresh-and-retry has nothing further to fall back to
+    // — err.message already has the raw SmartThings error body appended
+    // (see endpoint-client.js's error annotation), no need to duplicate it.
     throw new Error('[SmartThings] Failed to list devices: ' + err.message);
   }
 }
@@ -69,14 +105,10 @@ async function listDevices() {
 
 async function sendCommands(deviceId, commands) {
   try {
-    await axios.post(
-      `${BASE_URL}/devices/${deviceId}/commands`,
-      { commands },
-      { headers: headers() }
-    );
+    await client().devices.executeCommands(deviceId, commands);
   } catch (err) {
-    if (err.response?.status === 429) {
-      const retry = err.response.headers['x-ratelimit-reset'] || 1000;
+    if (err?.response?.status === 429 || err?.status === 429) {
+      const retry = err.response?.headers?.['x-ratelimit-reset'] || 1000;
       console.warn(`[SmartThings] Rate limited. Retrying in ${retry}ms…`);
       await new Promise(r => setTimeout(r, retry));
       return sendCommands(deviceId, commands);
@@ -86,11 +118,7 @@ async function sendCommands(deviceId, commands) {
 }
 
 async function getDeviceStatus(deviceId) {
-  const { data } = await axios.get(
-    `${BASE_URL}/devices/${deviceId}/status`,
-    { headers: headers() }
-  );
-  return data;
+  return client().devices.getStatus(deviceId);
 }
 
 module.exports = { refreshToken, listDevices, sendCommands, getDeviceStatus };
