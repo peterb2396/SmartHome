@@ -40,6 +40,10 @@ function push(level, args) {
 }
 
 function safeStringify(value) {
+  // Error objects carry message/stack as non-enumerable properties, so
+  // JSON.stringify(err) silently produces "{}" — exactly the kind of
+  // swallowed error that makes a failing request look like it did nothing.
+  if (value instanceof Error) return value.stack || value.message;
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 

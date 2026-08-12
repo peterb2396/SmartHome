@@ -78,6 +78,31 @@ const authenticator = new SequentialRefreshTokenAuthenticator(
   refreshMutex
 );
 
+// The mutex only stops concurrent refreshes from CORRUPTING each other
+// (see this file's header comment) — it does nothing to stop them from
+// being wasteful. Every request that hits a 401 queues on the mutex and
+// then does its OWN real network round-trip to /oauth/token once it's
+// through, even if the request ahead of it in the queue refreshed the
+// token a moment ago and it's now perfectly valid. Under normal polling
+// this compounded into a real refresh call roughly every second (measured
+// live: 448 in under 7 minutes) — every device-list/light-toggle request
+// paying for an extra network round-trip it didn't need, which is what
+// made everything feel slow and made light toggles seem to silently do
+// nothing. Wrapping refresh() with a short cooldown means only the first
+// caller in a burst actually hits the network; anyone else within the
+// window just reuses the token that was just minted.
+const MIN_REFRESH_INTERVAL_MS = 5000;
+let lastRefreshAt = 0;
+const originalAuthenticatorRefresh = authenticator.refresh.bind(authenticator);
+authenticator.refresh = async function (clientConfig) {
+  if (Date.now() - lastRefreshAt < MIN_REFRESH_INTERVAL_MS) {
+    return { Authorization: `Bearer ${authenticator.token}` };
+  }
+  const headers = await originalAuthenticatorRefresh(clientConfig);
+  lastRefreshAt = Date.now();
+  return headers;
+};
+
 function client() {
   return new SmartThingsClient(authenticator, { urlProvider });
 }
