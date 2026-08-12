@@ -87,8 +87,20 @@ function client() {
 // even if it was never actually expired-and-401'd, so proactively
 // exercising it periodically (not just reactively on a 401) has real
 // value on top of the SDK's own automatic on-401 refresh above.
+//
+// Must go through the same mutex EndpointClient.request() uses internally
+// on a 401 — this used to call authenticator.refresh() directly, which
+// bypassed the mutex entirely. If this cron's refresh ever overlapped with
+// a real request's automatic 401-triggered refresh, both could POST the
+// same single-use rotating refresh token at once; only one succeeds and
+// the other silently kills the token (invalid_grant on every call after).
 async function refreshToken() {
-  await withTimeout(authenticator.refresh({ authenticator, urlProvider }), 'Token refresh');
+  const release = await authenticator.acquireRefreshMutex();
+  try {
+    await withTimeout(authenticator.refresh({ authenticator, urlProvider }), 'Token refresh');
+  } finally {
+    release();
+  }
 }
 
 // ── Device listing ───────────────────────────────────────────────────────────────
