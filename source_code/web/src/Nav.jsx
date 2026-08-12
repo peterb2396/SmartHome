@@ -11,6 +11,7 @@ const LINKS = [
   { to: "/thermostat", label: "Thermostat" },
   { to: "/maintenance", label: "Maintenance" },
   { to: "/console", label: "Console" },
+  { to: "/sound",   label: "Sound" },
   { to: "/settings",label: "Settings" },
 ];
 

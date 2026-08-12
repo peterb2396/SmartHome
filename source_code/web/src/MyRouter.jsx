@@ -7,6 +7,7 @@ import Finance  from "./pages/Finance";
 import Thermostat from "./pages/Thermostat";
 import Maintenance from "./pages/Maintenance";
 import Console  from "./pages/Console";
+import Sound    from "./pages/Sound";
 import Settings from "./pages/Settings";
 
 export default function MyRouter() {
@@ -28,6 +29,7 @@ export default function MyRouter() {
           <Route path="thermostat" element={<Thermostat />} />
           <Route path="maintenance" element={<Maintenance />} />
           <Route path="console" element={<Console />} />
+          <Route path="sound" element={<Sound />} />
           <Route path="settings" element={<Settings />} />
         </Routes>
       </div>

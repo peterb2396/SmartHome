@@ -70,6 +70,10 @@ export const upsertRelay        = (relay) => api.post("/console/relay-map", rela
 export const deleteRelay        = (address, channel) => api.delete(`/console/relay-map/${address}/${channel}`);
 export const getConsoleFaults   = () => api.get("/console/faults");
 
+// ── Sound (software scaffold — see server/services/sound.js) ───────────────
+export const getSound       = () => api.get("/sound");
+export const setSoundZone   = (id, body) => api.post(`/sound/zone/${id}`, body);
+
 // ── Finance ──────────────────────────────────────────────────────────────────
 export const getMonthlyStats  = () => api.get("/monthly-stats");
 export const getTransactions  = (params) => api.get("/transactions", { params });
