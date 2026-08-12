@@ -30,6 +30,21 @@ const { SmartThingsClient, SequentialRefreshTokenAuthenticator, globalSmartThing
 const { Mutex } = require('async-mutex');
 const settingsSvc = require('./settings');
 
+// The SDK builds its axios calls with no timeout at all (checked
+// endpoint-client.js — nothing in its config is ever read into axios'
+// `timeout` option), so a stalled connection to SmartThings hangs the
+// calling request forever instead of failing. Every SDK call below gets
+// wrapped in this so a network stall surfaces as a clear error instead of
+// an indefinitely spinning frontend.
+const REQUEST_TIMEOUT_MS = 15000;
+function withTimeout(promise, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`[SmartThings] ${label} timed out after ${REQUEST_TIMEOUT_MS}ms`)), REQUEST_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 const CLIENT_ID     = process.env.SMART_CLIENT_ID;
 const CLIENT_SECRET = process.env.SMART_CLIENT_SECRET;
 // Overridable for testing against a fake local server — always the real
@@ -73,7 +88,7 @@ function client() {
 // exercising it periodically (not just reactively on a 401) has real
 // value on top of the SDK's own automatic on-401 refresh above.
 async function refreshToken() {
-  await authenticator.refresh({ authenticator, urlProvider });
+  await withTimeout(authenticator.refresh({ authenticator, urlProvider }), 'Token refresh');
 }
 
 // ── Device listing ───────────────────────────────────────────────────────────────
@@ -81,11 +96,11 @@ async function refreshToken() {
 async function listDevices() {
   try {
     const st = client();
-    const devices = await st.devices.list();
+    const devices = await withTimeout(st.devices.list(), 'Device list');
     return await Promise.all(
       devices.map(async device => {
         try {
-          const status = await st.devices.getStatus(device.deviceId);
+          const status = await withTimeout(st.devices.getStatus(device.deviceId), `Status for ${device.deviceId}`);
           return { ...device, status };
         } catch {
           return device;
@@ -105,7 +120,7 @@ async function listDevices() {
 
 async function sendCommands(deviceId, commands) {
   try {
-    await client().devices.executeCommands(deviceId, commands);
+    await withTimeout(client().devices.executeCommands(deviceId, commands), `Send commands to ${deviceId}`);
   } catch (err) {
     if (err?.response?.status === 429 || err?.status === 429) {
       const retry = err.response?.headers?.['x-ratelimit-reset'] || 1000;
@@ -118,7 +133,7 @@ async function sendCommands(deviceId, commands) {
 }
 
 async function getDeviceStatus(deviceId) {
-  return client().devices.getStatus(deviceId);
+  return withTimeout(client().devices.getStatus(deviceId), `Status for ${deviceId}`);
 }
 
 module.exports = { refreshToken, listDevices, sendCommands, getDeviceStatus };
