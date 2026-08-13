@@ -64,17 +64,23 @@
  * second poll loop.
  *
  * POLL_DIAL payload (master→dial, pushes what the dial should display for
- * BOTH screens every cycle, since the dial can switch screens locally
- * without waiting for a new poll — 25B): [targetF f32][currentF f32]
+ * every screen every cycle, since the dial can switch screens locally
+ * without waiting for a new poll — 27B): [targetF f32][currentF f32]
  * [humidity f32][co2 f32][outdoorF f32][flags 1B: bit0 callingHeat, bit1
  * callingCool, bit2 safetyActive, bit3 weatherStale, bit4
  * spotifyEnabled][hour 1B][minute 1B][volumePercent 1B][activeSource 1B:
- * 0=off,1=spotify,2=override1,3=override2] — volume/spotifyEnabled come
- * from sound.js's persisted per-zone settings; activeSource is that
- * zone's own audio hardware's CURRENT hardware-detected input (see the
- * zoneAudio section below), relayed through here purely so the dial can
- * display "now playing: TV" etc. — the dial has no say in it, same as the
- * web app.
+ * 0=off,1=spotify,2=override1,3=override2][faultCount 1B]
+ * [maintenanceDueCount 1B]. volume/spotifyEnabled come from sound.js's
+ * persisted per-zone settings; activeSource is that zone's own audio
+ * hardware's CURRENT hardware-detected input (see the zoneAudio section
+ * below), relayed through here purely so the dial can display "now
+ * playing: TV" etc. — the dial has no say in it, same as the web app.
+ * faultCount/maintenanceDueCount are plain counts (from faults.js/
+ * maintenance.js, same numbers the Console/Maintenance pages show) for an
+ * ambient badge — the dial deliberately never renders fault/maintenance
+ * TEXT (no room on a round face, and it'd duplicate the web app's detail
+ * view); it just flags "go check the app" when either is nonzero. Same
+ * for every dial in a sweep, not per-zone.
  *
  * DIAL_STATE payload (dial→master reply, 8B): [mode 1B: 0=thermostat,
  * 1=sound][newTargetF f32][changed 1B][tapEvent 1B][newVolumePercent 1B].
@@ -165,6 +171,17 @@ const DIAL_TAP_EVENT = { none: 0, wake: 1, menuSelect: 2, toggleSpotifyEnabled: 
 // isn't needed here (the actual audio switching already happened locally
 // on the node, independent of this poll).
 const ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS = 2000;
+
+// onData()'s resync safety net — see its own comment for the failure mode
+// this guards against. Largest real payload today is POLL_DIAL's 27B;
+// generous headroom over that so a legitimate future protocol addition
+// doesn't false-positive against this.
+const MAX_PAYLOAD_LEN = 40;
+// A real frame at 9600 baud (~1ms/byte) takes well under 50ms to arrive
+// in full once its sync byte lands; several hundred ms of silence with an
+// incomplete frame sitting at the front of rxBuffer means it was never
+// going to complete — noise, not a slow node.
+const FRAME_STALL_MS = 300;
 
 let port = null;
 let usingMock = true;
@@ -267,21 +284,59 @@ function writeFrame(frame) {
 }
 
 // ── Frame parsing ────────────────────────────────────────────────────────
+// Tracks when the byte currently sitting at rxBuffer's front first started
+// looking like the start of an in-progress frame — reset to null whenever
+// a frame completes/gets skipped, i.e. whenever progress is made.
+let awaitingFrameSince = null;
+
 function onData(chunk) {
   rxBuffer = Buffer.concat([rxBuffer, chunk]);
   let syncIdx;
   while ((syncIdx = rxBuffer.indexOf(SYNC)) !== -1) {
-    if (rxBuffer.length < syncIdx + 4) return; // not enough for header yet
+    // A stray byte that happens to equal SYNC (bus noise, or just landing
+    // inside another frame's payload) can make everything from here look
+    // like the start of a frame that will never actually complete. Left
+    // unchecked, indexOf(SYNC) keeps re-finding this same dead position on
+    // every future call forever — no amount of reopening the serial port
+    // or resetting the remote node clears rxBuffer, only a process
+    // restart reallocates it, which is exactly the "only fix is
+    // restarting the backend" symptom this guards against. Two checks:
+    // an implausible len skips immediately, a plausible-but-never-
+    // completing one times out after FRAME_STALL_MS of no progress.
+    const len = rxBuffer.length > syncIdx + 3 ? rxBuffer[syncIdx + 3] : null;
+    if (len !== null && len > MAX_PAYLOAD_LEN) {
+      rxBuffer = rxBuffer.subarray(syncIdx + 1);
+      awaitingFrameSince = null;
+      continue;
+    }
+
+    if (rxBuffer.length < syncIdx + 4) { // not enough for header yet
+      if (awaitingFrameSince === null) awaitingFrameSince = Date.now();
+      else if (Date.now() - awaitingFrameSince > FRAME_STALL_MS) {
+        rxBuffer = rxBuffer.subarray(syncIdx + 1);
+        awaitingFrameSince = null;
+        continue;
+      }
+      return;
+    }
     const addr = rxBuffer[syncIdx + 1];
     const cmd = rxBuffer[syncIdx + 2];
-    const len = rxBuffer[syncIdx + 3];
     const frameEnd = syncIdx + 4 + len + 1;
-    if (rxBuffer.length < frameEnd) return; // wait for the rest
+    if (rxBuffer.length < frameEnd) { // wait for the rest
+      if (awaitingFrameSince === null) awaitingFrameSince = Date.now();
+      else if (Date.now() - awaitingFrameSince > FRAME_STALL_MS) {
+        rxBuffer = rxBuffer.subarray(syncIdx + 1);
+        awaitingFrameSince = null;
+        continue;
+      }
+      return;
+    }
 
     const payload = rxBuffer.subarray(syncIdx + 4, syncIdx + 4 + len);
     const receivedCrc = rxBuffer[frameEnd - 1];
     const expectedCrc = crc8(rxBuffer.subarray(syncIdx + 1, syncIdx + 4 + len));
     rxBuffer = rxBuffer.subarray(frameEnd);
+    awaitingFrameSince = null;
 
     if (receivedCrc !== expectedCrc) {
       console.warn('[RS485] CRC mismatch, dropping frame.');
@@ -289,6 +344,20 @@ function onData(chunk) {
     }
     handleFrame(addr, cmd, payload);
   }
+}
+
+// onData() only re-checks the stall timeout when new bytes actually
+// arrive — if the bus goes fully silent after the stuck byte (no further
+// noise at all), onData() never fires again and the timeout above never
+// gets evaluated. Called once per pollAll() cycle (already runs every
+// POLL_INTERVAL_MS regardless of bus traffic) so a stuck buffer self-heals
+// even without anything new coming in over the wire.
+function checkFrameStall() {
+  if (awaitingFrameSince === null) return;
+  if (Date.now() - awaitingFrameSince <= FRAME_STALL_MS) return;
+  const syncIdx = rxBuffer.indexOf(SYNC);
+  rxBuffer = syncIdx === -1 ? Buffer.alloc(0) : rxBuffer.subarray(syncIdx + 1);
+  awaitingFrameSince = null;
 }
 
 function handleFrame(addr, cmd, payload) {
@@ -387,6 +456,7 @@ function pollZoneAudioNode(address, zoneId) {
 }
 
 async function pollAll(configuredNodes) {
+  checkFrameStall();
   for (const node of configuredNodes) {
     if (node.busAddress == null) continue;
     if (node.kind === 'dial') continue; // dials only ever answer POLL_DIAL — handled by pollAllDials()'s own loop
@@ -416,8 +486,8 @@ async function pollAll(configuredNodes) {
 // finished loading.
 const SOUND_SOURCE_BYTE = { off: 0, spotify: 1, override1: 2, override2: 3 };
 
-function buildDialPushPayload(zone, outdoor, soundZone, now) {
-  const buf = Buffer.alloc(25);
+function buildDialPushPayload(zone, outdoor, soundZone, now, faultCount, maintenanceDueCount) {
+  const buf = Buffer.alloc(27);
   buf.writeFloatLE(zone?.target ?? 68, 0);
   buf.writeFloatLE(zone?.currentTemp ?? 0, 4);
   buf.writeFloatLE(zone?.environment?.humidity?.value ?? 0, 8);
@@ -432,6 +502,13 @@ function buildDialPushPayload(zone, outdoor, soundZone, now) {
   buf.writeUInt8(soundZone?.volumePercent ?? 0, 23);
   // Hardware-detected, relayed for display only — see this file's header.
   buf.writeUInt8(SOUND_SOURCE_BYTE[soundZone?.activeSource] ?? 0, 24);
+  // Purely a glanceable count for an ambient badge — the dial never shows
+  // fault/maintenance TEXT (no room on a round 480x480 face for arbitrary
+  // strings, and it'd mean duplicating faults.js's/maintenance.js's detail
+  // rendering in firmware); "go check the app" is the answer either way,
+  // this just tells the dial whether it should say so.
+  buf.writeUInt8(Math.min(faultCount ?? 0, 255), 25);
+  buf.writeUInt8(Math.min(maintenanceDueCount ?? 0, 255), 26);
   return buf;
 }
 
@@ -450,18 +527,23 @@ async function pollAllDials(getConfiguredNodes) {
   const thermostatSvc = require('./thermostat');
   const astroSvc = require('./astro');
   const soundSvc = require('./sound');
+  const faultsSvc = require('./faults');
+  const maintenanceSvc = require('./maintenance');
   // A dial may drive a thermostat zone, a sound zone, or both — the two
   // are separate id spaces (see sound.js's header for why), so a dial
   // node carries both a `zoneId` (thermostat) and a `soundZoneId`. Either
   // may be unset; buildDialPushPayload()/the lookups below default
   // gracefully via optional chaining either way.
   const dialNodes = getConfiguredNodes().filter(n => n.kind === 'dial' && n.busAddress != null && (n.zoneId || n.soundZoneId));
+  // Same for every dial in this sweep — computed once, not per node.
+  const faultCount = faultsSvc.getFaults().length;
+  const maintenanceDueCount = maintenanceSvc.getState().tasks.filter(t => t.isDue).length;
 
   for (const node of dialNodes) {
     const zone = thermostatSvc.getState().zones.find(z => z.id === node.zoneId);
     const outdoor = astroSvc.getCachedOutdoorConditions();
     const soundZone = soundSvc.getState().zones.find(z => z.id === node.soundZoneId);
-    if (!usingMock) writeFrame(buildFrame(node.busAddress, CMD.POLL_DIAL, buildDialPushPayload(zone, outdoor, soundZone, new Date())));
+    if (!usingMock) writeFrame(buildFrame(node.busAddress, CMD.POLL_DIAL, buildDialPushPayload(zone, outdoor, soundZone, new Date(), faultCount, maintenanceDueCount)));
 
     const reply = await new Promise((resolve) => {
       if (usingMock) return resolve(null);
