@@ -289,7 +289,7 @@ function writeFrame(frame) {
     console.log(`[RS485 Mock] would write ${frame.length}B frame: ${frame.toString('hex')}`);
     return;
   }
-  console.log(`[RS485] TX ${frame.length}B: ${frame.toString('hex')}`);
+  // console.log(`[RS485] TX ${frame.length}B: ${frame.toString('hex')}`);
   port.write(frame);
 }
 
@@ -304,7 +304,7 @@ function onData(chunk) {
   // back" apart from "something came back but didn't parse right." Every
   // chunk, not just complete frames, so a garbled/partial reply is visible
   // too.
-  console.log(`[RS485] RX ${chunk.length}B: ${chunk.toString('hex')}`);
+  // console.log(`[RS485] RX ${chunk.length}B: ${chunk.toString('hex')}`);
   rxBuffer = Buffer.concat([rxBuffer, chunk]);
   let syncIdx;
   while ((syncIdx = rxBuffer.indexOf(SYNC)) !== -1) {
@@ -435,7 +435,7 @@ function pollNode(address, zoneId) {
     pendingReportResolvers.set(address, (readings) => {
       clearTimeout(timeout);
       consecutiveMisses.set(address, 0);
-      console.log(`[RS485] Poll ${label} — OK (${readings.length} readings)`);
+      // console.log(`[RS485] Poll ${label} — OK (${readings.length} readings)`);
       resolve(readings);
     });
     writeFrame(buildFrame(address, CMD.POLL));
@@ -462,7 +462,7 @@ function pollZoneAudioNode(address, zoneId) {
       clearTimeout(timeout);
       consecutiveMisses.set(address, 0);
       const sourceName = ACTIVE_SOURCE_NAME[activeSource] || 'off';
-      console.log(`[RS485] Poll ${label} — OK (playing ${sourceName})`);
+      // console.log(`[RS485] Poll ${label} — OK (playing ${sourceName})`);
       soundSvc.reportActiveSource(zoneId, activeSource);
       resolve();
     });
