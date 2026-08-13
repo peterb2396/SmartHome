@@ -177,11 +177,20 @@ const ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS = 2000;
 // generous headroom over that so a legitimate future protocol addition
 // doesn't false-positive against this.
 const MAX_PAYLOAD_LEN = 40;
-// A real frame at 9600 baud (~1ms/byte) takes well under 50ms to arrive
-// in full once its sync byte lands; several hundred ms of silence with an
-// incomplete frame sitting at the front of rxBuffer means it was never
-// going to complete — noise, not a slow node.
-const FRAME_STALL_MS = 300;
+// NOT just wire-transmission time (9600 baud is ~1ms/byte, which alone
+// would suggest well under 50ms) — real USB-to-RS485 adapters/OS serial
+// drivers can legitimately deliver one genuine frame's bytes split across
+// multiple 'data' events with real gaps between them well past that,
+// independent of how fast the node actually replied. An earlier version
+// of this used 300ms and it was WRONG: it fired on real in-progress
+// frames, not just noise, discarding their sync byte before the rest
+// arrived — turned "occasional timeout after hours" into "every poll
+// fails immediately." This only needs to be shorter than the time before
+// enough new traffic queues up behind a truly-dead byte to matter, so it
+// stays comfortably above POLL_RESPONSE_TIMEOUT_MS (2000ms) — a real
+// per-node round trip, including any driver buffering delay, should never
+// get close to this.
+const FRAME_STALL_MS = 3000;
 
 let port = null;
 let usingMock = true;
