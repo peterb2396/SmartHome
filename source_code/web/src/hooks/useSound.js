@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { getSound, setSoundZone } from "../api";
+import { getSound, setSoundZone, toggleSoundPreset } from "../api";
 
 const POLL_MS = 15000;
 const PAUSE_MS = 2000;
@@ -53,5 +53,21 @@ export function useSound() {
     { zoneId, spotifyEnabled }
   ), [runMutation]);
 
-  return { state, loading, setVolume, setEnabled, refetch: fetchState };
+  // Not optimistic — it touches every zone in a location plus, sometimes,
+  // every zone outside it (see services/sound.js's header for the exact
+  // rule), and re-deriving that here would just be the same logic
+  // duplicated client-side. The round trip is a button click, not a
+  // slider drag, so the brief wait for the real response isn't the same
+  // "don't snap back mid-gesture" concern setVolume/setEnabled have.
+  const togglePreset = useCallback(async (locationId) => {
+    pauseUntil.current = Date.now() + PAUSE_MS;
+    try {
+      const { data } = await toggleSoundPreset(locationId);
+      if (data?.ok && data.state) setState(data.state);
+    } catch (e) {
+      console.warn("preset toggle failed:", e.message);
+    }
+  }, []);
+
+  return { state, loading, setVolume, setEnabled, togglePreset, refetch: fetchState };
 }

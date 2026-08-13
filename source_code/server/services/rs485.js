@@ -104,24 +104,48 @@
  * ── Zone audio nodes (per-room amp hardware — NOT the dial, a separate
  * node) ────────────────────────────────────────────────────────────────
  * A `kind: 'zoneAudio'` node is the physical box driving one room's
- * speakers, with 3 audio inputs wired in and a FIXED, LOCAL priority
- * between them — see sound.js's header for the full design and why the
- * switching decision never touches this server. This bus's only job for
- * these nodes is carrying the Spotify-enable flag + volume down, and
- * carrying back which input the hardware is currently actually playing —
- * same "master polls, node only ever replies" rule as every other node
- * type, still folded into the ordinary 10s pollAll() cycle (not the dial's
- * fast loop) since nothing here needs sub-second responsiveness — the
- * actual audio switching already happened locally, instantly, independent
- * of this poll, by the time the poll even goes out.
+ * speakers, with 2 audio inputs wired in — a LOCAL one (that zone's TV/
+ * override1, physically only present in that room) and a SHARED one (the
+ * Pi's own line-out, distributed to every zone node — see hardware.md /
+ * the hardware doc for the physical distribution-amp design) — and a
+ * FIXED, LOCAL priority between them, decided entirely on the node, see
+ * sound.js's header for the full design and why the switching decision
+ * never touches this server.
  *
- * POLL_ZONE_AUDIO payload (master→zoneAudio, 2B): [spotifyEnabled 1B: 0/1]
- * [spotifyVolumePercent 1B].
+ * The shared Pi input carries EITHER Spotify OR an announcement — never
+ * both, same "one stream" limit as Spotify alone already has (see
+ * spotify.js's header) — so which one it currently means for THIS zone's
+ * priority purposes is a per-zone flag this server pushes down, not
+ * something the node can infer from the audio alone: with spotifyEnabled
+ * set it's tier-0 (loses to the local override1 input); with
+ * announcementActive set it's tier-2 (wins over everything, including
+ * override1) — that's what makes "announce to specific zones,
+ * programmatically" actually work: targeting a zone is nothing more than
+ * setting its announcementActive flag, the same RS485 push that already
+ * carries spotifyEnabled. Playing the actual announcement audio (pausing
+ * Spotify on the Pi's output, feeding the message in) is a separate,
+ * not-yet-built piece — see sound.js's setAnnouncementTargets() for
+ * exactly where that gets wired in later; the protocol/plumbing here is
+ * ready for it now so the hardware doc doesn't describe a system that
+ * doesn't match what's actually built.
+ *
+ * This bus's job for these nodes is carrying spotifyEnabled/
+ * announcementActive/volume down, and carrying back which input the
+ * hardware is currently actually playing — same "master polls, node only
+ * ever replies" rule as every other node type, still folded into the
+ * ordinary 10s pollAll() cycle (not the dial's fast loop) since nothing
+ * here needs sub-second responsiveness — the actual audio switching
+ * already happened locally, instantly, independent of this poll, by the
+ * time the poll even goes out.
+ *
+ * POLL_ZONE_AUDIO payload (master→zoneAudio, 2B): [flags 1B: bit0
+ * spotifyEnabled, bit1 announcementActive][spotifyVolumePercent 1B].
  *
  * ZONE_AUDIO_STATE payload (zoneAudio→master reply, 1B): [activeSource 1B:
- * 0=off,1=spotify,2=override1,3=override2] — read straight into sound.js's
- * reportActiveSource(), which is display-only state, never fed back into a
- * command.
+ * 0=off,1=spotify,2=override1,3=override2 — override2 here means "the
+ * shared Pi input, at announcement priority," not a second physical
+ * input] — read straight into sound.js's reportActiveSource(), which is
+ * display-only state, never fed back into a command.
  */
 
 const sensors = require('./sensorStore');
@@ -449,8 +473,9 @@ function pollZoneAudioNode(address, zoneId) {
   return new Promise((resolve) => {
     if (usingMock) return resolve();
     const label = `addr=${address} soundZone=${zoneId}`;
-    const { spotifyEnabled, volumePercent } = soundSvc.getZoneAudioPush(zoneId);
-    const push = Buffer.from([spotifyEnabled ? 1 : 0, volumePercent]);
+    const { spotifyEnabled, announcementActive, volumePercent } = soundSvc.getZoneAudioPush(zoneId);
+    const flags = (spotifyEnabled ? 1 : 0) | (announcementActive ? 2 : 0);
+    const push = Buffer.from([flags, volumePercent]);
     const timeout = setTimeout(() => {
       pendingZoneAudioResolvers.delete(address);
       const misses = (consecutiveMisses.get(address) || 0) + 1;

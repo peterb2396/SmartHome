@@ -80,8 +80,9 @@ export const deleteRelay        = (address, channel) => api.delete(`/console/rel
 export const getConsoleFaults   = () => api.get("/console/faults");
 
 // ── Sound (software scaffold — see server/services/sound.js) ───────────────
-export const getSound       = () => api.get("/sound");
-export const setSoundZone   = (id, body) => api.post(`/sound/zone/${id}`, body);
+export const getSound         = () => api.get("/sound");
+export const setSoundZone     = (id, body) => api.post(`/sound/zone/${id}`, body);
+export const toggleSoundPreset = (locationId) => api.post(`/sound/preset/${locationId}`);
 
 // ── Finance ──────────────────────────────────────────────────────────────────
 export const getMonthlyStats  = () => api.get("/monthly-stats");
