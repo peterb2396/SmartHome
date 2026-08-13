@@ -539,17 +539,34 @@ function buildDialPushPayload(zone, outdoor, soundZone, now, faultCount, mainten
 // the very next sweep instead of needing a restart.
 let dialSweepTimer = null;
 async function pollAllDials(getConfiguredNodes) {
-  const thermostatSvc = require('./thermostat');
-  const astroSvc = require('./astro');
-  const soundSvc = require('./sound');
-  const faultsSvc = require('./faults');
-  const maintenanceSvc = require('./maintenance');
   // A dial may drive a thermostat zone, a sound zone, or both — the two
   // are separate id spaces (see sound.js's header for why), so a dial
   // node carries both a `zoneId` (thermostat) and a `soundZoneId`. Either
   // may be unset; buildDialPushPayload()/the lookups below default
   // gracefully via optional chaining either way.
   const dialNodes = getConfiguredNodes().filter(n => n.kind === 'dial' && n.busAddress != null && (n.zoneId || n.soundZoneId));
+
+  // This function reschedules itself every DIAL_SWEEP_GAP_MS (20ms)
+  // forever, regardless of dial count — with zero dials that's 50
+  // no-op ticks/sec, which was already true before fault/maintenance
+  // counts existed. Bail out BEFORE doing any real work (the requires
+  // below, and especially faultsSvc.getFaults()/maintenanceSvc.getState(),
+  // which each walk thermostat/gpio/lutron/bus state) — running those 50
+  // times a second with nothing to send them to is real, continuous
+  // Node event-loop load on a Pi, easily enough to starve the RS485
+  // serial port's own data callback and make sensor polls start timing
+  // out even though bytes are arriving fine at the OS level. Learned this
+  // the hard way — see git history for the incident.
+  if (dialNodes.length === 0) {
+    dialSweepTimer = setTimeout(() => pollAllDials(getConfiguredNodes), DIAL_SWEEP_GAP_MS);
+    return;
+  }
+
+  const thermostatSvc = require('./thermostat');
+  const astroSvc = require('./astro');
+  const soundSvc = require('./sound');
+  const faultsSvc = require('./faults');
+  const maintenanceSvc = require('./maintenance');
   // Same for every dial in this sweep — computed once, not per node.
   const faultCount = faultsSvc.getFaults().length;
   const maintenanceDueCount = maintenanceSvc.getState().tasks.filter(t => t.isDue).length;
