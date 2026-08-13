@@ -44,7 +44,9 @@ export const getSensor    = (name) => api.get(`/sensors/${name}`);
 export const getThermostat     = () => api.get("/thermostat");
 export const setThermostatZone = (id, body) => api.post(`/thermostat/zone/${id}`, body);
 export const setZoneSchedule   = (id, schedule) => api.post(`/thermostat/zone/${id}/schedule`, { schedule });
-export const setZoneBalance    = (id, balancePercent) => api.post(`/thermostat/zone/${id}/balance`, { balancePercent });
+// Restricted server-side to pete.buo@gmail.com — needs the logged-in
+// user's token so the backend can tell who's asking, see thermostat.js.
+export const setZoneBalance    = (id, balancePercent) => api.post(`/thermostat/zone/${id}/balance`, { balancePercent, password: token() });
 export const setThermostatMode = (mode) => api.post("/thermostat/mode", { mode });
 export const setThermostatRates = (rates) => api.post("/thermostat/rates", rates);
 export const setThermostatAvailability = (source, available) => api.post("/thermostat/availability", { source, available });

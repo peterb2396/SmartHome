@@ -17,7 +17,13 @@ export default function Main() {
   const login = useCallback((token, store) => {
     if (store) localStorage.setItem("token", token);
     getUser(token)
-      .then(({ data }) => setUser({ id: data.user._id, email: data.user.email }))
+      .then(({ data }) => {
+        setUser({ id: data.user._id, email: data.user.email });
+        // Cheap way for deep components (e.g. ZoneCard's damper balance
+        // gate) to know who's logged in without prop-drilling/context —
+        // same lightweight localStorage pattern already used for "token".
+        if (data.user.email) localStorage.setItem("email", data.user.email);
+      })
       .catch(() => setLoading(false))
       .finally(() => setLoading(false));
   }, []);

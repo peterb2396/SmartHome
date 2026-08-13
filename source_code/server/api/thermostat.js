@@ -6,7 +6,9 @@
  *                                     activeSystem — see below)
  * POST /thermostat/zone/:id        — { target?, on? } set desired temp and/or on/off
  * POST /thermostat/zone/:id/schedule — { schedule } weekly grid for one zone
- * POST /thermostat/zone/:id/balance  — { balancePercent } damper balancing (0-100)
+ * POST /thermostat/zone/:id/balance  — { balancePercent, password } damper balancing
+ *                                     (0-100) — restricted to pete.buo@gmail.com only,
+ *                                     see isAuthorizedForDamperBalance() below
  * POST /thermostat/mode            — { mode: 'auto'|'gas'|'electric'|'air' }
  * POST /thermostat/rates           — { gasPricePerTherm?, elecPricePerKwh?, gasAfue? }
  * POST /thermostat/availability    — { source: 'gas'|'electric'|'air', available: boolean }
@@ -35,6 +37,27 @@
 const router = require('express').Router();
 const thermostatSvc = require('../services/thermostat');
 const boilerSvc = require('../services/boiler');
+const User = require('../db/userModel');
+
+// The damper balance slider physically retunes airflow between zones —
+// worth locking to one person rather than the household-wide PASSWORD
+// secret every other privileged route accepts (see lightsSvc.validatePassword),
+// since a mis-set balance is easy to not notice and annoying for everyone
+// else to live with. `password` here is the same value the frontend
+// already stores as "token" post-login (see web/src/api/index.js) — it's
+// actually the user's Mongo _id, not a real password; same convention as
+// every other auth check in this codebase, just resolved one step further
+// to the account's email instead of stopping at "any valid user."
+const DAMPER_BALANCE_ALLOWED_EMAIL = 'pete.buo@gmail.com';
+async function isAuthorizedForDamperBalance(password) {
+  if (!password) return false;
+  try {
+    const user = await User.findById(password);
+    return user?.email?.toLowerCase() === DAMPER_BALANCE_ALLOWED_EMAIL;
+  } catch {
+    return false; // password wasn't a valid ObjectId, or lookup failed
+  }
+}
 
 router.get('/thermostat', (req, res) => {
   res.json(thermostatSvc.getState());
@@ -64,6 +87,9 @@ router.post('/thermostat/zone/:id/schedule', async (req, res) => {
 });
 
 router.post('/thermostat/zone/:id/balance', async (req, res) => {
+  if (!await isAuthorizedForDamperBalance(req.body.password)) {
+    return res.status(403).json({ ok: false, error: 'Only pete.buo@gmail.com can change damper balance.' });
+  }
   try {
     await thermostatSvc.setZoneBalance(req.params.id, req.body.balancePercent);
     res.json({ ok: true, state: thermostatSvc.getState() });

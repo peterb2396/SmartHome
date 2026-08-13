@@ -1,10 +1,19 @@
-import { FaCog, FaExclamationTriangle, FaInfoCircle, FaTint, FaSmog, FaWind } from "react-icons/fa";
+import { FaCog, FaExclamationTriangle, FaInfoCircle, FaTint, FaSmog, FaWind, FaLock } from "react-icons/fa";
 import ThermoDial from "./ThermoDial";
 import EnvironmentRow from "./EnvironmentRow";
 
 const STEP = 1;
 const SAFETY_MIN = 60;
 const SAFETY_MAX = 75;
+
+// Mirrors the server-side restriction in server/api/thermostat.js
+// (isAuthorizedForDamperBalance) — this is just UX (disable + explain
+// instead of a control that silently 403s), the backend check is what
+// actually enforces it, not this.
+const DAMPER_BALANCE_ALLOWED_EMAIL = "pete.buo@gmail.com";
+function canEditDamperBalance() {
+  return (localStorage.getItem("email") || "").toLowerCase() === DAMPER_BALANCE_ALLOWED_EMAIL;
+}
 
 // "2h 15m" / "45m" — omits the hours segment entirely under an hour rather
 // than showing "0h 45m".
@@ -115,14 +124,23 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBal
         <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 4 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text-muted)" }}>
             <span>Damper {damperMoving ? `${damperMoving}…` : `${damperPercent}% open`}</span>
-            <span>Balance {balancePercent ?? 100}%</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              {!canEditDamperBalance() && <FaLock size={9} title="Only pete.buo@gmail.com can change this" />}
+              Balance {balancePercent ?? 100}%
+            </span>
           </div>
           <input
             type="range" min={0} max={100} step={5}
             value={balancePercent ?? 100}
+            disabled={!canEditDamperBalance()}
             onChange={e => onBalanceChange(id, Number(e.target.value))}
             aria-label={`${label} damper balance`}
-            style={{ width: "100%", accentColor: "var(--accent)" }}
+            title={canEditDamperBalance() ? undefined : "Only pete.buo@gmail.com can change this"}
+            style={{
+              width: "100%", accentColor: "var(--accent)",
+              opacity: canEditDamperBalance() ? 1 : 0.5,
+              cursor: canEditDamperBalance() ? "pointer" : "not-allowed",
+            }}
           />
         </div>
       )}
