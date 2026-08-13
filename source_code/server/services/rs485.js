@@ -289,6 +289,7 @@ function writeFrame(frame) {
     console.log(`[RS485 Mock] would write ${frame.length}B frame: ${frame.toString('hex')}`);
     return;
   }
+  console.log(`[RS485] TX ${frame.length}B: ${frame.toString('hex')}`);
   port.write(frame);
 }
 
@@ -299,6 +300,11 @@ function writeFrame(frame) {
 let awaitingFrameSince = null;
 
 function onData(chunk) {
+  // Raw, unparsed — the one log line that can tell "nothing at all came
+  // back" apart from "something came back but didn't parse right." Every
+  // chunk, not just complete frames, so a garbled/partial reply is visible
+  // too.
+  console.log(`[RS485] RX ${chunk.length}B: ${chunk.toString('hex')}`);
   rxBuffer = Buffer.concat([rxBuffer, chunk]);
   let syncIdx;
   while ((syncIdx = rxBuffer.indexOf(SYNC)) !== -1) {
