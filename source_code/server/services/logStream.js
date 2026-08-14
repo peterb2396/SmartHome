@@ -14,7 +14,13 @@
  * whatever's logged after they connect.
  */
 
-const MAX_LINES = 500;
+// Was 500 — a single sustained failure logging once per 10s poll cycle
+// alone produces 360 lines/hour, which blew through a 500-line buffer in
+// under 90 minutes and crowded out every other service's logs entirely,
+// including whatever ran around the actual moment something broke. Bigger
+// buffer + throttling the repeat-offender log lines themselves (see
+// rs485.js's pollNode()) both matter — this alone isn't the whole fix.
+const MAX_LINES = 5000;
 const HEARTBEAT_MS = 20000; // keeps the SSE connection alive through proxies
 
 const buffer = [];

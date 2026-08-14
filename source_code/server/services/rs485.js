@@ -445,6 +445,20 @@ function handleFrame(addr, cmd, payload) {
 // working" with no record of where.
 let consecutiveMisses = new Map(); // busAddress -> count, reset to 0 on any response
 
+// A sustained outage logging one warning every single 10s cycle, forever,
+// is what buried an entire day's worth of every other service's logs
+// under ~3800 identical "NO RESPONSE" lines and made it impossible to see
+// what actually happened at the moment it started — see git history.
+// Full detail for the first several misses (exactly when it started
+// matters most), then backing off to periodic checkpoints, keeps a long
+// outage from crowding the ring buffer out while still leaving a trail.
+function shouldLogMiss(misses) {
+  if (misses <= 5) return true;
+  if (misses < 50) return misses % 10 === 0;
+  if (misses < 500) return misses % 50 === 0;
+  return misses % 500 === 0;
+}
+
 function pollNode(address, zoneId) {
   return new Promise((resolve) => {
     if (usingMock) return resolve([]); // nothing to poll without real hardware
@@ -453,13 +467,21 @@ function pollNode(address, zoneId) {
       pendingReportResolvers.delete(address);
       const misses = (consecutiveMisses.get(address) || 0) + 1;
       consecutiveMisses.set(address, misses);
-      console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row)`);
+      if (shouldLogMiss(misses)) {
+        console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row)`);
+      }
       resolve([]);
     }, POLL_RESPONSE_TIMEOUT_MS);
     pendingReportResolvers.set(address, (readings) => {
       clearTimeout(timeout);
+      // The single most useful line in a long outage: exactly when it
+      // ended and how long it ran, logged unconditionally (unlike the
+      // routine per-poll success case, which stays silent either way).
+      const priorMisses = consecutiveMisses.get(address) || 0;
+      if (priorMisses > 0) {
+        console.log(`[RS485] Poll ${label} — RECOVERED after ${priorMisses} consecutive misses`);
+      }
       consecutiveMisses.set(address, 0);
-      // console.log(`[RS485] Poll ${label} — OK (${readings.length} readings)`);
       resolve(readings);
     });
     writeFrame(buildFrame(address, CMD.POLL));
@@ -480,14 +502,19 @@ function pollZoneAudioNode(address, zoneId) {
       pendingZoneAudioResolvers.delete(address);
       const misses = (consecutiveMisses.get(address) || 0) + 1;
       consecutiveMisses.set(address, misses);
-      console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row)`);
+      if (shouldLogMiss(misses)) {
+        console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row)`);
+      }
       resolve();
     }, ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS);
     pendingZoneAudioResolvers.set(address, ({ activeSource }) => {
       clearTimeout(timeout);
+      const priorMisses = consecutiveMisses.get(address) || 0;
+      if (priorMisses > 0) {
+        const sourceName = ACTIVE_SOURCE_NAME[activeSource] || 'off';
+        console.log(`[RS485] Poll ${label} — RECOVERED after ${priorMisses} consecutive misses (now playing ${sourceName})`);
+      }
       consecutiveMisses.set(address, 0);
-      const sourceName = ACTIVE_SOURCE_NAME[activeSource] || 'off';
-      // console.log(`[RS485] Poll ${label} — OK (playing ${sourceName})`);
       soundSvc.reportActiveSource(zoneId, activeSource);
       resolve();
     });
