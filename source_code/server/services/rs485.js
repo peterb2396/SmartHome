@@ -308,12 +308,18 @@ function openTransport() {
   });
 }
 
-function writeFrame(frame) {
+// `verbose` lets a caller opt into a raw hex dump for this specific write —
+// used at the same shouldLogMiss() checkpoints as the "NO RESPONSE"
+// warnings, so a sustained outage's log shows real TX bytes going out at
+// the exact moments it also shows the timeout, instead of either logging
+// every single write forever (the old, buffer-flooding behavior) or
+// having zero TX evidence at all during an outage.
+function writeFrame(frame, verbose = false) {
   if (usingMock || !port) {
     console.log(`[RS485 Mock] would write ${frame.length}B frame: ${frame.toString('hex')}`);
     return;
   }
-  // console.log(`[RS485] TX ${frame.length}B: ${frame.toString('hex')}`);
+  if (verbose) console.log(`[RS485] TX ${frame.length}B: ${frame.toString('hex')}`);
   port.write(frame);
 }
 
@@ -327,8 +333,11 @@ function onData(chunk) {
   // Raw, unparsed — the one log line that can tell "nothing at all came
   // back" apart from "something came back but didn't parse right." Every
   // chunk, not just complete frames, so a garbled/partial reply is visible
-  // too.
-  // console.log(`[RS485] RX ${chunk.length}B: ${chunk.toString('hex')}`);
+  // too. Unthrottled, unlike TX/NO-RESPONSE — this only ever fires when
+  // bytes actually arrive, which is exactly the rare, valuable case during
+  // an outage (self-limiting: if truly nothing comes back, this simply
+  // never logs, no flooding risk).
+  console.log(`[RS485] RX ${chunk.length}B: ${chunk.toString('hex')}`);
   rxBuffer = Buffer.concat([rxBuffer, chunk]);
   let syncIdx;
   while ((syncIdx = rxBuffer.indexOf(SYNC)) !== -1) {
@@ -484,7 +493,12 @@ function pollNode(address, zoneId) {
       consecutiveMisses.set(address, 0);
       resolve(readings);
     });
-    writeFrame(buildFrame(address, CMD.POLL));
+    // Predicts whether THIS attempt, if it times out, would land on a
+    // shouldLogMiss() checkpoint — so the TX hex dump and the eventual
+    // "NO RESPONSE, N in a row" warning it corresponds to show up
+    // together, not logged independently of each other.
+    const prospectiveMisses = (consecutiveMisses.get(address) || 0) + 1;
+    writeFrame(buildFrame(address, CMD.POLL), shouldLogMiss(prospectiveMisses));
   });
 }
 
