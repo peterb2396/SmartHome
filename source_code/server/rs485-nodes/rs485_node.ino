@@ -194,22 +194,57 @@ void saveAddressToEEPROM(uint8_t addr) {
 uint8_t rxBuf[64];
 uint8_t rxLen = 0;
 
+// Resync safety net, mirrors the Pi-side master's identical fix in
+// server/services/rs485.js's onData() — read that comment for the full
+// reasoning. Short version: a stray byte that happens to equal SYNC (bus
+// noise — exactly what inadequate termination makes more likely) can make
+// everything from here look like the start of a frame that will never
+// actually complete. Left unchecked, this node waits at "not enough bytes
+// yet" forever, on every single loop() iteration — meaning it silently
+// stops parsing ANY future bytes, including real POLL requests from the
+// master, even though it's still receiving them electrically. From the
+// master's side that's indistinguishable from "the node died," and
+// nothing clears rxBuf/rxLen except a power cycle, since nothing else in
+// this file ever touches them. Two checks: an implausible len drops the
+// sync byte immediately, a plausible-but-never-completing one times out.
+const uint8_t MAX_PAYLOAD_LEN = 32; // largest real payload today is REPORT's 25B
+const unsigned long FRAME_STALL_MS = 500; // a full 30B frame takes ~30ms at 9600 baud — generous margin
+bool awaitingFrame = false;
+unsigned long awaitingFrameSince = 0;
+
 void pollSerial() {
   while (Serial1.available()) {
     if (rxLen < sizeof(rxBuf)) rxBuf[rxLen++] = Serial1.read();
-    else rxLen = 0; // overflow, drop and resync on next SYNC byte
+    else { rxLen = 0; awaitingFrame = false; } // overflow, drop and resync on next SYNC byte
   }
-  if (rxLen < 4) return;
+  if (rxLen < 4) { awaitingFrame = false; return; }
 
   // Find sync byte
   uint8_t start = 0;
   while (start < rxLen && rxBuf[start] != SYNC) start++;
   if (start > 0) { memmove(rxBuf, rxBuf + start, rxLen - start); rxLen -= start; }
-  if (rxLen < 4) return;
+  if (rxLen < 4) { awaitingFrame = false; return; }
 
-  uint8_t addr = rxBuf[1], cmd = rxBuf[2], len = rxBuf[3];
-  if (rxLen < (uint16_t)(4 + len + 1)) return; // wait for full frame
+  uint8_t len = rxBuf[3];
+  if (len > MAX_PAYLOAD_LEN) {
+    memmove(rxBuf, rxBuf + 1, rxLen - 1); // not a real header — drop just the sync byte, resync next call
+    rxLen -= 1;
+    awaitingFrame = false;
+    return;
+  }
 
+  if (rxLen < (uint16_t)(4 + len + 1)) { // wait for full frame
+    if (!awaitingFrame) { awaitingFrame = true; awaitingFrameSince = millis(); }
+    else if (millis() - awaitingFrameSince > FRAME_STALL_MS) {
+      memmove(rxBuf, rxBuf + 1, rxLen - 1);
+      rxLen -= 1;
+      awaitingFrame = false;
+    }
+    return;
+  }
+  awaitingFrame = false;
+
+  uint8_t addr = rxBuf[1], cmd = rxBuf[2];
   uint8_t crc = crc8(rxBuf + 1, 3 + len);
   uint8_t receivedCrc = rxBuf[4 + len];
   uint8_t* payload = rxBuf + 4;

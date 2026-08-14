@@ -326,21 +326,47 @@ void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
   }
 }
 
+// Resync safety net — same fix, same reasoning, as rs485_node.ino's
+// pollSerial(); see that file's comment for the full explanation. Without
+// this, a single noise glitch permanently wedges this node's receiver
+// until power-cycled, indistinguishable from a dead node to the master.
+const uint8_t MAX_PAYLOAD_LEN = 32; // largest real payload today is POLL_DIAL's 27B
+const unsigned long FRAME_STALL_MS = 500;
+bool awaitingFrame = false;
+unsigned long awaitingFrameSince = 0;
+
 void pollSerial() {
   while (Serial2.available()) {
     if (rxLen < sizeof(rxBuf)) rxBuf[rxLen++] = Serial2.read();
-    else rxLen = 0;
+    else { rxLen = 0; awaitingFrame = false; }
   }
-  if (rxLen < 4) return;
+  if (rxLen < 4) { awaitingFrame = false; return; }
 
   uint8_t start = 0;
   while (start < rxLen && rxBuf[start] != SYNC) start++;
   if (start > 0) { memmove(rxBuf, rxBuf + start, rxLen - start); rxLen -= start; }
-  if (rxLen < 4) return;
+  if (rxLen < 4) { awaitingFrame = false; return; }
 
-  uint8_t addr = rxBuf[1], cmd = rxBuf[2], len = rxBuf[3];
-  if (rxLen < (uint16_t)(4 + len + 1)) return;
+  uint8_t len = rxBuf[3];
+  if (len > MAX_PAYLOAD_LEN) {
+    memmove(rxBuf, rxBuf + 1, rxLen - 1);
+    rxLen -= 1;
+    awaitingFrame = false;
+    return;
+  }
 
+  if (rxLen < (uint16_t)(4 + len + 1)) {
+    if (!awaitingFrame) { awaitingFrame = true; awaitingFrameSince = millis(); }
+    else if (millis() - awaitingFrameSince > FRAME_STALL_MS) {
+      memmove(rxBuf, rxBuf + 1, rxLen - 1);
+      rxLen -= 1;
+      awaitingFrame = false;
+    }
+    return;
+  }
+  awaitingFrame = false;
+
+  uint8_t addr = rxBuf[1], cmd = rxBuf[2];
   uint8_t crc = crc8(rxBuf + 1, 3 + len);
   uint8_t receivedCrc = rxBuf[4 + len];
   uint8_t* payload = rxBuf + 4;
