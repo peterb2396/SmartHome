@@ -54,14 +54,31 @@
  *   0x04 voc (0-100 heuristic score)              0x05 co2 (ppm)
  *
  * ── Dial nodes (wall-mounted RS485 HMI: thermostat + sound control) ──────
- * A `kind: 'dial'` node (see nodeRegistry.js) is never touched by the
- * ordinary sensor pollAll()/POLL_INTERVAL_MS loop — it's polled on its own
- * much faster loop (pollAllDials(), no fixed sleep beyond each node's own
- * round-trip) so turning a physical dial feels instant, not laggy on a 10s
- * cycle. Nodes still only ever transmit in reply to a poll — never
- * unsolicited — same collision-avoidance rule as every other node type, so
- * this needed no change to the "master always initiates" design, just a
- * second poll loop.
+ * A dial is not a separate physical node on this bus — see nodeRegistry.js's
+ * `hasDial` field. The actual RS485 node is the SAME mass-produced RP2040
+ * board used for every zone's sensors; the dial (an ESP32-based touch +
+ * rotary display) is an I2C ACCESSORY hanging off that RP2040, exactly like
+ * the BME680/SCD41 sensors are — the RP2040 bridges between RS485 (talking
+ * to this server) and I2C (talking to the dial), and answers on ONE shared
+ * bus address for BOTH roles: POLL/REPORT for its own sensors (if it has
+ * any — see `kind`) and POLL_DIAL/DIAL_STATE for the attached dial (if
+ * `hasDial` is true). This keeps the RS485 side of things exactly as
+ * simple as every other node type ("master always initiates, node only
+ * ever replies") — the ESP32 dial itself never touches RS485 at all, or
+ * even needs to know the protocol exists; the RP2040 handles all of that
+ * and just gives the dial a small I2C register interface to read/write.
+ *
+ * Dial polling still runs on its own much faster loop (pollAllDials(), no
+ * fixed sleep beyond each node's own round-trip) than the ordinary 10s
+ * sensor pollAll() loop, so turning the physical dial feels instant, not
+ * laggy — but since a `hasDial` node's SAME bus address can now be visited
+ * by EITHER loop, and RS485 is a shared half-duplex bus where only one
+ * request can be outstanding at a time, both loops check a shared
+ * per-address busy set (see pollingAddresses below) before writing to an
+ * address and simply skip that node for this pass if it's already
+ * mid-exchange with the other loop — cheap for the fast dial loop (tries
+ * again in DIAL_SWEEP_GAP_MS), and pollAll() only ever needs this once per
+ * 10s so a skipped cycle there is a non-issue.
  *
  * POLL_DIAL payload (master→dial, pushes what the dial should display for
  * every screen every cycle, since the dial can switch screens locally
@@ -96,8 +113,10 @@
  * whole HVAC-must-work-with-no-WiFi requirement hold up: dial → this bus →
  * setZone() → tick()/relay-drive never leaves the Pi.
  *
- * tapEvent values: 0=none, 1=wake (idle→clock), 2=menuSelect. 3=toggle
- * Spotify-enabled for this dial's sound zone — only acted on when
+ * tapEvent values: 0=none, 1=wake (idle→clock), 2=menuSelect, 4=returnToMenu
+ * (tapped/pressed on Thermostat or Status, both purely local dial-side
+ * navigation, same as wake/menuSelect — never acted on server-side). 3=
+ * toggle Spotify-enabled for this dial's sound zone — only acted on when
  * mode=sound (see pollAllDials()). This is strictly the same "zone on/off"
  * Spotify gate the web app's toggle is, never touches override inputs.
  *
@@ -185,7 +204,7 @@ const RECONNECT_INTERVAL_MS = 10000; // how often to retry opening the port afte
 const DIAL_POLL_RESPONSE_TIMEOUT_MS = 200;
 const DIAL_SWEEP_GAP_MS = 20;
 const DIAL_MODE = { thermostat: 0, sound: 1 };
-const DIAL_TAP_EVENT = { none: 0, wake: 1, menuSelect: 2, toggleSpotifyEnabled: 3 };
+const DIAL_TAP_EVENT = { none: 0, wake: 1, menuSelect: 2, toggleSpotifyEnabled: 3, returnToMenu: 4 };
 // tapEvent values other than toggleSpotifyEnabled are parsed but not acted
 // on server-side — menu/mode navigation is entirely local to the dial's
 // own UI state machine. Reserved protocol surface, same as SET_RELAY above.
@@ -228,6 +247,14 @@ let rxBuffer = Buffer.alloc(0);
 let pendingReportResolvers = new Map(); // address -> resolve fn, for the current in-flight POLL
 let pendingDialResolvers = new Map(); // address -> resolve fn, for the current in-flight POLL_DIAL
 let pendingZoneAudioResolvers = new Map(); // address -> resolve fn, for the current in-flight POLL_ZONE_AUDIO
+
+// A combined sensor+dial node (nodeRegistry.js's `hasDial`) answers both
+// pollAll()'s 10s sensor sweep and pollAllDials()'s ~20ms dial sweep on the
+// SAME bus address — since RS485 only allows one outstanding request at a
+// time, both sweeps check this set before writing to an address and skip
+// it for this pass (not wait) if it's already mid-exchange with the other
+// sweep. See this file's header ("Dial nodes") for the full reasoning.
+const pollingAddresses = new Set();
 
 // ── CRC8 (poly 0x07, matches common Arduino Crc8 implementations) ──────────
 function crc8(bytes) {
@@ -471,9 +498,16 @@ function shouldLogMiss(misses) {
 function pollNode(address, zoneId) {
   return new Promise((resolve) => {
     if (usingMock) return resolve([]); // nothing to poll without real hardware
+    // A hasDial node's address might already be mid-exchange with
+    // pollAllDials()'s dial sweep — skip this node for THIS 10s cycle
+    // rather than risk two outstanding requests on the same half-duplex
+    // bus at once. Cheap: it just tries again next cycle.
+    if (pollingAddresses.has(address)) return resolve([]);
+    pollingAddresses.add(address);
     const label = `addr=${address}${zoneId ? ` zone=${zoneId}` : ''}`;
     const timeout = setTimeout(() => {
       pendingReportResolvers.delete(address);
+      pollingAddresses.delete(address);
       const misses = (consecutiveMisses.get(address) || 0) + 1;
       consecutiveMisses.set(address, misses);
       if (shouldLogMiss(misses)) {
@@ -483,6 +517,7 @@ function pollNode(address, zoneId) {
     }, POLL_RESPONSE_TIMEOUT_MS);
     pendingReportResolvers.set(address, (readings) => {
       clearTimeout(timeout);
+      pollingAddresses.delete(address);
       // The single most useful line in a long outage: exactly when it
       // ended and how long it ran, logged unconditionally (unlike the
       // routine per-poll success case, which stays silent either way).
@@ -540,7 +575,6 @@ async function pollAll(configuredNodes) {
   checkFrameStall();
   for (const node of configuredNodes) {
     if (node.busAddress == null) continue;
-    if (node.kind === 'dial') continue; // dials only ever answer POLL_DIAL — handled by pollAllDials()'s own loop
     if (node.kind === 'zoneAudio') {
       if (!node.zoneId) continue;
       await pollZoneAudioNode(node.busAddress, node.zoneId);
@@ -609,8 +643,10 @@ async function pollAllDials(getConfiguredNodes) {
   // are separate id spaces (see sound.js's header for why), so a dial
   // node carries both a `zoneId` (thermostat) and a `soundZoneId`. Either
   // may be unset; buildDialPushPayload()/the lookups below default
-  // gracefully via optional chaining either way.
-  const dialNodes = getConfiguredNodes().filter(n => n.kind === 'dial' && n.busAddress != null && (n.zoneId || n.soundZoneId));
+  // gracefully via optional chaining either way. `hasDial` is independent
+  // of `kind` — see nodeRegistry.js — so this node may ALSO be a sensor
+  // node pollAll() visits on its own 10s cycle, same bus address.
+  const dialNodes = getConfiguredNodes().filter(n => n.hasDial && n.busAddress != null && (n.zoneId || n.soundZoneId));
 
   // This function reschedules itself every DIAL_SWEEP_GAP_MS (20ms)
   // forever, regardless of dial count — with zero dials that's 50
@@ -638,15 +674,34 @@ async function pollAllDials(getConfiguredNodes) {
   const maintenanceDueCount = maintenanceSvc.getState().tasks.filter(t => t.isDue).length;
 
   for (const node of dialNodes) {
+    // This address might currently be mid-exchange with pollAll()'s
+    // sensor sweep (only possible for a combined sensor+dial node) —
+    // skip it for this pass rather than risk two outstanding requests on
+    // the same half-duplex bus. Costs nothing here: tries again in
+    // DIAL_SWEEP_GAP_MS (~20ms), and a real sensor exchange is at most a
+    // couple hundred ms, so this only ever costs a handful of sweeps.
+    if (pollingAddresses.has(node.busAddress)) continue;
+
     const zone = thermostatSvc.getState().zones.find(z => z.id === node.zoneId);
     const outdoor = astroSvc.getCachedOutdoorConditions();
     const soundZone = soundSvc.getState().zones.find(z => z.id === node.soundZoneId);
-    if (!usingMock) writeFrame(buildFrame(node.busAddress, CMD.POLL_DIAL, buildDialPushPayload(zone, outdoor, soundZone, new Date(), faultCount, maintenanceDueCount)));
+    if (!usingMock) {
+      pollingAddresses.add(node.busAddress);
+      writeFrame(buildFrame(node.busAddress, CMD.POLL_DIAL, buildDialPushPayload(zone, outdoor, soundZone, new Date(), faultCount, maintenanceDueCount)));
+    }
 
     const reply = await new Promise((resolve) => {
       if (usingMock) return resolve(null);
-      const timeout = setTimeout(() => { pendingDialResolvers.delete(node.busAddress); resolve(null); }, DIAL_POLL_RESPONSE_TIMEOUT_MS);
-      pendingDialResolvers.set(node.busAddress, (state) => { clearTimeout(timeout); resolve(state); });
+      const timeout = setTimeout(() => {
+        pendingDialResolvers.delete(node.busAddress);
+        pollingAddresses.delete(node.busAddress);
+        resolve(null);
+      }, DIAL_POLL_RESPONSE_TIMEOUT_MS);
+      pendingDialResolvers.set(node.busAddress, (state) => {
+        clearTimeout(timeout);
+        pollingAddresses.delete(node.busAddress);
+        resolve(state);
+      });
     });
     if (!reply) continue;
 

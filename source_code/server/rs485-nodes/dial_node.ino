@@ -1,34 +1,29 @@
 /**
- * RS485 Wall Dial — Elecrow CrowPanel 2.1" ESP32-S3 Rotary Display
+ * Wall Dial — Elecrow CrowPanel 2.1" ESP32-S3 Rotary Display
  * ─────────────────────────────────────────────────────────────────
- * Real hardware, now confirmed: Elecrow's CrowPanel 2.1"-HMI ESP32 Rotary
- * Display, 480x480 round IPS, capacitive touch + physical knob (rotate +
- * press). ESP32-S3, 8MB PSRAM, 16MB flash. Display is an ST7701 driving a
- * 480x480 RGB panel via Arduino_GFX's Arduino_ESP32RGBPanel bus; touch is
- * a CST8xx capacitive controller; touch reset/IRQ, LCD power/reset, and
- * the encoder's push-button are all behind a PCF8574 I2C GPIO expander at
- * address 0x21 rather than direct GPIOs.
+ * This board is a pure I2C PERIPHERAL — it carries NO RS485 logic at all
+ * and doesn't need to know that bus exists. It's an accessory of a
+ * standard mass-produced RS485 sensor node (server/rs485-nodes/
+ * rs485_node.ino), exactly like that node's BME680/SCD41 sensors are —
+ * connected via the SAME I2C bus, GND, and 5V rail as those sensors, at
+ * its own fixed address (DIAL_I2C_ADDR). That RP2040 board is the one
+ * that actually speaks RS485 to the Pi; it relays POLL_DIAL pushes to
+ * this dial over I2C and relays this dial's reply back — a byte-for-byte
+ * proxy (see rs485_node.ino's bridgeDialPoll()), so the two payload
+ * structs below are the ONLY protocol contract this file has with
+ * anything else, and they're identical to what used to go over RS485
+ * directly. No bus address, no commissioning, no ANNOUNCE/ASSIGN — this
+ * board's I2C address is just a fixed constant.
  *
  * PIN NUMBERS BELOW ARE FROM ELECROW'S OWN WIKI (fetched during this
  * session, not measured against the board in hand) — cross-check against
  * the example sketch that ships with your unit / Elecrow's GitHub before
- * trusting them blindly; research turned up one internally-inconsistent
- * source page for the display bus timing constants specifically, resolved
- * here in favor of the two pages that agreed with each other, but "two
- * sources agreed" isn't the same as "confirmed against real silicon." The
- * RS485 module's UART pins are NOT documented anywhere Elecrow publishes
- * (it goes to whichever pins you wire on the board's UART expansion
- * header) — genuinely unknown, set RS485_RX_PIN/RS485_TX_PIN to whatever
- * you actually wire.
- *
- * Same commissioning flow as every other RS485 node (see rs485_node.ino):
- * announces on address 0x00 with its unique chip ID until assigned an
- * address from the Console's "New Nodes" panel — set `kind` to "dial"
- * there so the server polls it on the fast dial loop
- * (server/services/rs485.js's pollAllDials()), not the 10s sensor loop.
- * Thermostat zone and sound zone are separate id spaces (see
- * server/services/sound.js's header) — the Console lets a dial be
- * assigned a thermostat zone, a sound zone, or both.
+ * trusting them blindly. The SECOND I2C bus (DIAL_I2C_SDA_PIN/
+ * DIAL_I2C_SCL_PIN, the link to the RP2040 node) is on GENUINELY UNKNOWN
+ * pins — this board's other pins already consume most of the ESP32-S3's
+ * GPIOs (display bus + encoder + backlight + the display's OWN internal
+ * I2C for touch/expander), so confirm two truly free GPIOs against your
+ * specific board variant before wiring this.
  *
  * ── Faults/maintenance — deliberately non-blocking ─────────────────
  * A small ambient badge (see drawStatusBadge()) appears on the Clock,
@@ -45,71 +40,68 @@
  *   Elecrow CrowPanel 2.1"-HMI ESP32 Rotary Display (ESP32-S3, 480x480
  *     round IPS, ST7701 RGB panel, CST8xx touch, PCF8574 GPIO expander,
  *     physical knob with press)
- *   TTL-to-RS485 module (auto-direction assumed, same style as the sensor
- *     nodes — see rs485_node.ino's wiring section) wired to the board's
- *     UART expansion pins (exact numbers: yours to confirm, see above)
- *   LM2596 buck converter off the shared bus 24V feed, same as every
- *     other node — the CrowPanel's own USB-C input is 5V, separate from
- *     the RS485 bus's 24V feed; feed the buck converter's 5V output into
- *     whatever the board's 5V/VIN pad is, not through USB-C.
+ *   No separate transceiver/step-down needed on this board — 5V, GND, and
+ *     I2C all come from the paired RP2040 node's existing LM2596 + bus
+ *     wiring (see rs485_node.ino's wiring section for its side of this).
+ *     The CrowPanel's own USB-C input can still be used for
+ *     flashing/debugging, but isn't the intended power source in the
+ *     field.
  *
  * ── Libraries (Arduino Library Manager) ────────────────────────────
  *   GFX Library for Arduino     by moononournation  (Arduino_GFX_Library)
  *   Adafruit CST8XX Library     — capacitive touch
  *   PCF8574 library             by Rob Tillaart (or equivalent)
  *   lvgl (v8.3.x)               — this file targets the v8 API
- *   EEPROM                      bundled with the ESP32 Arduino core
  *
  * ── Wiring / pins (from Elecrow's wiki — verify before flashing) ────
  *   RGB panel:  DE=40 VSYNC=7 HSYNC=15 PCLK=41 CS=16 SCK=2 SDA=1
  *               R0-R4=46,3,8,18,17   G0-G5=14,13,12,11,10,9
  *               B0-B4=5,45,48,47,21
- *   Touch/expander I2C: SDA=38 SCL=39 (PCF8574 @ 0x21: P0 touch reset,
- *               P2 touch IRQ, P3 LCD power, P4 LCD reset, P5 encoder button)
+ *   Touch/expander I2C (Wire0, internal to this board only): SDA=38
+ *               SCL=39 (PCF8574 @ 0x21: P0 touch reset, P2 touch IRQ,
+ *               P3 LCD power, P4 LCD reset, P5 encoder button)
  *   Encoder:    A=42 B=4 (rotation, quadrature) — press comes via the
  *               PCF8574's P5 above, not a direct GPIO
  *   Backlight:  GPIO 6
- *   RS485 RX/TX: placeholders below — see header note, genuinely unknown
+ *   RP2040 link (Wire1, slave mode — GENUINELY UNKNOWN, pick 2 free
+ *               GPIOs): SDA=DIAL_I2C_SDA_PIN SCL=DIAL_I2C_SCL_PIN, plus
+ *               shared GND and 5V from the RP2040 node's LM2596
  *
- * ── Protocol integration (server/services/rs485.js — read that file's
- *    header comment for the authoritative spec) ──────────────────────
- * POLL_DIAL (0x04, master→dial, 27B): targetF, currentF, humidity, co2,
- * outdoorF (5x float32) + flags (1B: bit0 callingHeat, bit1 callingCool,
- * bit2 safetyActive, bit3 weatherStale, bit4 spotifyEnabled) + hour,
- * minute (1B each) + volumePercent, activeSource (1B each: 0=off,
- * 1=spotify,2=override1,3=override2) + faultCount, maintenanceDueCount
- * (1B each). activeSource is that zone's own audio hardware's CURRENT
- * hardware-detected input (a separate zoneAudio node, not this dial) —
- * display-only here, same as on the website; this dial has no say in
- * which input wins. faultCount/maintenanceDueCount are plain counts, same
- * numbers the Console/Maintenance pages show — this dial never renders
- * fault/maintenance text, just flags "go check the app" (see the Status
- * screen and drawStatusBadge()).
+ * ── I2C protocol (must match rs485_node.ino's DIAL_I2C_ADDR/
+ *    DIAL_PUSH_LEN/DIAL_REPLY_LEN, and rs485.js's POLL_DIAL/DIAL_STATE —
+ *    see that file's header for the authoritative spec) ────────────────
+ * Push (RP2040 write, 27B): targetF, currentF, humidity, co2, outdoorF
+ * (5x float32) + flags (1B: bit0 callingHeat, bit1 callingCool, bit2
+ * safetyActive, bit3 weatherStale, bit4 spotifyEnabled) + hour, minute
+ * (1B each) + volumePercent, activeSource (1B each: 0=off,1=spotify,
+ * 2=override1,3=override2) + faultCount, maintenanceDueCount (1B each).
+ * activeSource is that zone's own audio hardware's CURRENT
+ * hardware-detected input (a separate zoneAudio node) — display-only
+ * here; this dial has no say in which input wins. faultCount/
+ * maintenanceDueCount are plain counts for an ambient badge — this dial
+ * never renders fault/maintenance TEXT, just flags "go check the app."
  *
- * DIAL_STATE (0x84, dial→master reply, 8B): mode (1B: 0=thermostat,
- * 1=sound) + newTargetF (float32) + changed (1B) + tapEvent (1B) +
- * newVolumePercent (1B). newTargetF/newVolumePercent are always this
- * node's own locally-tracked ABSOLUTE values (never deltas) — the master
- * pushes the current value down every cycle specifically so a dropped
- * frame can't cause drift; this node just keeps incrementing its local
- * copy from encoder turns and reports where it currently sits.
- * tapEvent: 0=none, 1=wake, 2=menuSelect, 3=toggle Spotify-enabled for
- * this dial's sound zone (tapping the Sound screen itself — see onTap()).
- * That's strictly a Spotify on/off gate; it never touches override inputs.
+ * Reply (RP2040 read, 8B): mode (1B: 0=thermostat, 1=sound) + newTargetF
+ * (float32) + changed (1B) + tapEvent (1B) + newVolumePercent (1B).
+ * newTargetF/newVolumePercent are always this board's own locally-tracked
+ * ABSOLUTE values (never deltas) — the push carries the current value
+ * down every cycle specifically so a dropped exchange can't cause drift;
+ * this board just keeps incrementing its local copy from encoder turns
+ * and reports where it currently sits.
+ * tapEvent: 0=none, 1=wake, 2=menuSelect, 4=returnToMenu (tapped/pressed
+ * on Thermostat or Status — purely local navigation, never acted on
+ * server-side). 3=toggle Spotify-enabled for this dial's sound zone —
+ * only acted on when mode=sound. That's strictly a Spotify on/off gate;
+ * it never touches override inputs.
  */
 
 #include <Wire.h>
-#include <EEPROM.h>
 #include <Arduino_GFX_Library.h>
 #include <Adafruit_CST8XX.h>
 #include <PCF8574.h>
 #include <lvgl.h>
 
 // ── Config — confirm against real hardware during bring-up ─────────────
-const int RS485_RX_PIN = 16; // GENUINELY UNKNOWN — set to whatever you wire on the UART expansion
-const int RS485_TX_PIN = 17; // GENUINELY UNKNOWN — set to whatever you wire on the UART expansion
-const unsigned long RS485_BAUD = 9600;
-
 // RGB panel bus pins (Elecrow wiki — see header note on confidence)
 const int TFT_DE = 40, TFT_VSYNC = 7, TFT_HSYNC = 15, TFT_PCLK = 41;
 const int TFT_CS = 16, TFT_SCK = 2, TFT_SDA = 1;
@@ -118,24 +110,27 @@ const int TFT_G0 = 14, TFT_G1 = 13, TFT_G2 = 12, TFT_G3 = 11, TFT_G4 = 10, TFT_G
 const int TFT_B0 = 5, TFT_B1 = 45, TFT_B2 = 48, TFT_B3 = 47, TFT_B4 = 21;
 const int BACKLIGHT_PIN = 6;
 
-const int I2C_SDA_PIN = 38, I2C_SCL_PIN = 39;
+const int I2C_SDA_PIN = 38, I2C_SCL_PIN = 39; // Wire0 — internal only (touch + PCF8574)
 const uint8_t PCF8574_ADDR = 0x21;
 const uint8_t PCF_TOUCH_RESET = 0, PCF_TOUCH_IRQ = 2, PCF_LCD_POWER = 3, PCF_LCD_RESET = 4, PCF_ENCODER_BTN = 5;
 
 const int ENCODER_PIN_A = 42;
 const int ENCODER_PIN_B = 4;
 
-const unsigned long ANNOUNCE_INTERVAL_MS = 5000;
-const unsigned long POLL_TIMEOUT_HINT_MS = 200; // matches DIAL_POLL_RESPONSE_TIMEOUT_MS server-side
-const unsigned long IDLE_TIMEOUT_MS = 20000;    // no interaction -> back to IDLE (screen off)
-const unsigned long MENU_TIMEOUT_MS = 8000;     // no interaction on the menu -> back to IDLE
+// GENUINELY UNKNOWN — see this file's header. Wire1, slave mode, the link
+// to the paired RP2040 node.
+const int DIAL_I2C_SDA_PIN = 43;
+const int DIAL_I2C_SCL_PIN = 44;
+const uint8_t DIAL_I2C_ADDR = 0x42; // MUST match rs485_node.ino's DIAL_I2C_ADDR
+const uint8_t DIAL_PUSH_LEN = 27;   // MUST match rs485.js's POLL_DIAL payload size
+const uint8_t DIAL_REPLY_LEN = 8;   // MUST match rs485.js's DIAL_STATE payload size
+
+const unsigned long IDLE_TIMEOUT_MS = 20000; // no interaction -> back to IDLE (screen off)
+const unsigned long MENU_TIMEOUT_MS = 8000;  // no interaction on the menu -> back to IDLE
 
 const float TARGET_MIN_F = 60, TARGET_MAX_F = 75; // matches thermostat.js's safety range
 const float TARGET_STEP_F = 0.5;
 const int VOLUME_STEP = 2;
-
-const unsigned long EEPROM_SIZE = 8;
-const int EEPROM_ADDR_BYTE = 0;
 
 // ── Colors — mirrors web/src/styles/tokens.js so the dial's screens read
 // as the same product as the website, not a separate one ────────────────
@@ -151,19 +146,8 @@ const int EEPROM_ADDR_BYTE = 0;
 #define COLOR_SPOTIFY   lv_color_hex(0x1DB954)
 #define COLOR_SUCCESS   lv_color_hex(0x10B981)
 
-// ── Protocol constants — MUST match server/services/rs485.js ──────────
-const uint8_t SYNC = 0xAA;
-const uint8_t CMD_ASSIGN = 0x02;
-const uint8_t CMD_POLL_DIAL = 0x04;
-const uint8_t CMD_ANNOUNCE = 0x81;
-const uint8_t CMD_DIAL_STATE = 0x84;
-
 const uint8_t MODE_THERMOSTAT = 0;
 const uint8_t MODE_SOUND = 1;
-
-uint8_t busAddress = 0x00;
-uint8_t uniqueId[8];
-unsigned long lastAnnounce = 0;
 
 // ── Display/touch/expander global objects — declared here (not down by
 // LVGL_DISPLAY_INIT()/LVGL_TOUCH_INIT()) so every function below,
@@ -195,8 +179,8 @@ static lv_color_t* lvBuf1;
 static lv_disp_drv_t dispDrv;
 static lv_indev_drv_t indevDrv;
 
-// ── Local live state — updated from POLL_DIAL pushes, and by the encoder
-// between pushes; DIAL_STATE always reports these absolute values back ──
+// ── Local live state — updated from I2C pushes, and by the encoder
+// between pushes; the I2C reply always reports these absolute values ──
 struct DialState {
   float targetF = 68, currentF = 0, humidity = 0, co2 = 0, outdoorF = 0;
   bool callingHeat = false, callingCool = false, safetyActive = false, weatherStale = true;
@@ -208,8 +192,16 @@ struct DialState {
   uint8_t maintenanceDueCount = 0;
 } state;
 
-bool pendingChange = false;   // set when the encoder has moved something since the last poll reply
-uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect,3=toggleSpotifyEnabled
+bool pendingChange = false;   // set when the encoder has moved something since the last push
+uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect,3=toggleSpotifyEnabled,4=returnToMenu
+
+// `state`/pendingChange/pendingTapEvent are written from BOTH the main
+// loop() (encoder/touch handling) and the I2C slave callbacks (which the
+// ESP32 Arduino core runs outside loop()'s own context) — this spinlock
+// is the standard ESP32 idiom for a short critical section between the
+// two, guarding just the few lines that actually touch shared state, not
+// any LVGL/display work.
+portMUX_TYPE stateMux = portMUX_INITIALIZER_UNLOCKED;
 
 // ── Screen state machine ────────────────────────────────────────────────
 enum Screen { SCREEN_IDLE, SCREEN_CLOCK, SCREEN_MENU, SCREEN_THERMOSTAT, SCREEN_SOUND, SCREEN_STATUS };
@@ -218,59 +210,14 @@ const int MENU_ITEM_COUNT = 3; // Sound, Thermostat, Status
 int menuSelection = 0;         // cycled by rotating on SCREEN_MENU
 unsigned long lastInteractionAt = 0;
 
-// ── CRC8 (poly 0x07) — must match crc8() in rs485.js ──────────────────
-uint8_t crc8(const uint8_t* data, size_t len) {
-  uint8_t crc = 0;
-  for (size_t i = 0; i < len; i++) {
-    crc ^= data[i];
-    for (int b = 0; b < 8; b++) crc = (crc & 0x80) ? ((crc << 1) ^ 0x07) : (crc << 1);
-  }
-  return crc;
-}
-
-// RS485 module here is assumed auto-direction (no DE/RE GPIO to drive) —
-// same variant as documented in the wiring guide for the sensor nodes. If
-// the real module needs manual DE/RE, add that pin toggle around the
-// Serial2.write() calls below, mirroring rs485_node.ino's sendFrame().
-void sendFrame(uint8_t addr, uint8_t cmd, const uint8_t* payload, uint8_t len) {
-  uint8_t head[3] = { addr, cmd, len };
-  uint8_t crcInput[3 + 32];
-  memcpy(crcInput, head, 3);
-  if (len > 0) memcpy(crcInput + 3, payload, len);
-  uint8_t crc = crc8(crcInput, 3 + len);
-
-  Serial2.write(SYNC);
-  Serial2.write(head, 3);
-  if (len > 0) Serial2.write(payload, len);
-  Serial2.write(crc);
-  Serial2.flush();
-}
-
-void sendAnnounce() {
-  uint8_t payload[9];
-  memcpy(payload, uniqueId, 8);
-  payload[8] = 0x01; // capability bitmask — informational only, matches sensor nodes' convention
-  sendFrame(0x00, CMD_ANNOUNCE, payload, 9);
-}
-
-void sendDialState() {
-  uint8_t payload[8];
-  payload[0] = (currentScreen == SCREEN_SOUND) ? MODE_SOUND : MODE_THERMOSTAT;
-  memcpy(payload + 1, &state.targetF, 4);
-  payload[5] = pendingChange ? 1 : 0;
-  payload[6] = pendingTapEvent;
-  payload[7] = state.volumePercent;
-  sendFrame(busAddress, CMD_DIAL_STATE, payload, 8);
-  pendingChange = false;
-  pendingTapEvent = 0;
-}
-
-void applyPollDialPayload(const uint8_t* p, uint8_t len) {
-  if (len < 27) return;
-  // memcpy, not a pointer cast — `p` isn't guaranteed 4-byte aligned
-  // (it's a slice into rxBuf at a variable offset), and dereferencing an
-  // unaligned float* is undefined behavior even though Xtensa usually
-  // tolerates it in practice.
+// ── I2C slave: RP2040 push in, reply out ────────────────────────────────
+// Parses a push straight into `state` — no protocol translation, this is
+// the exact same 27B layout that used to arrive over RS485 directly.
+void applyPush(const uint8_t* p, uint8_t len) {
+  if (len < DIAL_PUSH_LEN) return;
+  // memcpy, not a pointer cast — `p` isn't guaranteed 4-byte aligned, and
+  // dereferencing an unaligned float* is undefined behavior even though
+  // Xtensa usually tolerates it in practice.
   memcpy(&state.targetF,  p + 0,  4);
   memcpy(&state.currentF, p + 4,  4);
   memcpy(&state.humidity, p + 8,  4);
@@ -290,91 +237,45 @@ void applyPollDialPayload(const uint8_t* p, uint8_t len) {
   state.maintenanceDueCount = p[26];
 }
 
-void loadAddressFromEEPROM() {
-  EEPROM.begin(EEPROM_SIZE);
-  busAddress = EEPROM.read(EEPROM_ADDR_BYTE);
-  if (busAddress == 0xFF) busAddress = 0x00;
+// Builds the reply from current state — called right after applyPush()
+// inside the same I2C callback, so it's always ready by the time the
+// RP2040 follows up with its read (see rs485_node.ino's bridgeDialPoll(),
+// which writes then immediately requests).
+uint8_t replyBuffer[DIAL_REPLY_LEN];
+void buildReply() {
+  replyBuffer[0] = (currentScreen == SCREEN_SOUND) ? MODE_SOUND : MODE_THERMOSTAT;
+  memcpy(replyBuffer + 1, &state.targetF, 4);
+  replyBuffer[5] = pendingChange ? 1 : 0;
+  replyBuffer[6] = pendingTapEvent;
+  replyBuffer[7] = state.volumePercent;
+  pendingChange = false;
+  pendingTapEvent = 0;
 }
 
-void saveAddressToEEPROM(uint8_t addr) {
-  busAddress = addr;
-  EEPROM.write(EEPROM_ADDR_BYTE, addr);
-  EEPROM.commit();
+// Runs in the Wire1 slave task's own context, not loop() — keep this
+// fast: just copy bytes and update state/build the reply. The actual
+// screen redraw is deferred to loop() via needsRedraw, since LVGL work is
+// too slow to do safely here.
+volatile bool needsRedraw = false;
+uint8_t i2cRxBuf[DIAL_PUSH_LEN];
+
+void onI2CReceive(int numBytes) {
+  uint8_t len = 0;
+  while (Wire1.available() && len < sizeof(i2cRxBuf)) i2cRxBuf[len++] = Wire1.read();
+  while (Wire1.available()) Wire1.read(); // drain anything past what we expected
+
+  portENTER_CRITICAL(&stateMux);
+  applyPush(i2cRxBuf, len);
+  buildReply();
+  portEXIT_CRITICAL(&stateMux);
+
+  needsRedraw = true;
 }
 
-// ── Receive + dispatch (identical framing logic to rs485_node.ino) ─────
-uint8_t rxBuf[64];
-uint8_t rxLen = 0;
-
-void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
-  if (cmd == CMD_ASSIGN && addr == 0x00 && len == 9) {
-    if (memcmp(payload, uniqueId, 8) == 0) {
-      saveAddressToEEPROM(payload[8]);
-      Serial.printf("[Dial] Assigned bus address %d\n", busAddress);
-    }
-    return;
-  }
-  if (busAddress == 0x00 || addr != busAddress) return;
-
-  if (cmd == CMD_POLL_DIAL) {
-    applyPollDialPayload(payload, len);
-    // Reply before redrawing — the master only waits
-    // DIAL_POLL_RESPONSE_TIMEOUT_MS (200ms) for this, and LVGL widget
-    // rebuild work shouldn't eat into that budget.
-    sendDialState();
-    refreshActiveScreen();
-  }
-}
-
-// Resync safety net — same fix, same reasoning, as rs485_node.ino's
-// pollSerial(); see that file's comment for the full explanation. Without
-// this, a single noise glitch permanently wedges this node's receiver
-// until power-cycled, indistinguishable from a dead node to the master.
-const uint8_t MAX_PAYLOAD_LEN = 32; // largest real payload today is POLL_DIAL's 27B
-const unsigned long FRAME_STALL_MS = 500;
-bool awaitingFrame = false;
-unsigned long awaitingFrameSince = 0;
-
-void pollSerial() {
-  while (Serial2.available()) {
-    if (rxLen < sizeof(rxBuf)) rxBuf[rxLen++] = Serial2.read();
-    else { rxLen = 0; awaitingFrame = false; }
-  }
-  if (rxLen < 4) { awaitingFrame = false; return; }
-
-  uint8_t start = 0;
-  while (start < rxLen && rxBuf[start] != SYNC) start++;
-  if (start > 0) { memmove(rxBuf, rxBuf + start, rxLen - start); rxLen -= start; }
-  if (rxLen < 4) { awaitingFrame = false; return; }
-
-  uint8_t len = rxBuf[3];
-  if (len > MAX_PAYLOAD_LEN) {
-    memmove(rxBuf, rxBuf + 1, rxLen - 1);
-    rxLen -= 1;
-    awaitingFrame = false;
-    return;
-  }
-
-  if (rxLen < (uint16_t)(4 + len + 1)) {
-    if (!awaitingFrame) { awaitingFrame = true; awaitingFrameSince = millis(); }
-    else if (millis() - awaitingFrameSince > FRAME_STALL_MS) {
-      memmove(rxBuf, rxBuf + 1, rxLen - 1);
-      rxLen -= 1;
-      awaitingFrame = false;
-    }
-    return;
-  }
-  awaitingFrame = false;
-
-  uint8_t addr = rxBuf[1], cmd = rxBuf[2];
-  uint8_t crc = crc8(rxBuf + 1, 3 + len);
-  uint8_t receivedCrc = rxBuf[4 + len];
-  uint8_t* payload = rxBuf + 4;
-  if (crc == receivedCrc) handleFrame(addr, cmd, payload, len);
-
-  uint8_t frameLen = 4 + len + 1;
-  memmove(rxBuf, rxBuf + frameLen, rxLen - frameLen);
-  rxLen -= frameLen;
+void onI2CRequest() {
+  portENTER_CRITICAL(&stateMux);
+  Wire1.write(replyBuffer, DIAL_REPLY_LEN);
+  portEXIT_CRITICAL(&stateMux);
 }
 
 // ── Rotary encoder — standard quadrature ISR decode ─────────────────────
@@ -391,8 +292,9 @@ void IRAM_ATTR onEncoderChange() {
 
 // Consumes accumulated encoder ticks since the last call and applies them
 // to whatever the current screen means by "rotate" — menu cycling, target
-// adjustment, or volume adjustment. Called from the main loop, not the ISR,
-// so it can safely touch LVGL/state. Unconditional regardless of
+// adjustment, or volume adjustment. Called from the main loop, not the
+// ISR, so it can safely touch LVGL/state (guarded against the I2C
+// callback with the same spinlock). Unconditional regardless of
 // faultCount/maintenanceDueCount — see this file's header on why this
 // dial never gates input on fault/maintenance state.
 void processEncoder() {
@@ -403,30 +305,35 @@ void processEncoder() {
   if (delta == 0) return;
 
   lastInteractionAt = millis();
+  portENTER_CRITICAL(&stateMux);
   switch (currentScreen) {
     case SCREEN_CLOCK:
       currentScreen = SCREEN_MENU;
-      showMenuScreen();
       break;
     case SCREEN_MENU:
       menuSelection = (menuSelection + (delta > 0 ? 1 : -1) + MENU_ITEM_COUNT) % MENU_ITEM_COUNT;
-      showMenuScreen();
       break;
     case SCREEN_THERMOSTAT: {
       float next = state.targetF + delta * TARGET_STEP_F;
       state.targetF = constrain(next, TARGET_MIN_F, TARGET_MAX_F);
       pendingChange = true;
-      showThermostatScreen();
       break;
     }
     case SCREEN_SOUND: {
       int next = state.volumePercent + delta * VOLUME_STEP;
       state.volumePercent = constrain(next, 0, 100);
       pendingChange = true;
-      showSoundScreen();
       break;
     }
     default: break; // STATUS screen is read-only, rotating there does nothing
+  }
+  portEXIT_CRITICAL(&stateMux);
+
+  switch (currentScreen) {
+    case SCREEN_MENU:        showMenuScreen();        break;
+    case SCREEN_THERMOSTAT:  showThermostatScreen();  break;
+    case SCREEN_SOUND:       showSoundScreen();       break;
+    default: break;
   }
 }
 
@@ -434,36 +341,44 @@ void processEncoder() {
 // LVGL_TOUCH_INIT() below feeds LVGL's own input device driver, which is
 // what actually detects taps for widgets on-screen. This handles the
 // things that aren't a normal LVGL widget tap: waking from IDLE,
-// confirming a MENU selection, and the Sound screen's Spotify toggle. The
+// confirming a MENU selection, and each screen's own tap action. The
 // PCF8574's encoder-button pin (checkEncoderButton()) also calls this, so
 // a physical press does the same thing a touchscreen tap does everywhere
 // in this UI — one gesture, two ways to trigger it.
 void onTap() {
   lastInteractionAt = millis();
+  portENTER_CRITICAL(&stateMux);
   if (currentScreen == SCREEN_IDLE) {
     currentScreen = SCREEN_CLOCK;
     pendingTapEvent = 1; // wake
-    showClockScreen();
   } else if (currentScreen == SCREEN_MENU) {
     pendingTapEvent = 2; // menuSelect
-    if (menuSelection == 0) { currentScreen = SCREEN_SOUND; showSoundScreen(); }
-    else if (menuSelection == 1) { currentScreen = SCREEN_THERMOSTAT; showThermostatScreen(); }
-    else { currentScreen = SCREEN_STATUS; showStatusScreen(); }
+    if (menuSelection == 0) currentScreen = SCREEN_SOUND;
+    else if (menuSelection == 1) currentScreen = SCREEN_THERMOSTAT;
+    else currentScreen = SCREEN_STATUS;
   } else if (currentScreen == SCREEN_SOUND) {
     // Tapping the Sound screen toggles this zone's Spotify enable gate —
     // strictly that, never the override inputs (see this file's header).
     // Flips the local copy immediately so the UI responds without waiting
-    // for a round trip; the next POLL_DIAL push's flags byte is
-    // authoritative and will correct it if the toggle is ever rejected
-    // server-side (e.g. no soundZoneId configured for this dial).
+    // for a round trip; the next push's flags byte is authoritative and
+    // will correct it if the toggle is ever rejected server-side.
     pendingTapEvent = 3; // toggleSpotifyEnabled
     state.spotifyEnabled = !state.spotifyEnabled;
-    showSoundScreen();
-  } else if (currentScreen == SCREEN_STATUS) {
-    // Read-only screen — a tap here just backs out to the menu rather
-    // than doing nothing, so it's not a dead end.
+  } else if (currentScreen == SCREEN_THERMOSTAT || currentScreen == SCREEN_STATUS) {
+    // Both are otherwise dead ends for a tap — send back to the menu
+    // rather than doing nothing, so every screen has a consistent way out.
+    pendingTapEvent = 4; // returnToMenu
     currentScreen = SCREEN_MENU;
-    showMenuScreen();
+  }
+  portEXIT_CRITICAL(&stateMux);
+
+  switch (currentScreen) {
+    case SCREEN_CLOCK:       showClockScreen();       break;
+    case SCREEN_MENU:        showMenuScreen();        break;
+    case SCREEN_SOUND:       showSoundScreen();       break;
+    case SCREEN_THERMOSTAT:  showThermostatScreen();  break;
+    case SCREEN_STATUS:      showStatusScreen();      break;
+    default: break;
   }
 }
 
@@ -800,7 +715,7 @@ void LVGL_TOUCH_INIT() {
   pcf8574.write(PCF_TOUCH_RESET, HIGH);
   delay(50);
 
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN); // Wire0 — internal only, unrelated to the RP2040 link
   touch.begin();
 
   lv_indev_drv_init(&indevDrv);
@@ -814,18 +729,10 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  Serial2.begin(RS485_BAUD, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN);
-
   pinMode(ENCODER_PIN_A, INPUT_PULLUP);
   pinMode(ENCODER_PIN_B, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_A), onEncoderChange, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_B), onEncoderChange, CHANGE);
-
-  uint64_t chipId = ESP.getEfuseMac();
-  memcpy(uniqueId, &chipId, 6);
-  uniqueId[6] = 0; uniqueId[7] = 0;
-
-  loadAddressFromEEPROM();
 
   LVGL_DISPLAY_INIT();
   LVGL_TOUCH_INIT(); // after LVGL_DISPLAY_INIT() — shares the PCF8574 it initializes
@@ -838,20 +745,28 @@ void setup() {
   screenStatus     = lv_obj_create(NULL);
   showIdleScreen();
 
+  buildReply(); // seeds replyBuffer before the RP2040's first request ever arrives
+
+  // Wire1, slave mode — the link to the paired RP2040 node. Deliberately
+  // separate from Wire0 above (touch/PCF8574) rather than sharing one bus
+  // in two roles.
+  Wire1.begin(DIAL_I2C_ADDR, DIAL_I2C_SDA_PIN, DIAL_I2C_SCL_PIN);
+  Wire1.onReceive(onI2CReceive);
+  Wire1.onRequest(onI2CRequest);
+
   lastInteractionAt = millis();
-  Serial.printf("[Dial] Boot complete. Address: %d\n", busAddress);
+  Serial.println("[Dial] Boot complete.");
 }
 
 // ── Main loop ────────────────────────────────────────────────────────
 void loop() {
   lv_timer_handler();
-  pollSerial();
   processEncoder();
   checkEncoderButton();
   checkIdleTimeout();
 
-  if (busAddress == 0x00 && millis() - lastAnnounce >= ANNOUNCE_INTERVAL_MS) {
-    lastAnnounce = millis();
-    sendAnnounce();
+  if (needsRedraw) {
+    needsRedraw = false;
+    refreshActiveScreen();
   }
 }

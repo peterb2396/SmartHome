@@ -14,6 +14,21 @@
  * master (rs485.js, connected via a USB-to-RS485 adapter on the Pi)
  * addresses each node individually.
  *
+ * ── I2C dial bridge (see HAS_DIAL below) ───────────────────────────
+ * This is the ONE mass-produced board — a wall dial (server/rs485-nodes/
+ * dial_node.ino, an ESP32 touch+rotary display) is NOT a separate RS485
+ * node; it's an I2C ACCESSORY hanging off THIS board, exactly like the
+ * BME680/SCD41 sensors are, sharing the same I2C0 bus (a 3rd device
+ * address alongside them, no separate bus needed) and the same 5V rail
+ * off this board's own LM2596. This board answers RS485 for BOTH roles on
+ * ONE bus address: CMD_POLL/CMD_REPORT for its own sensors (if HAS_SCD41/
+ * a BME680 are present) and CMD_POLL_DIAL/CMD_DIAL_STATE for the attached
+ * dial (if HAS_DIAL). See bridgeDialPoll() below — the bridge is a pure
+ * byte-for-byte relay between RS485 and I2C; this board never needs to
+ * understand the dial payload's structure, just shuttle it. The dial
+ * itself carries NO RS485 logic at all and doesn't need to know this bus
+ * exists — see that file's own header.
+ *
  * ── Hardware per node ────────────────────────────────────────────
  *   RP2040 board (e.g. Pico, Pico W used purely for its RP2040 — no
  *     Wi-Fi needed for this node type)
@@ -21,10 +36,14 @@
  *     pins tied together on most breakout boards, driven from one GPIO
  *   LM2596 buck converter — steps the bus's 24V feed down to 5V for the
  *     RP2040's VSYS input (RP2040 logic itself is 3.3V, regulated on-board)
+ *     — this same 5V rail also feeds an attached dial, if any
  *   Thermostat-zone nodes only: BME680 (temp/pressure/humidity/VOC) +
  *     SCD41 (CO2), both I2C
  *   Basement/attic monitor nodes: BME680 only, SCD41 omitted — set
  *     HAS_SCD41 to false below
+ *   Zones with a wall dial: set HAS_DIAL to true below — no extra RP2040
+ *     hardware needed beyond the existing I2C0 bus/5V rail already wired
+ *     for the sensors
  *
  * ── Libraries (Arduino Library Manager) ───────────────────────────
  *   Adafruit BME680 Library     by Adafruit
@@ -40,6 +59,10 @@
  *   RS485 module A/B                     → bus twisted pair (shared)
  *   BME680 SDA/SCL                       → RP2040 GPIO 4 / GPIO 5 (I2C0)
  *   SCD41  SDA/SCL                       → same I2C0 bus (if present)
+ *   Dial   SDA/SCL/GND/5V                → same I2C0 bus + same 5V rail as
+ *                                           the sensors (if present) — see
+ *                                           dial_node.ino's own wiring notes
+ *                                           for its side of this same link
  *   LM2596 OUT+ (5V)                     → RP2040 VSYS
  *   LM2596 OUT- / bus common             → RP2040 GND
  *
@@ -63,12 +86,36 @@
 // that the hard way — see git history. The library/object below now always
 // compile in; scd41 just never gets begin()'d or read when this is false.
 const bool HAS_SCD41 = true; // false for basement/attic monitor nodes
+const bool HAS_DIAL = true;  // false for zones with no wall dial attached
 
 const int RS485_DE_RE_PIN = 2;
 const unsigned long BAUD_RATE = 9600;
 const unsigned long ANNOUNCE_INTERVAL_MS = 5000;  // while unconfigured
 const unsigned long EEPROM_SIZE = 8;
 const int EEPROM_ADDR_BYTE = 0; // where the assigned bus address lives
+
+// Real production evidence (basement node, 2026-08-15 23:14): a perfectly
+// clean 30-byte REPORT arrived on one poll, then the NEXT poll got zero
+// bytes back — not garbled, not partial, total silence — for 12+ hours
+// straight, until power-cycled. That rules out the RS485 parser stall
+// fixed earlier (that bug always left some trace: a stray byte, a partial
+// frame). Total silence starting exactly one cycle after a flawless
+// exchange means loop() itself stopped running — and the only place
+// handleFrame() blocks after a clean receive is sendReport()'s
+// bme.performReading()/scd41.readMeasurement(), real I2C transactions
+// with no timeout. RP2040's I2C peripheral has a known failure mode where
+// a bus glitch (the same noise source that hits the RS485 line) makes a
+// transaction hang forever instead of erroring out — and once loop() is
+// stuck inside one, this node can never process another byte, from
+// anything, ever again. Rather than chase every possible blocking call,
+// a hardware watchdog is pet once per loop() iteration below; if
+// anything ever hangs longer than this, the chip force-reboots itself
+// instead of staying wedged until someone physically power-cycles it.
+// 8000 is close to arduino-pico's hardware ceiling (~8388ms, a 24-bit
+// counter) — plenty above one real loop() iteration (normally
+// microseconds), tight enough that a hang self-heals in one poll cycle
+// or two, not hours.
+const unsigned long WATCHDOG_TIMEOUT_MS = 8000;
 
 #include <SparkFun_SCD4x_Arduino_Library.h>
 SCD4x scd41;
@@ -82,9 +129,19 @@ const uint8_t SYNC = 0xAA;
 const uint8_t CMD_POLL = 0x01;
 const uint8_t CMD_ASSIGN = 0x02;
 const uint8_t CMD_SET_RELAY = 0x03;
+const uint8_t CMD_POLL_DIAL = 0x04;
 const uint8_t CMD_ANNOUNCE = 0x81;
 const uint8_t CMD_REPORT = 0x82;
 const uint8_t CMD_ACK = 0x83;
+const uint8_t CMD_DIAL_STATE = 0x84;
+
+// ── I2C dial bridge — see this file's header ──────────────────────
+// TBD: pick an address that doesn't collide with BME680 (0x76/0x77) or
+// SCD41 (0x62) on the same bus — 0x42 is a placeholder, confirm/change if
+// it conflicts with anything else you add to this bus later.
+const uint8_t DIAL_I2C_ADDR = 0x42;
+const uint8_t DIAL_PUSH_LEN = 27; // must match rs485.js's POLL_DIAL payload size
+const uint8_t DIAL_REPLY_LEN = 8; // must match rs485.js's DIAL_STATE payload size
 
 const uint8_t SENSOR_TEMPERATURE = 0x01;
 const uint8_t SENSOR_HUMIDITY = 0x02;
@@ -159,6 +216,37 @@ void sendReport() {
   }
 
   sendFrame(busAddress, CMD_REPORT, payload, offset);
+}
+
+// Relays a POLL_DIAL push straight through to the attached dial over I2C,
+// then relays its DIAL_STATE reply straight back over RS485 — a pure
+// byte-for-byte proxy, zero protocol translation. This board never parses
+// the payload; it doesn't need to know target temps from volume percents
+// from fault counts, it just moves DIAL_PUSH_LEN bytes one way and
+// DIAL_REPLY_LEN bytes back. If the I2C exchange fails or comes back
+// short, this simply doesn't reply over RS485 at all — indistinguishable
+// to the master from a dropped frame, and it'll just retry next sweep
+// (~20ms later), same as any other missed poll.
+void bridgeDialPoll(uint8_t* pushPayload, uint8_t pushLen) {
+  if (pushLen != DIAL_PUSH_LEN) return; // unexpected size — protocol mismatch, don't guess
+
+  Wire.beginTransmission(DIAL_I2C_ADDR);
+  Wire.write(pushPayload, pushLen);
+  uint8_t writeResult = Wire.endTransmission();
+  if (writeResult != 0) {
+    Serial.printf("[RS485 Node] Dial I2C write failed (code %d)\n", writeResult);
+    return;
+  }
+
+  uint8_t got = Wire.requestFrom(DIAL_I2C_ADDR, DIAL_REPLY_LEN);
+  if (got < DIAL_REPLY_LEN) {
+    Serial.printf("[RS485 Node] Dial I2C read short (%d/%d bytes)\n", got, DIAL_REPLY_LEN);
+    while (Wire.available()) Wire.read(); // drain whatever partial reply there was
+    return;
+  }
+  uint8_t reply[DIAL_REPLY_LEN];
+  for (uint8_t i = 0; i < DIAL_REPLY_LEN; i++) reply[i] = Wire.read();
+  sendFrame(busAddress, CMD_DIAL_STATE, reply, DIAL_REPLY_LEN);
 }
 
 // Rough baseline-relative heuristic, NOT a calibrated air-quality index —
@@ -268,6 +356,8 @@ void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
 
   if (cmd == CMD_POLL) {
     sendReport();
+  } else if (cmd == CMD_POLL_DIAL && HAS_DIAL) {
+    bridgeDialPoll(payload, len);
   } else if (cmd == CMD_SET_RELAY) {
     // No relay hardware on sensor nodes today — acknowledge so the master
     // doesn't retry, in case a future node type does carry one.
@@ -316,11 +406,14 @@ void setup() {
     }
   }
 
+  rp2040.wdt_begin(WATCHDOG_TIMEOUT_MS); // see WATCHDOG_TIMEOUT_MS's comment above
+
   Serial.printf("[RS485 Node] Boot complete. Address: %d\n", busAddress);
 }
 
 // ── Main loop ─────────────────────────────────────────────────────
 void loop() {
+  rp2040.wdt_reset(); // pet every iteration — an un-pet watchdog force-reboots the chip, see WATCHDOG_TIMEOUT_MS
   pollSerial();
 
   if (busAddress == 0x00 && millis() - lastAnnounce >= ANNOUNCE_INTERVAL_MS) {

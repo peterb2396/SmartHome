@@ -33,7 +33,7 @@ function getState() {
   };
 }
 
-async function configureNode(uniqueId, { name, kind, zoneId, soundZoneId, sensors }) {
+async function configureNode(uniqueId, { name, kind, zoneId, soundZoneId, hasDial, sensors }) {
   if (!uniqueId) throw new Error('uniqueId is required');
   if (!name || !name.trim()) throw new Error('name is required');
   const nodes = getSettings();
@@ -45,14 +45,25 @@ async function configureNode(uniqueId, { name, kind, zoneId, soundZoneId, sensor
   const node = {
     uniqueId,
     name: name.trim(),
+    // `kind` is this node's OWN sensor role — 'thermostat' (BME680+SCD41),
+    // 'monitor' (BME680 only), or 'other' (no sensors). `zoneAudio` is a
+    // separate, unrelated node type. `hasDial` is orthogonal to `kind` —
+    // a physical RP2040 board bridges to an attached ESP32 dial over I2C
+    // and answers BOTH POLL/REPORT (its own sensors, if any) and
+    // POLL_DIAL/DIAL_STATE (the dial) on the SAME bus address, per the
+    // "one mass-produced RP2040 board per thermostat, dial as an I2C
+    // accessory just like the sensors" design — see rs485.js's header.
+    // A dial with no sensors of its own (no thermostat zone nearby) is
+    // just kind='other' + hasDial=true, no separate "dial" kind needed.
     kind: kind || 'other',
     // `zoneId` is a thermostat zone; `soundZoneId` is a sound zone —
-    // separate id spaces (see sound.js's header comment for why). A
-    // `dial` node may use either or both; a `zoneAudio` node only ever
-    // uses `zoneId`, reused there to mean its (sound) zone rather than
-    // adding a third field for what's otherwise a single-purpose node.
+    // separate id spaces (see sound.js's header comment for why). Only
+    // relevant when hasDial is true; a `zoneAudio` node only ever uses
+    // `zoneId`, reused there to mean its (sound) zone rather than adding
+    // a third field for what's otherwise a single-purpose node.
     zoneId: zoneId || null,
     soundZoneId: soundZoneId || null,
+    hasDial: !!hasDial,
     sensors: Array.isArray(sensors) ? sensors : [],
     busAddress,
     configuredAt: existing?.configuredAt || new Date().toISOString(),

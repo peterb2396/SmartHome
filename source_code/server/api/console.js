@@ -2,7 +2,7 @@
  * Console Routes
  * ─────────────────────────────────────────────────────────────────
  * GET    /console/nodes                  — { configured, pending } RS485 node registry
- * POST   /console/nodes/:uniqueId/configure — { name, kind?, zoneId?, sensors? } name/set up a node
+ * POST   /console/nodes/:uniqueId/configure — { name, kind?, zoneId?, soundZoneId?, hasDial?, sensors? } name/set up a node
  * DELETE /console/nodes/:uniqueId        — remove a configured node
  * GET    /console/monitor-zones          — basement/attic read-only zone temps/humidity
  * GET    /console/gpio-map               — { pins, groups } reference pinout map
@@ -31,8 +31,8 @@ router.get('/console/nodes', (req, res) => {
 
 router.post('/console/nodes/:uniqueId/configure', async (req, res) => {
   try {
-    const { name, kind, zoneId, soundZoneId, sensors } = req.body;
-    await nodeRegistry.configureNode(req.params.uniqueId, { name, kind, zoneId, soundZoneId, sensors });
+    const { name, kind, zoneId, soundZoneId, hasDial, sensors } = req.body;
+    await nodeRegistry.configureNode(req.params.uniqueId, { name, kind, zoneId, soundZoneId, hasDial, sensors });
     res.json({ ok: true, state: nodeRegistry.getState() });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });

@@ -101,6 +101,16 @@ const unsigned long ANNOUNCE_INTERVAL_MS = 5000; // while unconfigured
 const unsigned long EEPROM_SIZE = 8;
 const int EEPROM_ADDR_BYTE = 0;
 
+// Same RP2040 + blocking-I2C shape as rs485_node.ino's PT2258 write path
+// (setChannelVolume() below) — see that file's WATCHDOG_TIMEOUT_MS comment
+// for the real production evidence that motivated this: an I2C bus glitch
+// can hang the RP2040's I2C peripheral forever instead of erroring out,
+// freezing loop() and making the node indistinguishable from dead until a
+// manual power cycle. Applying the identical fix here pre-emptively,
+// before this node type is deployed, rather than waiting to hit the same
+// wall live.
+const unsigned long WATCHDOG_TIMEOUT_MS = 8000;
+
 const int OVERRIDE1_DETECT_PIN       = 6;
 const int AUDIO_SELECT_LOCAL_PIN     = 7; // CD4066: routes override1 (TV) to the amp
 const int AUDIO_SELECT_SHARED_PIN    = 8; // CD4066: routes the shared Pi input to the amp
@@ -342,11 +352,14 @@ void setup() {
 
   loadAddressFromEEPROM();
 
+  rp2040.wdt_begin(WATCHDOG_TIMEOUT_MS); // see WATCHDOG_TIMEOUT_MS's comment above
+
   Serial.printf("[ZoneAudio] Boot complete. Address: %d\n", busAddress);
 }
 
 // ── Main loop ────────────────────────────────────────────────────────
 void loop() {
+  rp2040.wdt_reset(); // pet every iteration — an un-pet watchdog force-reboots the chip
   updateActiveSource(); // every iteration — the local decision never waits on the bus
   pollSerial();
 

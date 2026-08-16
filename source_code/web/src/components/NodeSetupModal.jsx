@@ -3,23 +3,31 @@ import { useState } from "react";
 const KIND_OPTIONS = [
   { value: "thermostat", label: "Thermostat zone (BME680 + SCD41)" },
   { value: "monitor",    label: "Monitor-only zone (temp + humidity)" },
-  { value: "dial",       label: "Wall dial (thermostat + sound control)" },
   { value: "zoneAudio",  label: "Zone audio hardware (speaker amp)" },
   { value: "other",      label: "Other" },
 ];
 
+// `kind` is a node's own sensor role — it no longer has a 'dial' value.
+// A wall dial is a separate ESP32 board bridged over I2C to one of these
+// RP2040 sensor nodes (see rs485_node.ino's header) and is represented
+// here by the independent `hasDial` flag, orthogonal to `kind`: a
+// thermostat/monitor node can also carry a dial (the common case — one
+// mass-produced board per room), or a dial can be paired with a
+// sensor-less node (kind='other', hasDial=true) pointed at a zone sensed
+// elsewhere, since multiple dials/nodes are allowed to share one zoneId.
+//
 // Thermostat zone and sound zone are separate id spaces (HVAC zoning
 // follows ductwork, audio zoning follows room-by-room speaker wiring —
-// see server/services/sound.js's header) — which zone picker(s) show
-// depends on the node kind: a dial can drive both, a zoneAudio node only
-// ever needs a sound zone (reusing the single zoneId field for it, same
-// as this modal already did before sound zones existed), a
-// thermostat/monitor node only ever needs a thermostat zone.
-function needsThermostatZone(kind) {
-  return kind === "thermostat" || kind === "monitor" || kind === "dial";
+// see server/services/sound.js's header). A dial always needs a
+// thermostat zone (its Thermostat screen has to show/adjust something)
+// and, separately, a sound zone for its Sound screen. `zoneAudio` nodes
+// are unrelated hardware (no dial, no sensors) that reuse the single
+// zoneId field to mean their sound zone, same as before this redesign.
+function needsThermostatZone(kind, hasDial) {
+  return kind === "thermostat" || kind === "monitor" || hasDial;
 }
-function needsSoundZone(kind) {
-  return kind === "dial" || kind === "zoneAudio";
+function needsSoundZone(hasDial) {
+  return hasDial;
 }
 
 // Naming/setup portal for a node discovered on the RS485 bus. Fully wired
@@ -27,16 +35,25 @@ function needsSoundZone(kind) {
 export default function NodeSetupModal({ node, zones, soundZones, onClose, onSave }) {
   const [name, setName] = useState(node.name || "");
   const [kind, setKind] = useState(node.kind || "thermostat");
+  const [hasDial, setHasDial] = useState(!!node.hasDial);
   const [zoneId, setZoneId] = useState(node.zoneId || "");
   const [soundZoneId, setSoundZoneId] = useState(node.soundZoneId || "");
+
+  const usesZoneIdAsSoundZone = kind === "zoneAudio";
+
+  function handleKindChange(nextKind) {
+    setKind(nextKind);
+    if (nextKind === "zoneAudio") setHasDial(false); // zoneAudio is separate amp hardware, never carries a dial
+  }
 
   function handleSave() {
     if (!name.trim()) return;
     onSave(node.uniqueId, {
       name: name.trim(),
       kind,
-      zoneId: needsThermostatZone(kind) || kind === "zoneAudio" ? (zoneId || null) : null,
-      soundZoneId: kind === "dial" ? (soundZoneId || null) : null,
+      hasDial,
+      zoneId: needsThermostatZone(kind, hasDial) || usesZoneIdAsSoundZone ? (zoneId || null) : null,
+      soundZoneId: needsSoundZone(hasDial) ? (soundZoneId || null) : null,
     });
     onClose();
   }
@@ -78,13 +95,20 @@ export default function NodeSetupModal({ node, zones, soundZones, onClose, onSav
 
           <div style={{ marginBottom: "1.25rem" }}>
             <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: 6 }}>Node type</label>
-            <select value={kind} onChange={e => setKind(e.target.value)} style={inputStyle}>
+            <select value={kind} onChange={e => handleKindChange(e.target.value)} style={inputStyle}>
               {KIND_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
 
-          {needsThermostatZone(kind) && zones?.length > 0 && (
-            <div style={{ marginBottom: needsSoundZone(kind) ? "1.25rem" : 0 }}>
+          {kind !== "zoneAudio" && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "1.25rem", cursor: "pointer" }}>
+              <input type="checkbox" checked={hasDial} onChange={e => setHasDial(e.target.checked)} style={{ width: 16, height: 16 }} />
+              <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>Has a wall dial attached (I2C)</span>
+            </label>
+          )}
+
+          {needsThermostatZone(kind, hasDial) && zones?.length > 0 && (
+            <div style={{ marginBottom: needsSoundZone(hasDial) ? "1.25rem" : 0 }}>
               <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: 6 }}>
                 Thermostat zone
               </label>
@@ -95,16 +119,24 @@ export default function NodeSetupModal({ node, zones, soundZones, onClose, onSav
             </div>
           )}
 
-          {needsSoundZone(kind) && soundZones?.length > 0 && (
+          {usesZoneIdAsSoundZone && soundZones?.length > 0 && (
             <div>
               <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: 6 }}>
                 Sound zone
               </label>
-              <select
-                value={kind === "zoneAudio" ? zoneId : soundZoneId}
-                onChange={e => (kind === "zoneAudio" ? setZoneId : setSoundZoneId)(e.target.value)}
-                style={inputStyle}
-              >
+              <select value={zoneId} onChange={e => setZoneId(e.target.value)} style={inputStyle}>
+                <option value="">— None —</option>
+                {soundZones.map(z => <option key={z.id} value={z.id}>{z.label}</option>)}
+              </select>
+            </div>
+          )}
+
+          {needsSoundZone(hasDial) && soundZones?.length > 0 && (
+            <div>
+              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: 6 }}>
+                Sound zone (dial's Sound screen)
+              </label>
+              <select value={soundZoneId} onChange={e => setSoundZoneId(e.target.value)} style={inputStyle}>
                 <option value="">— None —</option>
                 {soundZones.map(z => <option key={z.id} value={z.id}>{z.label}</option>)}
               </select>
