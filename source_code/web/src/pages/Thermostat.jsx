@@ -17,7 +17,7 @@ const SHOW_MONITOR_ZONES_KEY = "thermostat.showMonitorZones";
 export default function Thermostat() {
   const {
     state, loading, error, offline,
-    setTarget, toggleZone, saveSchedule, setBalance, setMode, setAvailability, setRates, setSeasonThreshold, refetch,
+    setTarget, toggleZone, saveSchedule, setBalance, setMode, setAvailability, setRates, refetch,
   } = useThermostat();
   const boiler = useBoiler();
   const { zones: monitorZones } = useMonitorZones();
@@ -73,22 +73,23 @@ export default function Thermostat() {
     );
   }
 
-  // Which zone layout is actually live right now (see thermostat.js's
+  // Which plant is actually live right now (see thermostat.js's
   // getActiveSystem()) — gas mode + cold-enough weather hands control to
-  // the boiler's 3 zones; otherwise the air handler's 4 zones are shown.
+  // the boiler; otherwise the air handler is shown. Both plants serve the
+  // same 4 zones (Primary Suite / Upstairs / Downstairs / Office), so this
+  // just picks which one's cards to render, not which zones exist.
   const is3Zone = state.activeSystem === "3zone";
   const zonesToShow = is3Zone ? (boiler.state?.zones ?? []) : state.zones;
   const zoneStep = is3Zone ? boiler.setTarget : setTarget;
   const zoneToggle = is3Zone ? boiler.toggleZone : toggleZone;
 
-  // Air-handler zones with no boiler equivalent (e.g. Primary Suite, Office
-  // today) go fully idle while the boiler's 3-zone layout is active — the
-  // boiler can't serve or cool them at all, they just vanish from
-  // zonesToShow above. Rather than hardcoding which zones those are,
-  // derive it from the actual id overlap between the two systems: once
-  // boiler.js's zone list is unified with the air handler's (matching ids
-  // for all 4), this list naturally becomes empty and every zone just
-  // resumes showing normally via zonesToShow — no other change needed here.
+  // Air-handler zones with no boiler equivalent would go fully idle while
+  // the boiler is active (the boiler can't serve or cool them at all) —
+  // derived from the actual id overlap between the two systems rather than
+  // hardcoded names. Now that boiler.js's zone list is unified with the air
+  // handler's (matching ids for all 4 — see boiler.js's header), this is
+  // always empty in practice; kept id-driven rather than removed so it
+  // still does the right thing if the two ever diverge again.
   const boilerZoneIds = new Set((boiler.state?.zones ?? []).map(z => z.id));
   const orphanedZones = is3Zone ? state.zones.filter(z => !boilerZoneIds.has(z.id)) : [];
 
@@ -135,9 +136,10 @@ export default function Thermostat() {
           padding: "0.65rem 1rem", color: "#9a3412", fontSize: "0.85rem", fontWeight: 600,
         }}>
           <FaFire />
-          Gas boiler heating season — Great Room / Downstairs / Upstairs are being served by the
-          boiler below. The air handler (and any cooling) is fully idle until gas mode is deselected
-          or it warms back up above the season threshold (set in Settings, the gear icon above).
+          Gas boiler heating season — Primary Suite / Upstairs / Downstairs / Office are being
+          served by the boiler below. The air handler (and any cooling) is fully idle until gas
+          mode is deselected or it warms back up above the season threshold (set in Settings, the
+          gear icon above).
         </div>
       )}
 
@@ -226,8 +228,6 @@ export default function Thermostat() {
       {showRates && (
         <RatesModal
           rates={state.rates}
-          gasSeasonThresholdF={state.gasSeasonThresholdF}
-          onSaveThreshold={setSeasonThreshold}
           onClose={() => setShowRates(false)}
           onSave={setRates}
         />

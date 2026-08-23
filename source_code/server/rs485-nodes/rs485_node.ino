@@ -92,6 +92,21 @@
  * etc.) shows up in the Console's log Terminal panel with no USB cable,
  * tagged by node name. Slow/round-robin on the master's side — debug
  * convenience riding along on production bus time, not control traffic.
+ *
+ * ── Health diagnostics (bench-only, Serial Monitor) ────────────────
+ * printDiagnostics() dumps this node's own view of its health — uptime,
+ * poll/report counts, CRC/resync/frame-stall counters, per-sensor I2C
+ * failure streaks and read timings, free heap, loop-iteration gap, and
+ * boot/watchdog-reboot counts — straight to Serial every single report
+ * cycle (see sendReport()), deliberately NOT relayed through GET_LOG (see
+ * diagPrint()'s comment on why). The point: when this node eventually goes
+ * silent again, whatever's left on a connected Serial Monitor's scrollback
+ * is the evidence — what its own counters looked like right up to the
+ * last line it ever printed. logBootDiagnostics() (setup()) additionally
+ * tells you, on every boot, whether THIS boot was caused by the watchdog
+ * catching a real hang (see WATCHDOG_TIMEOUT_MS's comment below) — that
+ * IS relayed via GET_LOG too, since a reboot is rare/important enough to
+ * be worth seeing from the Console with no USB cable.
  */
 
 #include <Wire.h>
@@ -101,6 +116,7 @@
 #include <Adafruit_Sensor.h>
 #include "Adafruit_BME680.h"
 #include "pico/unique_id.h"
+#include "hardware/watchdog.h" // watchdog_caused_reboot() — see the boot diagnostics in setup()
 
 // ── Config — edit if your wiring differs ──────────────────────────
 // A runtime bool, deliberately NOT gated behind #if — HAS_SCD41 is a real
@@ -116,7 +132,16 @@ const int RS485_DE_RE_PIN = 2;
 const unsigned long BAUD_RATE = 9600;
 const unsigned long ANNOUNCE_INTERVAL_MS = 5000;  // while unconfigured
 const unsigned long EEPROM_SIZE = 8;
-const int EEPROM_ADDR_BYTE = 0; // where the assigned bus address lives
+const int EEPROM_ADDR_BYTE = 0;      // where the assigned bus address lives
+const int EEPROM_BOOT_COUNT_BYTE = 1;      // wraps at 255 — see logBootDiagnostics()
+const int EEPROM_WDT_REBOOT_COUNT_BYTE = 2; // wraps at 255 — count of boots caused by the watchdog specifically
+
+// Explicit, matching this file's wiring doc (I2C0) — Serial1's TX/RX get
+// the same explicit treatment below via setTX()/setRX(); this used to rely
+// on the core's implicit Wire defaults, which happen to be the same pins
+// but weren't stated anywhere in code, only in the header comment.
+const int I2C_SDA_PIN = 4;
+const int I2C_SCL_PIN = 5;
 
 // Real production evidence (basement node, 2026-08-15 23:14): a perfectly
 // clean 30-byte REPORT arrived on one poll, then the NEXT poll got zero
@@ -139,6 +164,26 @@ const int EEPROM_ADDR_BYTE = 0; // where the assigned bus address lives
 // counter) — plenty above one real loop() iteration (normally
 // microseconds), tight enough that a hang self-heals in one poll cycle
 // or two, not hours.
+//
+// Still happening after that fix shipped, per direct report — which means
+// either (a) it's not actually fixed on the hardware that's failing (the
+// watchdog only helps if this exact build is what's flashed), or (b) the
+// watchdog IS firing and rebooting, but something about re-announcing/
+// re-syncing after a reboot isn't landing cleanly from the server's point
+// of view, or (c) this is a genuinely different failure mode than the one
+// diagnosed above. logBootDiagnostics()/printDiagnostics() below exist to
+// tell these apart from Serial Monitor output alone: watchdog_caused_reboot()
+// plus a persisted boot counter (EEPROM, survives power loss, unlike the
+// watchdog's own scratch registers which only survive a watchdog reset)
+// answer (a)/(b) directly — if the boot count is climbing across an outage,
+// it's rebooting and NOT recovering cleanly; if it's flat, the chip itself
+// is the one still stuck (the watchdog isn't triggering at all, meaning
+// this isn't the I2C-hang theory, or this old build is still on there).
+// I2C read timing/failure counters below narrow down (c) if neither of the
+// above match. i2cBusRecovery() is a bounded, safe best-effort mitigation
+// for the "reads are failing/slow but not fully wedged yet" case — it
+// cannot help a hang already in progress inside a blocking call, only the
+// watchdog reboot can recover from that.
 const unsigned long WATCHDOG_TIMEOUT_MS = 8000;
 
 #include <SparkFun_SCD4x_Arduino_Library.h>
@@ -183,6 +228,32 @@ uint8_t busAddress = 0x00; // 0x00 = unconfigured
 uint8_t uniqueId[8];
 unsigned long lastAnnounce = 0;
 float gasBaselineOhms = 0; // learned on first few readings, for the VOC heuristic
+
+// ── Diagnostics — printed every report cycle by printDiagnostics(), see
+// sendReport(). All counters are since-boot (RAM only, except the two
+// EEPROM-persisted ones set once in setup()) — the point isn't a perfect
+// audit trail, it's "what does this node's own view of its health look
+// like right up to the moment it stops talking," readable straight off a
+// Serial Monitor scrollback with no server-side correlation needed.
+uint8_t bootCount = 0;           // persisted — see logBootDiagnostics()
+uint8_t watchdogRebootCount = 0; // persisted — see logBootDiagnostics()
+bool lastRebootWasWatchdog = false;
+
+unsigned long pollsReceived = 0;      // CMD_POLL frames addressed to us
+unsigned long reportsSent = 0;        // successful sendReport() calls
+unsigned long crcFailures = 0;        // frames with a bad checksum (pollSerial())
+unsigned long resyncDrops = 0;        // bytes dropped while resyncing on SYNC (pollSerial())
+unsigned long frameStalls = 0;        // partial frames abandoned after FRAME_STALL_MS
+unsigned long bmeFailTotal = 0, bmeFailStreak = 0;
+unsigned long scd41FailTotal = 0, scd41FailStreak = 0;
+unsigned long dialI2cFailTotal = 0;
+unsigned long i2cRecoveries = 0;      // see i2cBusRecovery()
+unsigned long lastBmeReadMs = 0;      // duration of the most recent bme.performReading() call
+unsigned long lastScd41ReadMs = 0;    // duration of the most recent scd41.readMeasurement() call
+unsigned long maxLoopGapMs = 0;       // longest gap ever seen between two loop() iterations — see loop()
+unsigned long lastLoopAt = 0;
+unsigned long lastPollAt = 0;         // millis() of the last CMD_POLL received, addressed to us
+unsigned long lastPollGapMs = 0;      // elapsed time between the two most recent polls — see handleFrame()
 
 // ── CRC8 (poly 0x07) — must match crc8() in rs485.js ──────────────
 uint8_t crc8(const uint8_t* data, size_t len) {
@@ -230,6 +301,25 @@ bool popLogLine(char* out) {
   return true;
 }
 
+// Serial-only, deliberately NOT routed through logLine()'s ring buffer.
+// printDiagnostics() below calls this several times every single report
+// cycle (once per ~10s poll) — through logLine() that would flood the
+// 8-line GET_LOG ring buffer (drained at ~1 line/3s over RS485, see this
+// file's header) and crowd out the actually-rare, actually-important
+// events (sensor failures, CRC mismatches, bus recovery attempts) that
+// GET_LOG exists to surface to the Console with no USB cable. This is for
+// the bench: a live Serial Monitor connection, exactly what this feature
+// was asked for — a full trail of the node's own health right up to the
+// last line it ever managed to print before going silent.
+void diagPrint(const char* fmt, ...) {
+  char formatted[110];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(formatted, sizeof(formatted), fmt, args);
+  va_end(args);
+  Serial.println(formatted);
+}
+
 // ── Half-duplex send: assert DE/RE, write, wait for the line to clear ─
 void sendFrame(uint8_t addr, uint8_t cmd, const uint8_t* payload, uint8_t len) {
   uint8_t head[3] = { addr, cmd, len };
@@ -262,24 +352,103 @@ void appendReading(uint8_t* payload, uint8_t& offset, uint8_t type, float value)
   offset += 4;
 }
 
+// Manual SCL/SDA toggling to release a slave stuck holding the I2C bus low
+// mid-transaction — the standard software recovery: up to 9 clock pulses
+// (enough for a slave to finish clocking out whatever byte it's stuck on
+// and release SDA), then a manually-issued STOP condition. No true
+// open-drain pinMode needed — SCL/SDA are only ever actively driven LOW;
+// "high" is just releasing the pin to INPUT_PULLUP and letting the bus's
+// own (required) pull-up resistors do the rest, same as real I2C hardware
+// behavior. This can only help the "reads are failing/erroring but the
+// call still RETURNS" case (see sendReport()'s failure-streak trigger) —
+// it cannot rescue a call that's already blocked forever inside the Wire
+// library, only the hardware watchdog can recover from that. Logged
+// unconditionally either way — how often this fires is itself useful
+// evidence for diagnosing the root cause.
+void i2cSetSCL(bool high) {
+  if (high) pinMode(I2C_SCL_PIN, INPUT_PULLUP);
+  else { pinMode(I2C_SCL_PIN, OUTPUT); digitalWrite(I2C_SCL_PIN, LOW); }
+}
+void i2cSetSDA(bool high) {
+  if (high) pinMode(I2C_SDA_PIN, INPUT_PULLUP);
+  else { pinMode(I2C_SDA_PIN, OUTPUT); digitalWrite(I2C_SDA_PIN, LOW); }
+}
+void i2cBusRecovery() {
+  i2cRecoveries++;
+  logLine("[RS485 Node] I2C bus recovery attempt #%lu starting...", i2cRecoveries);
+  Wire.end();
+  i2cSetSDA(true);
+  i2cSetSCL(true);
+  delayMicroseconds(10);
+
+  int pulses = 0;
+  while (pulses < 9 && digitalRead(I2C_SDA_PIN) == LOW) {
+    i2cSetSCL(false);
+    delayMicroseconds(5);
+    i2cSetSCL(true);
+    delayMicroseconds(5);
+    pulses++;
+  }
+
+  // Manual STOP: SDA low->high while SCL is high.
+  i2cSetSDA(false);
+  delayMicroseconds(5);
+  i2cSetSCL(true);
+  delayMicroseconds(5);
+  i2cSetSDA(true);
+  delayMicroseconds(5);
+
+  Wire.setSDA(I2C_SDA_PIN);
+  Wire.setSCL(I2C_SCL_PIN);
+  Wire.begin();
+  logLine("[RS485 Node] I2C bus recovery #%lu done (%d clock pulses, SDA %s after)", i2cRecoveries, pulses, digitalRead(I2C_SDA_PIN) == HIGH ? "released" : "STILL STUCK LOW");
+}
+
+// Consecutive I2C read failures (a real NACK/error return, NOT a full hang
+// — see this file's header on why a genuine hang can't reach this code at
+// all) before attempting a bus recovery. Low enough to react to a real
+// pattern quickly, high enough that one-off noise doesn't reset the bus
+// for no reason.
+const unsigned long I2C_FAIL_RECOVERY_THRESHOLD = 3;
+
 void sendReport() {
   uint8_t payload[5 * 5]; // up to 5 readings
   uint8_t offset = 0;
 
-  if (bmeReady && bme.performReading()) {
+  unsigned long bmeStart = millis();
+  bool bmeOk = bmeReady && bme.performReading();
+  lastBmeReadMs = millis() - bmeStart;
+  if (bmeOk) {
+    bmeFailStreak = 0;
     appendReading(payload, offset, SENSOR_TEMPERATURE, bme.temperature * 9.0 / 5.0 + 32.0);
     appendReading(payload, offset, SENSOR_HUMIDITY, bme.humidity);
     appendReading(payload, offset, SENSOR_PRESSURE, bme.pressure / 100.0);
     appendReading(payload, offset, SENSOR_VOC, vocHeuristic(bme.gas_resistance));
-  } else {
-    logLine("[RS485 Node] BME680 read failed, skipping this report's readings.");
+  } else if (bmeReady) {
+    bmeFailTotal++;
+    bmeFailStreak++;
+    logLine("[RS485 Node] BME680 read failed (%lums, streak %lu, total %lu), skipping this report's readings.", lastBmeReadMs, bmeFailStreak, bmeFailTotal);
+    if (bmeFailStreak >= I2C_FAIL_RECOVERY_THRESHOLD) i2cBusRecovery();
   }
 
-  if (HAS_SCD41 && scd41Ready && scd41.readMeasurement()) {
-    appendReading(payload, offset, SENSOR_CO2, (float)scd41.getCO2());
+  if (HAS_SCD41 && scd41Ready) {
+    unsigned long scdStart = millis();
+    bool scdOk = scd41.readMeasurement();
+    lastScd41ReadMs = millis() - scdStart;
+    if (scdOk) {
+      scd41FailStreak = 0;
+      appendReading(payload, offset, SENSOR_CO2, (float)scd41.getCO2());
+    } else {
+      scd41FailTotal++;
+      scd41FailStreak++;
+      logLine("[RS485 Node] SCD41 read failed (%lums, streak %lu, total %lu).", lastScd41ReadMs, scd41FailStreak, scd41FailTotal);
+      if (scd41FailStreak >= I2C_FAIL_RECOVERY_THRESHOLD) i2cBusRecovery();
+    }
   }
 
   sendFrame(busAddress, CMD_REPORT, payload, offset);
+  reportsSent++;
+  printDiagnostics();
 }
 
 // Relays a POLL_DIAL push straight through to the attached dial over I2C,
@@ -298,14 +467,18 @@ void bridgeDialPoll(uint8_t* pushPayload, uint8_t pushLen) {
   Wire.write(pushPayload, pushLen);
   uint8_t writeResult = Wire.endTransmission();
   if (writeResult != 0) {
-    logLine("[RS485 Node] Dial I2C write failed (code %d)", writeResult);
+    dialI2cFailTotal++;
+    logLine("[RS485 Node] Dial I2C write failed (code %d, total failures %lu)", writeResult, dialI2cFailTotal);
+    if (dialI2cFailTotal % I2C_FAIL_RECOVERY_THRESHOLD == 0) i2cBusRecovery();
     return;
   }
 
   uint8_t got = Wire.requestFrom(DIAL_I2C_ADDR, DIAL_REPLY_LEN);
   if (got < DIAL_REPLY_LEN) {
-    logLine("[RS485 Node] Dial I2C read short (%d/%d bytes)", got, DIAL_REPLY_LEN);
+    dialI2cFailTotal++;
+    logLine("[RS485 Node] Dial I2C read short (%d/%d bytes, total failures %lu)", got, DIAL_REPLY_LEN, dialI2cFailTotal);
     while (Wire.available()) Wire.read(); // drain whatever partial reply there was
+    if (dialI2cFailTotal % I2C_FAIL_RECOVERY_THRESHOLD == 0) i2cBusRecovery();
     return;
   }
   uint8_t reply[DIAL_REPLY_LEN];
@@ -382,6 +555,7 @@ void pollSerial() {
     memmove(rxBuf, rxBuf + 1, rxLen - 1); // not a real header — drop just the sync byte, resync next call
     rxLen -= 1;
     awaitingFrame = false;
+    resyncDrops++;
     return;
   }
 
@@ -391,6 +565,8 @@ void pollSerial() {
       memmove(rxBuf, rxBuf + 1, rxLen - 1);
       rxLen -= 1;
       awaitingFrame = false;
+      frameStalls++;
+      logLine("[RS485 Node] Frame stall — dropped 1 byte to resync (stall #%lu)", frameStalls);
     }
     return;
   }
@@ -401,7 +577,12 @@ void pollSerial() {
   uint8_t receivedCrc = rxBuf[4 + len];
   uint8_t* payload = rxBuf + 4;
 
-  if (crc == receivedCrc) handleFrame(addr, cmd, payload, len);
+  if (crc == receivedCrc) {
+    handleFrame(addr, cmd, payload, len);
+  } else {
+    crcFailures++;
+    logLine("[RS485 Node] CRC mismatch (got %02X expected %02X, cmd=%02X len=%d) — dropped (failure #%lu)", receivedCrc, crc, cmd, len, crcFailures);
+  }
 
   uint8_t frameLen = 4 + len + 1;
   memmove(rxBuf, rxBuf + frameLen, rxLen - frameLen);
@@ -515,6 +696,10 @@ void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
   if (busAddress == 0x00 || addr != busAddress) return; // not for us
 
   if (cmd == CMD_POLL) {
+    unsigned long now = millis();
+    if (lastPollAt != 0) lastPollGapMs = now - lastPollAt; // "how long since the poll before this one" — printDiagnostics() runs synchronously right after this, so "time since last poll" would always read ~0; the GAP between polls is the useful signal
+    lastPollAt = now;
+    pollsReceived++;
     sendReport();
   } else if (cmd == CMD_POLL_DIAL && HAS_DIAL) {
     bridgeDialPoll(payload, len);
@@ -533,6 +718,61 @@ void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
   }
 }
 
+// ── Diagnostics ──────────────────────────────────────────────────
+// Called once from setup(), right after loadAddressFromEEPROM() (which has
+// already done EEPROM.begin()). Answers the two questions that matter most
+// when this node's been reported dead: did it actually reboot (and how
+// many times total, across power cycles — bootCount survives power loss,
+// unlike the watchdog peripheral's own scratch registers, which only
+// survive a watchdog-triggered reset specifically), and was THIS boot
+// caused by the watchdog catching a hang. Relayed via logLine() (not just
+// Serial) since a reboot is rare/important enough to be worth surfacing on
+// the Console with no USB cable, same reasoning as every other logLine()
+// call in this file.
+void logBootDiagnostics() {
+  bootCount = EEPROM.read(EEPROM_BOOT_COUNT_BYTE);
+  if (bootCount == 0xFF) bootCount = 0; // erased flash reads as 0xFF
+  bootCount++;
+  EEPROM.write(EEPROM_BOOT_COUNT_BYTE, bootCount);
+
+  watchdogRebootCount = EEPROM.read(EEPROM_WDT_REBOOT_COUNT_BYTE);
+  if (watchdogRebootCount == 0xFF) watchdogRebootCount = 0;
+  lastRebootWasWatchdog = watchdog_caused_reboot();
+  if (lastRebootWasWatchdog) {
+    watchdogRebootCount++;
+    EEPROM.write(EEPROM_WDT_REBOOT_COUNT_BYTE, watchdogRebootCount);
+  }
+  EEPROM.commit();
+
+  logLine("[RS485 Node] ==== BOOT #%u (lifetime, survives power loss) ====", bootCount);
+  logLine("[RS485 Node] Reset cause: %s", lastRebootWasWatchdog ? "WATCHDOG (this node was HUNG)" : "power-on / manual / other");
+  logLine("[RS485 Node] Watchdog-caused reboots so far: %u of %u total boots", watchdogRebootCount, bootCount);
+}
+
+// The per-report-cycle dump this whole feature was asked for — see
+// diagPrint()'s comment on why this is Serial-only, not relayed. Grouped
+// into a few lines rather than one giant one so a narrow terminal window
+// doesn't wrap it into an unreadable mess; grep-friendly "diag:" prefix on
+// every line either way.
+void printDiagnostics() {
+  unsigned long uptimeS = millis() / 1000;
+  // NOT "time since last poll" — this prints synchronously right after a
+  // poll arrives, so that would always read ~0. This is the GAP between
+  // the two most recent polls instead — a drift upward here (should hold
+  // steady around POLL_INTERVAL_MS's 10000ms from rs485.js) means polling
+  // itself is getting irregular before anything goes fully silent.
+  diagPrint("[RS485 Node] diag: up=%lus addr=%d polls=%lu reports=%lu lastPollGapMs=%lu",
+    uptimeS, busAddress, pollsReceived, reportsSent, lastPollGapMs);
+  diagPrint("[RS485 Node] diag: freeHeap=%lu totalHeap=%lu crcFail=%lu resyncDrops=%lu frameStalls=%lu",
+    (unsigned long)rp2040.getFreeHeap(), (unsigned long)rp2040.getTotalHeap(), crcFailures, resyncDrops, frameStalls);
+  diagPrint("[RS485 Node] diag: bme(ready=%d fail=%lu streak=%lu lastReadMs=%lu) scd41(ready=%d fail=%lu streak=%lu lastReadMs=%lu)",
+    bmeReady, bmeFailTotal, bmeFailStreak, lastBmeReadMs, scd41Ready, scd41FailTotal, scd41FailStreak, lastScd41ReadMs);
+  diagPrint("[RS485 Node] diag: hasDial=%d dialI2cFail=%lu i2cRecoveries=%lu maxLoopGapMs=%lu",
+    HAS_DIAL, dialI2cFailTotal, i2cRecoveries, maxLoopGapMs);
+  diagPrint("[RS485 Node] diag: bootCount=%u watchdogReboots=%u lastRebootWasWatchdog=%d",
+    bootCount, watchdogRebootCount, lastRebootWasWatchdog);
+}
+
 // ── Setup ─────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
@@ -549,7 +789,10 @@ void setup() {
   memcpy(uniqueId, idOut.id, 8);
 
   loadAddressFromEEPROM();
+  logBootDiagnostics();
 
+  Wire.setSDA(I2C_SDA_PIN);
+  Wire.setSCL(I2C_SCL_PIN);
   Wire.begin();
   bmeReady = bme.begin();
   if (bmeReady) {
@@ -582,6 +825,19 @@ void setup() {
 // ── Main loop ─────────────────────────────────────────────────────
 void loop() {
   rp2040.wdt_reset(); // pet every iteration — an un-pet watchdog force-reboots the chip, see WATCHDOG_TIMEOUT_MS
+
+  // Tracks the longest gap this node has ever seen between two loop()
+  // iterations — a slow creep upward here (visible in printDiagnostics())
+  // would mean something's getting SLOWER, not just occasionally hanging
+  // outright, which the watchdog alone wouldn't show any evidence of since
+  // it only ever fires on a full 8s+ stall, not a partial slowdown.
+  unsigned long now = millis();
+  if (lastLoopAt != 0) {
+    unsigned long gap = now - lastLoopAt;
+    if (gap > maxLoopGapMs) maxLoopGapMs = gap;
+  }
+  lastLoopAt = now;
+
   pollSerial();
 
   if (busAddress == 0x00 && millis() - lastAnnounce >= ANNOUNCE_INTERVAL_MS) {

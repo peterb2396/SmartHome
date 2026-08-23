@@ -4,12 +4,12 @@ import { getBoiler, setBoilerZone, setBoilerZoneSchedule } from "../api";
 const POLL_MS = 15000;
 const PAUSE_MS = 2000;
 
-// The separate 3-zone gas boiler system — Great Room / Downstairs /
-// Upstairs, a distinct zone layout from the air handler's 4 zones (see
-// thermostat.js's getActiveSystem()). Deliberately simpler than
-// useThermostat.js: no offline localStorage fallback, since this is
-// secondary system state the Thermostat page only renders while it's
-// actually the active system.
+// The separate gas boiler system — a distinct hydronic plant, but serving
+// the same 4 zones as the air handler (Primary Suite / Upstairs /
+// Downstairs / Office — see thermostat.js's getActiveSystem()).
+// Deliberately simpler than useThermostat.js: no offline localStorage
+// fallback, since this is secondary system state the Thermostat page only
+// renders while it's actually the active system.
 export function useBoiler() {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);

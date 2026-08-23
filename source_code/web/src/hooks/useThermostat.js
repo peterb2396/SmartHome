@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getThermostat, setThermostatZone, setZoneSchedule as apiSetZoneSchedule, setZoneBalance as apiSetZoneBalance,
-  setThermostatMode, setThermostatRates, setThermostatAvailability, setGasSeasonThreshold as apiSetGasSeasonThreshold,
+  setThermostatMode, setThermostatRates, setThermostatAvailability,
 } from "../api";
 
 const POLL_MS = 15000;
@@ -25,7 +25,7 @@ const FALLBACK_PRIORITY = ["gas", "air", "electric"];
 
 function defaultState() {
   return {
-    mode: "auto", activeSource: "gas", activeSystem: "4zone", gasSeasonThresholdF: 50, lastDecision: null,
+    mode: "auto", activeSource: "gas", activeSystem: "4zone", lastDecision: null,
     rates: { gasPricePerTherm: 1.5, elecPricePerKwh: 0.15, gasAfue: 0.85 },
     available: { gas: true, electric: true, air: true },
     safetyRange: { min: 60, max: 75 },
@@ -166,11 +166,6 @@ export function useThermostat() {
     () => apiSetZoneBalance(zoneId, balancePercent)
   ), [runMutation]);
 
-  const setSeasonThreshold = useCallback((gasSeasonThresholdF) => runMutation(
-    prev => prev && { ...prev, gasSeasonThresholdF },
-    () => apiSetGasSeasonThreshold(gasSeasonThresholdF)
-  ), [runMutation]);
-
   const setMode = useCallback((mode) => runMutation(
     prev => {
       if (!prev) return prev;
@@ -211,7 +206,7 @@ export function useThermostat() {
 
   return {
     state, loading, error, offline,
-    setTarget, toggleZone, saveSchedule, setBalance, setMode, setRates, setAvailability, setSeasonThreshold,
+    setTarget, toggleZone, saveSchedule, setBalance, setMode, setRates, setAvailability,
     refetch: fetchState,
   };
 }

@@ -50,9 +50,8 @@ export const setZoneBalance    = (id, balancePercent) => api.post(`/thermostat/z
 export const setThermostatMode = (mode) => api.post("/thermostat/mode", { mode });
 export const setThermostatRates = (rates) => api.post("/thermostat/rates", rates);
 export const setThermostatAvailability = (source, available) => api.post("/thermostat/availability", { source, available });
-export const setGasSeasonThreshold = (gasSeasonThresholdF) => api.post("/thermostat/gas-season-threshold", { gasSeasonThresholdF });
 
-// ── Gas boiler (separate 3-zone hydronic system) ────────────────────────────
+// ── Gas boiler (separate hydronic system, same 4 zones as the air handler) ──
 export const getBoiler         = () => api.get("/thermostat/boiler");
 export const setBoilerZone     = (id, body) => api.post(`/thermostat/boiler/zone/${id}`, body);
 export const setBoilerZoneSchedule = (id, schedule) => api.post(`/thermostat/boiler/zone/${id}/schedule`, { schedule });

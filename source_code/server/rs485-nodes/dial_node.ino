@@ -31,8 +31,16 @@
  * A small ambient badge (see drawStatusBadge()) appears on the Clock,
  * Thermostat, and Sound screens whenever faultCount or
  * maintenanceDueCount is nonzero — glanceable, never a popup/modal, never
- * gates input. A 3rd menu item ("Status") shows the counts in more
- * detail, purely read-only. Every existing control (rotate to adjust
+ * gates input. The menu only ever has 2 items (Sound, Thermostat) under
+ * normal conditions — a 3rd item ("Status") appears ONLY while faultCount
+ * or maintenanceDueCount is nonzero (see statusItemVisible()/
+ * menuItemCount()), so there's nothing to check when nothing's wrong.
+ * Status shows the counts in detail; faults are read-only there (they
+ * clear on their own once the underlying condition resolves — see
+ * faults.js), but a "Mark Done" button lets maintenance be cleared right
+ * from the dial when something's due (see maintenanceDoneBtnEventCb()) —
+ * the one tapEvent this dial sends that's actually acted on server-side
+ * outside of the Spotify toggle. Every existing control (rotate to adjust
  * target/volume, tap to toggle Spotify) works completely unchanged
  * regardless of fault/maintenance state — this dial has no concept of
  * "locked out," by design, per explicit ask: it has to stay usable to
@@ -98,7 +106,9 @@
  * on Thermostat or Status — purely local navigation, never acted on
  * server-side). 3=toggle Spotify-enabled for this dial's sound zone —
  * only acted on when mode=sound. That's strictly a Spotify on/off gate;
- * it never touches override inputs.
+ * it never touches override inputs. 5=markMaintenanceDone — the Status
+ * screen's "Mark Done" button (only shown while maintenanceDueCount > 0);
+ * acted on server-side regardless of mode, see rs485.js's pollAllDials().
  */
 
 #include <Wire.h>
@@ -307,7 +317,7 @@ struct DialState {
 } state;
 
 bool pendingChange = false;   // set when the encoder has moved something since the last push
-uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect,3=toggleSpotifyEnabled,4=returnToMenu
+uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect,3=toggleSpotifyEnabled,4=returnToMenu,5=markMaintenanceDone
 
 // `state`/pendingChange/pendingTapEvent are written from BOTH the main
 // loop() (encoder/touch handling) and the I2C slave callbacks (which the
@@ -320,9 +330,30 @@ portMUX_TYPE stateMux = portMUX_INITIALIZER_UNLOCKED;
 // ── Screen state machine ────────────────────────────────────────────────
 enum Screen { SCREEN_IDLE, SCREEN_CLOCK, SCREEN_MENU, SCREEN_THERMOSTAT, SCREEN_SOUND, SCREEN_STATUS };
 Screen currentScreen = SCREEN_IDLE;
-const int MENU_ITEM_COUNT = 3; // Sound, Thermostat, Status
+const int MENU_ITEM_CAPACITY = 3; // Sound, Thermostat, Status — array size, NOT how many are currently shown
 int menuSelection = 0;         // cycled by rotating on SCREEN_MENU
 unsigned long lastInteractionAt = 0;
+
+// Status only ever shows up in the menu while there's something worth
+// looking at — under normal conditions the menu is just Sound/Thermostat.
+// Every place that used to treat the menu as a fixed 3 items (rotation
+// wraparound, index-to-screen mapping, rendering) now calls this instead —
+// see processEncoder(), onTap(), menuItemTapEventCb(), showMenuScreen().
+bool statusItemVisible() {
+  return state.faultCount > 0 || state.maintenanceDueCount > 0;
+}
+int menuItemCount() {
+  return statusItemVisible() ? 3 : 2;
+}
+// Shared index->screen mapping for both tap paths (menuItemTapEventCb and
+// onTap()'s SCREEN_MENU branch) — index 2 (Status) is only ever reachable
+// while statusItemVisible() is true, since menuSelection is clamped to
+// menuItemCount()-1 everywhere it's set (see showMenuScreen()).
+Screen screenForMenuIndex(int index) {
+  if (index == 0) return SCREEN_SOUND;
+  if (index == 1) return SCREEN_THERMOSTAT;
+  return SCREEN_STATUS;
+}
 
 // ── I2C slave: RP2040 push in, reply out ────────────────────────────────
 // Parses a push straight into `state` — no protocol translation, this is
@@ -454,9 +485,11 @@ void processEncoder() {
     case SCREEN_CLOCK:
       currentScreen = SCREEN_MENU;
       break;
-    case SCREEN_MENU:
-      menuSelection = (menuSelection + (delta > 0 ? 1 : -1) + MENU_ITEM_COUNT) % MENU_ITEM_COUNT;
+    case SCREEN_MENU: {
+      int count = menuItemCount();
+      menuSelection = (menuSelection + (delta > 0 ? 1 : -1) + count) % count;
       break;
+    }
     case SCREEN_THERMOSTAT: {
       float next = state.targetF + delta * TARGET_STEP_F;
       state.targetF = constrain(next, TARGET_MIN_F, TARGET_MAX_F);
@@ -483,30 +516,33 @@ void processEncoder() {
 
 // ── Global tap/press handling ────────────────────────────────────────────
 // Handles the physical knob PRESS everywhere, and touch on screens with no
-// competing interactive widget (IDLE/CLOCK/STATUS — see touchpadReadCb()'s
-// gating). Sound/Thermostat carry a real draggable LVGL arc plus their own
-// toggle button (thermostatArcEventCb, soundArcEventCb,
+// competing interactive widget (IDLE/CLOCK — see touchpadReadCb()'s
+// gating; STATUS now has its own Mark Done button when maintenance is due,
+// see below). Sound/Thermostat carry a real draggable LVGL arc plus their
+// own toggle button (thermostatArcEventCb, soundArcEventCb,
 // soundEnabledBtnEventCb below), and Menu items are individually tappable
 // now (menuItemTapEventCb) — this function deliberately no longer
 // special-cases any of their content for TOUCH. The knob press still goes
 // through this function unconditionally everywhere, including those
-// three screens (see checkEncoderButton()) — it's a separate input path
-// from touch, not gated the same way. Real user-reported bug this
-// replaced: the old design made a bare touch tap ALSO mean "toggle
-// Spotify" on the Sound screen, which left no way back once you'd
-// toggled it. The knob press is now a uniformly safe "back to menu"
-// gesture on every screen that has one, never a toggle.
+// screens (see checkEncoderButton()) — it's a separate input path from
+// touch, not gated the same way. Real user-reported bug this replaced:
+// the old design made a bare touch tap ALSO mean "toggle Spotify" on the
+// Sound screen, which left no way back once you'd toggled it. The knob
+// press is now a uniformly safe "back to menu" gesture on every screen
+// that has one, never a toggle. CLOCK also used to only respond to
+// rotation (spin to reach the menu) — tap/press now does the exact same
+// thing rotation already did, so any input gets you off the clock.
 void onTap() {
   lastInteractionAt = millis();
   portENTER_CRITICAL(&stateMux);
   if (currentScreen == SCREEN_IDLE) {
     currentScreen = SCREEN_CLOCK;
     pendingTapEvent = 1; // wake
+  } else if (currentScreen == SCREEN_CLOCK) {
+    currentScreen = SCREEN_MENU;
   } else if (currentScreen == SCREEN_MENU) {
     pendingTapEvent = 2; // menuSelect
-    if (menuSelection == 0) currentScreen = SCREEN_SOUND;
-    else if (menuSelection == 1) currentScreen = SCREEN_THERMOSTAT;
-    else currentScreen = SCREEN_STATUS;
+    currentScreen = screenForMenuIndex(menuSelection);
   } else if (currentScreen == SCREEN_SOUND || currentScreen == SCREEN_THERMOSTAT || currentScreen == SCREEN_STATUS) {
     pendingTapEvent = 4; // returnToMenu
     currentScreen = SCREEN_MENU;
@@ -535,9 +571,7 @@ void menuItemTapEventCb(lv_event_t* e) {
   portENTER_CRITICAL(&stateMux);
   menuSelection = index;
   pendingTapEvent = 2; // menuSelect
-  if (index == 0) currentScreen = SCREEN_SOUND;
-  else if (index == 1) currentScreen = SCREEN_THERMOSTAT;
-  else currentScreen = SCREEN_STATUS;
+  currentScreen = screenForMenuIndex(index);
   portEXIT_CRITICAL(&stateMux);
 
   switch (currentScreen) {
@@ -652,7 +686,12 @@ void refreshActiveScreen() {
     case SCREEN_THERMOSTAT:  showThermostatScreen();  break;
     case SCREEN_SOUND:       showSoundScreen();       break;
     case SCREEN_STATUS:      showStatusScreen();      break;
-    default: break; // IDLE/MENU don't depend on pushed state
+    // Menu item count/labels depend on faultCount/maintenanceDueCount (see
+    // menuItemCount()) — redrawn here too so Status appearing/disappearing
+    // (e.g. a fault clearing itself while someone's just sitting on the
+    // menu) shows up live instead of only on the next navigation.
+    case SCREEN_MENU:        showMenuScreen();        break;
+    default: break; // IDLE doesn't depend on pushed state
   }
 }
 
@@ -733,10 +772,17 @@ void showMenuScreen() {
   lv_obj_clean(screenMenu);
   lv_obj_set_style_bg_color(screenMenu, COLOR_BG, 0);
 
-  const char* labels[MENU_ITEM_COUNT] = { "Sound", "Thermostat", "Status" };
+  int count = menuItemCount();
+  if (menuSelection >= count) menuSelection = count - 1; // Status can vanish out from under an existing selection
+
+  const char* labels[MENU_ITEM_CAPACITY] = { "Sound", "Thermostat", "Status" };
   const int ySpacing = 70;
-  for (int i = 0; i < MENU_ITEM_COUNT; i++) {
+  for (int i = 0; i < count; i++) {
     bool selected = (i == menuSelection);
+    // Centered as a group regardless of how many items are showing (2 vs
+    // 3) — was a fixed (i-1)*ySpacing, which only centered correctly for
+    // exactly 3 items.
+    int yOffset = (int)((i - (count - 1) / 2.0f) * ySpacing);
 
     // Pill highlight behind the selected item — color alone (the old
     // design) doesn't read as "selected" nearly as clearly as a filled
@@ -751,19 +797,19 @@ void showMenuScreen() {
     lv_obj_set_style_bg_opa(pill, selected ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(pill, 0, 0);
     lv_obj_clear_flag(pill, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(pill, LV_ALIGN_CENTER, 0, (i - 1) * ySpacing);
+    lv_obj_align(pill, LV_ALIGN_CENTER, 0, yOffset);
     lv_obj_add_event_cb(pill, menuItemTapEventCb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
 
     lv_obj_t* item = lv_label_create(screenMenu);
     lv_label_set_text(item, labels[i]);
     lv_obj_set_style_text_font(item, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(item, selected ? lv_color_white() : COLOR_MUTED, 0);
-    lv_obj_align(item, LV_ALIGN_CENTER, 0, (i - 1) * ySpacing);
+    lv_obj_align(item, LV_ALIGN_CENTER, 0, yOffset);
     lv_obj_clear_flag(item, LV_OBJ_FLAG_CLICKABLE); // the pill behind it is the real tap target — this just avoids the label swallowing/duplicating the pill's own click
-    // "Status" menu item itself gets a tiny dot next to it when something's
-    // due, so it's visible while still in the menu, not just after
-    // navigating in — same non-blocking badge, smaller.
-    if (i == 2 && (state.faultCount > 0 || state.maintenanceDueCount > 0)) {
+    // "Status" only ever appears in this loop while it's actually got
+    // something to show (see menuItemCount()), so the dot next to it is
+    // unconditional here — no separate due-check needed anymore.
+    if (i == 2) {
       lv_obj_t* dot = lv_obj_create(screenMenu);
       lv_obj_set_size(dot, 10, 10);
       lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
@@ -1001,9 +1047,28 @@ void showSoundScreen() {
   lv_scr_load(screenSound);
 }
 
-// Read-only — counts only, see this file's header on why no fault/
-// maintenance text is rendered here. All-clear state shown in green so
-// checking this screen is reassuring, not just an alert surface.
+// The Status screen's one real action — faults clear on their own (see
+// this file's header/faults.js), but maintenance needs an explicit "I did
+// it," and this is that button. Optimistically zeroes the local count so
+// the screen (and the menu, once you back out) update instantly instead of
+// waiting for the next push; the next real POLL_DIAL push still carries
+// the authoritative count, same "optimistic, server confirms" pattern as
+// the Spotify toggle (soundEnabledBtnEventCb).
+void maintenanceDoneBtnEventCb(lv_event_t* e) {
+  lastInteractionAt = millis();
+  portENTER_CRITICAL(&stateMux);
+  pendingTapEvent = 5; // markMaintenanceDone
+  state.maintenanceDueCount = 0;
+  portEXIT_CRITICAL(&stateMux);
+  showStatusScreen();
+}
+
+// Faults are read-only here — counts only, see this file's header on why
+// no fault/maintenance text is rendered — they clear on their own once the
+// underlying condition resolves. Maintenance gets one real action (the
+// Mark Done button above) since "due" doesn't resolve itself. All-clear
+// state shown in green so checking this screen is reassuring, not just an
+// alert surface.
 void showStatusScreen() {
   lv_obj_clean(screenStatus);
   lv_obj_set_style_bg_color(screenStatus, COLOR_BG, 0);
@@ -1050,10 +1115,32 @@ void showStatusScreen() {
     lv_obj_set_style_text_color(maintLabel, state.maintenanceDueCount > 0 ? COLOR_WARNING : COLOR_MUTED, 0);
     lv_obj_align(maintLabel, LV_ALIGN_CENTER, 0, 20);
 
-    lv_obj_t* hint = lv_label_create(screenStatus);
-    lv_label_set_text(hint, "See the app for details");
-    lv_obj_set_style_text_color(hint, COLOR_MUTED, 0);
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -20);
+    if (state.maintenanceDueCount > 0) {
+      // The one real action on this screen — see maintenanceDoneBtnEventCb()
+      // above. Touch works directly (touchpadReadCb() treats Status as
+      // having its own widget while this button exists); the knob press
+      // still means "back to menu" everywhere, unchanged, so there's no
+      // ambiguity between the two gestures.
+      lv_obj_t* btn = lv_obj_create(screenStatus);
+      lv_obj_set_size(btn, 220, 60);
+      lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_color(btn, COLOR_ACCENT, 0);
+      lv_obj_set_style_border_width(btn, 0, 0);
+      lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -36);
+      lv_obj_add_event_cb(btn, maintenanceDoneBtnEventCb, LV_EVENT_CLICKED, NULL);
+
+      lv_obj_t* btnLabel = lv_label_create(btn);
+      lv_label_set_text(btnLabel, "Mark Done");
+      lv_obj_set_style_text_font(btnLabel, &lv_font_montserrat_28, 0);
+      lv_obj_set_style_text_color(btnLabel, lv_color_white(), 0);
+      lv_obj_center(btnLabel);
+    } else {
+      lv_obj_t* hint = lv_label_create(screenStatus);
+      lv_label_set_text(hint, "See the app for details");
+      lv_obj_set_style_text_color(hint, COLOR_MUTED, 0);
+      lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -20);
+    }
   }
 
   lv_scr_load(screenStatus);
@@ -1102,13 +1189,17 @@ void touchpadReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
     // Only fires onTap() (this file's own global raw-touch dispatcher) on
     // screens with no competing interactive LVGL widget. Sound/Thermostat
     // have a real draggable arc plus their own toggle button; Menu items
-    // are now individually tappable too (menuItemTapEventCb) — calling
-    // onTap() on top of any of these would fire its OWN generic action on
-    // every touch release (undoing a drag, or jumping to whatever
-    // menuSelection happened to be instead of the item actually tapped).
-    // Idle/Clock/Status have no competing widget, so the plain global tap
-    // (wake, or tap-anywhere-to-go-back on Status) still applies there.
-    bool hasOwnWidgets = (currentScreen == SCREEN_SOUND || currentScreen == SCREEN_THERMOSTAT || currentScreen == SCREEN_MENU);
+    // are now individually tappable too (menuItemTapEventCb); Status grows
+    // its own "Mark Done" button whenever maintenance is actually due —
+    // calling onTap() on top of any of these would fire its OWN generic
+    // action on every touch release (undoing a drag, jumping to whatever
+    // menuSelection happened to be instead of the item actually tapped, or
+    // bouncing straight back to the menu before the button's own tap
+    // registers). Idle/Clock/an all-clear or fault-only Status have no
+    // competing widget, so the plain global tap (wake, tap-to-enter-menu
+    // on Clock, tap-anywhere-to-go-back on Status) still applies there.
+    bool hasOwnWidgets = currentScreen == SCREEN_SOUND || currentScreen == SCREEN_THERMOSTAT ||
+      currentScreen == SCREEN_MENU || (currentScreen == SCREEN_STATUS && state.maintenanceDueCount > 0);
     if (touchPressed && !hasOwnWidgets) onTap();
     touchPressed = false;
   }

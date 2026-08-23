@@ -2,10 +2,15 @@
  * Thermostat Service
  * ─────────────────────────────────────────────────────────────────
  * Multi-zone digital thermostat for the central air handler/condenser
- * (heating coil + heat pump + AC cooling, all one physical unit). The
- * gas boiler is a completely separate, isolated hydronic system serving a
- * different 3-zone layout — see boiler.js and getActiveSystem() below for
- * how the two systems hand off to each other seasonally.
+ * (heating coil + heat pump + AC cooling, all one physical unit). The gas
+ * boiler is a completely separate, isolated hydronic system — but as of
+ * a real re-piping of the boiler's own plumbing, it now serves the SAME
+ * 4-zone layout as this file (not a different one), so the two are two
+ * alternate PLANTS for the same rooms rather than needing any zone-name
+ * remapping — see boiler.js's header and getActiveSystem() below for how
+ * the house immediately switches which plant is in charge (mode === 'gas'
+ * means the boiler, full stop — no seasonal prediction, no target/schedule
+ * copying between the two; each plant just keeps its own settings).
  *
  * Zones                Primary Suite, Upstairs, Office, Downstairs
  * Heat sources          gas (boiler — see boiler.js), electric (aux coil in
@@ -218,11 +223,6 @@ const DEFAULT_SETTINGS = {
   // so it only gets selected when gas and/or air are marked unavailable
   // (e.g. mid-service). See setAvailability()/pickAvailableSource() below.
   available: { gas: true, electric: true, air: true },
-  // Below this outdoor temp (avgOutdoorTempF, same daily forecast average
-  // used for cost decisions), gas mode hands the 3 boiler zones control
-  // instead of these 4 — see getActiveSystem(). Configurable since climate
-  // and personal comfort preference vary.
-  gasSeasonThresholdF: 50,
   // on: whether comfort control is active for this zone (safety floor/
   // ceiling apply either way). override: a manual target that holds until
   // the schedule moves into a different block — see resolveTarget().
@@ -340,7 +340,7 @@ async function saveSettings(next) {
 }
 
 // ── Schedule resolution (shared with boiler.js) ──────────────────────────────
-const { resolveTarget, isOverridden, nextBoundary, inScheduledBlock } = scheduleUtil;
+const { resolveTarget, isOverridden, nextBoundary } = scheduleUtil;
 
 // ── Safety floor/ceiling ──────────────────────────────────────────────────────
 // Uses the same deadband-hysteresis shape as comfort calls so it doesn't
@@ -396,113 +396,30 @@ function updateSafetyState(zone, rt, currentTemp, settings) {
   rt.safety = next;
 }
 
-// ── Seasonal zone-system handoff (4-zone air handler vs. 3-zone boiler) ─────
-// The boiler serves an entirely different 3-zone layout (Great Room,
-// Downstairs, Upstairs — see boiler.js) and only takes over when gas is the
-// selected heat source. The outdoor-temp threshold below is a *predictive*
-// UX nicety — it lets the handoff happen proactively (before the first
-// cold-snap heat call actually occurs) rather than reactively — but it must
-// never be the ONLY gate: if any of the air handler's 4 zones genuinely
-// wants heat right now, gas mode means the boiler is the sole heat source
-// in the house, so the 3-zone system has to take over regardless of what
-// the seasonal prediction guessed. Without this, a zone could be left
-// calling for heat with nothing actually able to answer it, on a stray
-// cold day that falls outside the predicted "season."
-function getActiveSystem(settings, anyZoneWantsHeat) {
-  if (settings.mode !== 'gas') return '4zone';
-  const avgOutdoorTempF = settings.lastDecision?.avgOutdoorTempF;
-  const inHeatingSeason = typeof avgOutdoorTempF === 'number' && avgOutdoorTempF < settings.gasSeasonThresholdF;
-  return (inHeatingSeason || anyZoneWantsHeat) ? '3zone' : '4zone';
+// ── Active plant selection (air handler vs. boiler) ─────────────────────
+// The boiler and air handler now serve the exact same 4 zones (Primary
+// Suite, Upstairs, Downstairs, Office — see boiler.js's header for why),
+// so which one is "in charge" is a straight, immediate read of `mode` —
+// no outdoor-temp prediction, no lookahead, no handoff step. Gas mode means
+// the boiler is the house's sole heat source, full stop; anything else
+// means the air handler is. Each plant keeps its own independent zone
+// settings (target/schedule/on), so switching modes does not copy or
+// overwrite either side's values — whichever plant becomes active simply
+// resumes using whatever it was last set to. (The '3zone'/'4zone' string
+// values below are historical internal labels, kept as-is rather than
+// renamed — both plants are 4-zone now, but these tokens are never
+// displayed to a user directly, only compared against internally and by
+// the frontend's activeSystem check.)
+function getActiveSystem(settings) {
+  return settings.mode === 'gas' ? '3zone' : '4zone';
 }
-
-// Lightweight, pre-decision check of "does any 4-zone zone currently want
-// heat" — deliberately simpler than the full hysteresis-aware Pass 1 logic
-// below (a plain threshold comparison, not the rt.calling on/off state
-// machine), because this only needs to answer the question well enough to
-// decide getActiveSystem() BEFORE Pass 1 runs; Pass 1 remains the
-// authoritative source for what actually drives the relays. Erring toward
-// "wants heat" a little early (e.g. right at the edge of the deadband) is
-// the safe direction for this specific check — the cost of switching a
-// touch early is just a slightly earlier handoff, not a missed heat call.
-function anyZoneWantsHeatNow(settings, now) {
-  for (const zone of ZONES) {
-    const zs = settings.zones[zone.id];
-    if (!zs.on) continue;
-    const reading = sensors.get(zone.tempSensor);
-    const currentTemp = typeof reading?.value === 'number' ? reading.value : null;
-    if (currentTemp === null) continue;
-    if (currentTemp < resolveTarget(zs, now) - DEADBAND_F) return true;
-    if (runtime[zone.id].safety === 'below-min') return true; // last-known safety state; below-min persists across ticks in practice
-  }
-  return false;
-}
-
-// Graceful handoff between the two zone layouts — only fires on an actual
-// system-boundary crossing (edge-triggered against the last computed
-// system, tracked in `lastActiveSystem`), and only remaps a zone whose
-// target isn't currently being driven by an active schedule block
-// (inScheduledBlock()) — a zone mid-block keeps whatever the block says
-// rather than getting silently overwritten. Copies BOTH the target and the
-// full weekly schedule from the source zone, so the destination zone's own
-// automatic schedule keeps working after the handoff (e.g. an evening
-// setback), not just a one-time target snapshot that never adjusts again.
-//
-// Name-matched mapping (Downstairs has a direct namesake on both systems;
-// Primary Suite<->Upstairs and Great Room have no counterpart on the other
-// side and are handled below):
-//   4zone -> 3zone: Great Room <- Downstairs, Downstairs <- Downstairs,
-//                   Upstairs <- Primary Suite
-//   3zone -> 4zone: Primary Suite <- Upstairs, Downstairs <- Downstairs
-//                   (Office has no 3-zone counterpart and is left alone;
-//                   Great Room has no 4-zone counterpart and is dropped)
-async function runZoneSystemSwap(fromSystem, toSystem, now) {
-  const thermoSettings = getSettings();
-  const boilerSettings = boiler.getSettings();
-
-  const applyThermo = (zoneId, sourceZs) => {
-    const zs = thermoSettings.zones[zoneId];
-    if (!zs || !sourceZs || inScheduledBlock(zs, now)) return;
-    thermoSettings.zones[zoneId] = {
-      ...zs,
-      target: clampToSafetyRange(sourceZs.target),
-      schedule: (sourceZs.schedule || []).map(b => ({ ...b, target: clampToSafetyRange(b.target) })),
-      override: null,
-    };
-  };
-  const applyBoiler = (zoneId, sourceZs) => boiler.applyExternalZone(boilerSettings, zoneId, sourceZs, now);
-
-  if (toSystem === '3zone') {
-    const downstairsZs = thermoSettings.zones['downstairs'];
-    const primaryZs = thermoSettings.zones['primary-suite'];
-    if (downstairsZs) {
-      applyBoiler('great-room', downstairsZs);
-      applyBoiler('downstairs', downstairsZs);
-    }
-    if (primaryZs) applyBoiler('upstairs', primaryZs);
-  } else {
-    const boilerUpstairsZs = boilerSettings.zones['upstairs'];
-    const boilerDownstairsZs = boilerSettings.zones['downstairs'];
-    if (boilerUpstairsZs) applyThermo('primary-suite', boilerUpstairsZs);
-    if (boilerDownstairsZs) applyThermo('downstairs', boilerDownstairsZs);
-  }
-
-  await saveSettings(thermoSettings);
-  await boiler.saveSettings(boilerSettings);
-  console.log(`[Thermostat] Zone system handoff: ${fromSystem} -> ${toSystem} (targets + schedules mapped across, schedule-driven destination zones left untouched).`);
-}
-
-let lastActiveSystem = null;
 
 // ── Control loop ─────────────────────────────────────────────────────────────
 async function tick() {
   const settings = getSettings();
   const now = moment();
 
-  const activeSystem = getActiveSystem(settings, anyZoneWantsHeatNow(settings, now));
-  if (lastActiveSystem !== null && activeSystem !== lastActiveSystem) {
-    await runZoneSystemSwap(lastActiveSystem, activeSystem, now);
-  }
-  lastActiveSystem = activeSystem;
+  const activeSystem = getActiveSystem(settings);
   boiler.setSystemActive(activeSystem === '3zone');
 
   // Pass 1: per-zone desired heat/cool calls. Comfort control (target ±
@@ -965,29 +882,19 @@ async function setAvailability(source, available) {
   return next;
 }
 
-async function setGasSeasonThreshold(gasSeasonThresholdF) {
-  if (typeof gasSeasonThresholdF !== 'number') throw new Error('gasSeasonThresholdF must be a number');
-  const settings = getSettings();
-  const next = { ...settings, gasSeasonThresholdF };
-  await saveSettings(next);
-  // Same reasoning as setMode() — this can also flip the active zone system.
-  await tick();
-  return next;
-}
-
 function getState() {
   const settings = getSettings();
-  // Reflect whatever tick() last actually decided (and acted on) rather
-  // than recomputing independently — getState() is synchronous and can't
-  // cheaply redo the same anyZoneWantsHeatNow() check tick() used, and
-  // reporting a different answer than what's actually driving the relays
-  // would be misleading. Only recompute fresh if tick() hasn't run yet.
-  const activeSystem = lastActiveSystem ?? getActiveSystem(settings, anyZoneWantsHeatNow(settings, moment()));
+  const activeSystem = getActiveSystem(settings);
+  // Pulled once per getState() call (not per-zone) so the dial and web app
+  // both see a single consistent snapshot of which plant is actually serving
+  // each zone right now — see the `calling`/`heatSource` fields below, which
+  // is how "nothing is ever stale" between the two UIs holds even right
+  // after a mode change flips which plant is active.
+  const boilerState = boiler.getState();
   return {
     mode: settings.mode,
     activeSource: resolveActiveSource(settings),
-    activeSystem, // '4zone' | '3zone' — which zone layout is actually live right now
-    gasSeasonThresholdF: settings.gasSeasonThresholdF,
+    activeSystem, // '4zone' | '3zone' — which plant is actually live right now
     lastDecision: settings.lastDecision,
     rates: settings.rates,
     available: settings.available,
@@ -1004,6 +911,7 @@ function getState() {
       const stale = hasReading && reading.stale;
       const rt = runtime[zone.id];
       const now = moment();
+      const boilerZone = boilerState.zones.find(z => z.id === zone.id);
       return {
         id: zone.id,
         label: zone.label,
@@ -1023,7 +931,11 @@ function getState() {
         currentTemp: hasReading ? reading.value : null,
         updatedAt: reading?.updatedAt ?? null,
         sensorOk: hasReading && !stale,
-        calling: rt.calling && activeSystem === '4zone',
+        // Unified across both plants — whichever one is actually serving this
+        // zone right now — so the web app and every dial read a single truth
+        // and never show a stale/contradictory calling state during a handoff.
+        calling: activeSystem === '4zone' ? rt.calling : (boilerZone?.calling ?? false),
+        heatSource: activeSystem === '4zone' ? 'air-handler' : 'boiler',
         coolCalling: rt.coolCalling,
         safety: rt.safety,
         environment: readEnvironment(zone),
@@ -1085,9 +997,7 @@ async function init() {
     await runCostDecision();
   }
 
-  const bootSettings = getSettings();
-  lastActiveSystem = getActiveSystem(bootSettings, anyZoneWantsHeatNow(bootSettings, moment()));
-  boiler.setSystemActive(lastActiveSystem === '3zone');
+  boiler.setSystemActive(getActiveSystem(getSettings()) === '3zone');
 
   setInterval(() => { tick().catch(err => console.error('[Thermostat] Tick error:', err.message)); }, TICK_MS);
 
@@ -1111,7 +1021,6 @@ module.exports = {
   setMode,
   setRates,
   setAvailability,
-  setGasSeasonThreshold,
   getActiveSystem,
   getSettings,
   ZONES,

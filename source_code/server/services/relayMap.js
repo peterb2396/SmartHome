@@ -45,10 +45,11 @@ const SEED_RELAYS = [
   { address: 0x21, channel: 4, label: 'Y2 — compressor stage 2' },
   { address: 0x21, channel: 5, label: 'W1 — electric heat stage 1' },
   { address: 0x21, channel: 6, label: 'W2 — electric heat stage 2' },
-  // Boiler board (0x22) — only 3 relays wired; CH4 (channel 3) is free for
-  // a future use, not code-driven — see the wiring guide.
-  { address: 0x22, channel: 5, label: 'Upstairs zone valve' },
-  { address: 0x22, channel: 6, label: 'Great Room zone valve' },
+  // Boiler board (0x22) — re-piped to match the air handler's 4-zone layout
+  // exactly (see boiler.js's header); CH1-CH3 (channels 0-2) are unused.
+  { address: 0x22, channel: 4, label: 'Office zone valve' },
+  { address: 0x22, channel: 5, label: 'Primary Suite zone valve' },
+  { address: 0x22, channel: 6, label: 'Upstairs zone valve' },
   { address: 0x22, channel: 7, label: 'Downstairs zone valve' },
 ];
 

@@ -12,20 +12,26 @@
  * POST /thermostat/mode            — { mode: 'auto'|'gas'|'electric'|'air' }
  * POST /thermostat/rates           — { gasPricePerTherm?, elecPricePerKwh?, gasAfue? }
  * POST /thermostat/availability    — { source: 'gas'|'electric'|'air', available: boolean }
- * POST /thermostat/gas-season-threshold — { gasSeasonThresholdF }
  *
- * GET  /thermostat/boiler          — the separate 3-zone gas boiler's state
- *                                     (Great Room / Downstairs / Upstairs —
- *                                     a distinct zone layout, see boiler.js)
+ * GET  /thermostat/boiler          — the separate gas boiler's state — a
+ *                                     distinct hydronic plant, but as of a
+ *                                     real re-piping of its plumbing it now
+ *                                     serves the exact same 4 zones as GET
+ *                                     /thermostat (Primary Suite / Upstairs /
+ *                                     Downstairs / Office, matching ids —
+ *                                     see boiler.js)
  * POST /thermostat/boiler/zone/:id — { target?, on? }
  * POST /thermostat/boiler/zone/:id/schedule — { schedule }
  *
  * `activeSystem` on GET /thermostat ('4zone' | '3zone') tells the frontend
- * which of the two zone layouts is actually live right now — gas mode +
- * cold-enough weather hands control to the boiler's 3 zones; otherwise the
- * air handler's 4 zones are in charge. Both endpoints' data is always
+ * which of the two PLANTS is actually live right now — an immediate,
+ * unconditional read of `mode`: gas mode means the boiler, full stop, no
+ * seasonal prediction or lookahead. Both endpoints' data is always
  * available regardless of which is active, so the frontend can render
  * whichever card set applies without a separate "is this system on" check.
+ * ('3zone'/'4zone' are historical internal token names, kept as-is now that
+ * both plants serve 4 zones — see thermostat.js's own header/
+ * getActiveSystem() comment for why.)
  *
  * Every mutation responds with the same `state` shape as its GET route
  * (not the raw settings blob) so the frontend can apply it directly as the
@@ -129,16 +135,7 @@ router.post('/thermostat/availability', async (req, res) => {
   }
 });
 
-router.post('/thermostat/gas-season-threshold', async (req, res) => {
-  try {
-    await thermostatSvc.setGasSeasonThreshold(req.body.gasSeasonThresholdF);
-    res.json({ ok: true, state: thermostatSvc.getState() });
-  } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
-  }
-});
-
-// ── Gas boiler (separate 3-zone hydronic system — see boiler.js) ───────────
+// ── Gas boiler (separate hydronic system, same 4 zones — see boiler.js) ────
 router.get('/thermostat/boiler', (req, res) => {
   res.json(boilerSvc.getState());
 });

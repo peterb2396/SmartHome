@@ -3,21 +3,40 @@
  * ─────────────────────────────────────────────────────────────────
  * The gas boiler is a completely separate, 100%-isolated hydronic heating
  * PLANT — it shares no relay/actuator hardware with the air handler
- * (thermostat.js) — serving its own 3-zone layout: Great Room, Downstairs,
- * Upstairs. None of these get a dedicated new RS485 node: Great Room AND
- * Downstairs both read the air handler's existing "Downstairs" node
- * (one physical sensor, two independently-controlled zones — each still
- * gets its own on/off, target, and schedule, they just share a temperature
- * reading), and Upstairs reads the air handler's Primary Suite node (that's
- * the room this boiler zone actually covers). See ZONES' tempSensor fields
- * below — no new hardware needed for any of this, it's purely a matter of
- * which existing sensorStore key each zone's config points at. Each boiler
- * zone has its own motorized zone valve (simple energize-to-open, spring-
- * return-closed — no proportional position, unlike the air handler's
- * dampers). There's no separate "burner enable" relay: the boiler's own
- * zone valves have end switches already bused together and wired straight
- * into the boiler's thermostat-call terminals, so the boiler fires on its
- * own once a valve is confirmed physically open — see the wiring guide.
+ * (thermostat.js) — but as of the real re-piping work behind this revision,
+ * it now serves the EXACT SAME 4-zone layout as the air handler: Primary
+ * Suite, Upstairs, Downstairs, Office. This is a deliberate, load-bearing
+ * fact, not a coincidence: ZONES below uses the IDENTICAL zone ids
+ * thermostat.js does, specifically so the two systems can be treated as two
+ * alternate PLANTS serving the SAME rooms (see thermostat.js's
+ * getActiveSystem() for how the house picks which one is in charge — an
+ * immediate read of `mode`, no seasonal prediction) rather than needing any
+ * lossy name-based zone remapping — that remapping (Great Room <->
+ * Downstairs/Primary Suite, etc.) is what this file and thermostat.js used
+ * to need before the re-piping, and it's gone now that the zones genuinely
+ * match. Each plant still keeps its own independent target/schedule/on
+ * settings per zone — switching `mode` does not copy values between them,
+ * it just changes which plant's own settings are actually driving relays.
+ *
+ * tempSensor per zone is `temp-<zoneId>` — the SAME sensorStore key the air
+ * handler's own zone reads (see thermostat.js's ZONES). No new/separate
+ * hardware is needed for the boiler to get real temperature data: once a
+ * zone's RS485 sensor is wired up (see the Console's node setup), BOTH
+ * plants serving that room see the same real reading automatically.
+ * IMPORTANT, per explicit instruction: no zone has a real sensor wired up
+ * yet. Until one exists for a given zone, tempSensor reads null there, and
+ * the existing null-check in tick() below (unchanged) means that zone
+ * NEVER calls for heat — this is intentional fail-safe behavior, not a
+ * gap to fix; heat only ever activates once real temperature data confirms
+ * it's actually needed.
+ *
+ * Each boiler zone has its own motorized zone valve (simple energize-to-
+ * open, spring-return-closed — no proportional position, unlike the air
+ * handler's dampers). There's no separate "burner enable" relay: the
+ * boiler's own zone valves have end switches already bused together and
+ * wired straight into the boiler's thermostat-call terminals, so the
+ * boiler fires on its own once a valve is confirmed physically open — see
+ * the wiring guide.
  *
  * This system only actually drives hardware while it's the "active" zone
  * layout — see thermostat.js's getActiveSystem()/setSystemActive() below.
@@ -28,14 +47,17 @@
  *
  * ── Hardware ──────────────────────────────────────────────────────────
  * BOILER_BOARD (0x22), a 3rd daisy-chained I2C relay board (see
- * i2cRelay.js): channel 5 (CH6) Upstairs zone valve, channel 6 (CH7) Great
- * Room zone valve, channel 7 (CH8) Downstairs zone valve — confirmed
- * against real hardware wiring, only 3 relays wired on this board.
- * Channels 0-2, 3 (CH4), and 4 are spare — CH4 was originally reserved for
- * a "burner enable" relay, but the boiler's own zone valves have end
- * switches already bused together and wired straight into the boiler's
- * thermostat-call terminals (see the wiring guide), so that channel was
- * never wired and isn't referenced by this file. Free for a future use.
+ * i2cRelay.js). Per direct confirmation against the real re-wired board:
+ * channel 4 (CH5) Office zone valve, channel 5 (CH6) Primary Suite zone
+ * valve, channel 6 (CH7) Upstairs zone valve, channel 7 (CH8) Downstairs
+ * zone valve — i2cRelay.js's channel numbering is 0-indexed against the
+ * board's own 1-indexed CH1-CH8 silkscreen (channel N = "CHN+1"), same
+ * convention as every other board in this codebase (see DAMPER_BOARD/
+ * AIR_HANDLER_BOARD in thermostat.js). Channels 0-3 (CH1-CH4) are spare —
+ * confirm this exact mapping against the physical board (test each zone
+ * individually) before trusting it fully; a wiring/channel error here
+ * would energize the wrong zone's valve, this was inferred from a verbal
+ * description of the board, not read directly off it.
  */
 
 const moment      = require('moment');
@@ -54,23 +76,26 @@ const TICK_MS = 30000;
 const SAFETY_MIN_F = 60;
 const SAFETY_MAX_F = 75;
 
-// Confirmed via i2cdetect against real hardware (A1 jumper bridged).
+// Confirmed via i2cdetect against real hardware (A1 jumper bridged) — same
+// address as before the re-piping, only the zone wiring on this board
+// changed, not the board itself.
 const BOILER_BOARD = 0x22;
-// Channel assignments confirmed against real wiring (CH6/7/8 — see header
-// comment above for why CH4 is spare, not "boiler enable").
-const CH = { UPSTAIRS: 5, GREAT_ROOM: 6, DOWNSTAIRS: 7 };
+// Channel assignments per direct user confirmation of the real re-wired
+// board (0-indexed here, matching the board's own 1-indexed CH5-CH8
+// silkscreen positions — see this file's header and i2cRelay.js's channel
+// convention). Genuinely worth re-confirming zone-by-zone against the
+// physical hardware before trusting this fully — see header comment.
+const CH = { OFFICE: 4, PRIMARY_SUITE: 5, UPSTAIRS: 6, DOWNSTAIRS: 7 };
 
-// tempSensor: no boiler zone gets a dedicated new RS485 node. Great Room
-// AND Downstairs both read the air handler's existing "Downstairs" node —
-// one physical sensor feeding two independently-controlled zones (each
-// still has its own on/off, target, and schedule, see setZone()/
-// setZoneSchedule() below — they just share a temperature reading rather
-// than each having a thermostat's worth of hardware). Upstairs reads the
-// air handler's Primary Suite node, the room it actually covers.
+// Same zone ids as thermostat.js's ZONES, on purpose — see this file's
+// header. tempSensor reuses that exact same sensorStore key per zone, so
+// once real RS485 hardware is wired up for a room, both plants serving it
+// see the same real reading with no extra configuration.
 const ZONES = [
-  { id: 'great-room', label: 'Great Room', tempSensor: 'temp-downstairs',    ch: CH.GREAT_ROOM },
-  { id: 'downstairs', label: 'Downstairs', tempSensor: 'temp-downstairs',    ch: CH.DOWNSTAIRS },
-  { id: 'upstairs',   label: 'Upstairs',   tempSensor: 'temp-primary-suite', ch: CH.UPSTAIRS },
+  { id: 'primary-suite', label: 'Primary Suite', tempSensor: 'temp-primary-suite', ch: CH.PRIMARY_SUITE },
+  { id: 'upstairs',      label: 'Upstairs',       tempSensor: 'temp-upstairs',      ch: CH.UPSTAIRS },
+  { id: 'downstairs',    label: 'Downstairs',     tempSensor: 'temp-downstairs',    ch: CH.DOWNSTAIRS },
+  { id: 'office',        label: 'Office',         tempSensor: 'temp-office',        ch: CH.OFFICE },
 ];
 
 const DEFAULT_SETTINGS = {
@@ -103,23 +128,6 @@ function getSettings() {
 
 async function saveSettings(next) {
   await settingsSvc.updateSetting('boiler', next);
-}
-
-// Applied by thermostat.js during a graceful zone-system swap — mutates the
-// passed-in settings object in place (caller saves it afterward) and
-// respects the same "don't clobber an active schedule block" rule as any
-// other target write. Copies both the target AND the source zone's full
-// weekly schedule, so this zone's own automatic schedule keeps working
-// after the handoff instead of just getting a one-time target snapshot.
-function applyExternalZone(settingsObj, zoneId, sourceZoneSettings, now) {
-  const zs = settingsObj.zones[zoneId];
-  if (!zs || !sourceZoneSettings || scheduleUtil.inScheduledBlock(zs, now)) return;
-  settingsObj.zones[zoneId] = {
-    ...zs,
-    target: clampToSafetyRange(sourceZoneSettings.target),
-    schedule: (sourceZoneSettings.schedule || []).map(b => ({ ...b, target: clampToSafetyRange(b.target) })),
-    override: null,
-  };
 }
 
 function updateSafetyState(zone, rt, currentTemp) {
@@ -276,7 +284,6 @@ module.exports = {
   setSystemActive,
   getSettings,
   saveSettings,
-  applyExternalZone,
   shutdown,
   ZONES,
 };

@@ -1,10 +1,9 @@
 import { useState } from "react";
 
-export default function RatesModal({ rates, gasSeasonThresholdF, onClose, onSave, onSaveThreshold }) {
+export default function RatesModal({ rates, onClose, onSave }) {
   const [gasPricePerTherm, setGasPricePerTherm] = useState(rates.gasPricePerTherm ?? 1.5);
   const [elecPricePerKwh,  setElecPricePerKwh]  = useState(rates.elecPricePerKwh ?? 0.15);
   const [gasAfuePct,       setGasAfuePct]       = useState(Math.round((rates.gasAfue ?? 0.85) * 100));
-  const [seasonThreshold,  setSeasonThreshold]  = useState(gasSeasonThresholdF ?? 50);
 
   function handleSave() {
     onSave({
@@ -12,7 +11,6 @@ export default function RatesModal({ rates, gasSeasonThresholdF, onClose, onSave
       elecPricePerKwh: Math.max(0, Number(elecPricePerKwh) || 0),
       gasAfue: Math.min(100, Math.max(1, Number(gasAfuePct) || 1)) / 100,
     });
-    if (Number(seasonThreshold) !== gasSeasonThresholdF) onSaveThreshold(Number(seasonThreshold) || 50);
     onClose();
   }
 
@@ -51,17 +49,6 @@ export default function RatesModal({ rates, gasSeasonThresholdF, onClose, onSave
               <input type="number" value={value} onChange={e => onChange(e.target.value)} {...props} style={inputStyle} />
             </div>
           ))}
-          <div style={{ marginBottom: 0, paddingTop: "0.5rem", borderTop: "1px solid var(--border)" }}>
-            <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", margin: "1rem 0 6px" }}>
-              Gas heating season threshold (°F)
-            </label>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.78rem", margin: "0 0 6px" }}>
-              When gas mode is selected and the forecast average is below this, the gas boiler's own
-              3-zone system (Great Room / Downstairs / Upstairs) takes over from the air handler's 4
-              zones — see the wiring guide for how that handoff works.
-            </p>
-            <input type="number" value={seasonThreshold} onChange={e => setSeasonThreshold(e.target.value)} step="1" style={inputStyle} />
-          </div>
         </div>
         <div style={{ display: "flex", gap: "0.75rem", padding: "1rem 1.5rem", background: "var(--bg-surface)" }}>
           <button onClick={onClose} style={{ flex: 1, padding: "0.7rem", background: "var(--border)", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Cancel</button>

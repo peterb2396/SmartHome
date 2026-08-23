@@ -27,6 +27,15 @@
  * isHvacFaultActive() does, only actually flagged as a fault on Linux (a
  * mock transport off the Pi during dev is normal, not a fault).
  *
+ * A single NODE going silent while the port/bus itself is fine is a
+ * separate, more common failure — see consecutiveMisses/alertNodeDown()
+ * below. Past evidence (git history) points at the node's own MCU getting
+ * wedged (an RP2040 I2C hang inside sendReport()'s sensor reads), not the
+ * bus — a hardware watchdog on the node side force-reboots it if that ever
+ * happens (see rs485_node.ino), and this side sends a Bark push once a
+ * node's been silent long enough to rule out a blip, so a real outage gets
+ * noticed without staring at the console.
+ *
  * ── Wire protocol ────────────────────────────────────────────────────────
  * Frame: [0xAA sync][addr 1B][cmd 1B][len 1B][payload...][crc8 1B]
  * addr 0x00 is reserved for broadcast / not-yet-configured nodes.
@@ -118,7 +127,14 @@
  * navigation, same as wake/menuSelect — never acted on server-side). 3=
  * toggle Spotify-enabled for this dial's sound zone — only acted on when
  * mode=sound (see pollAllDials()). This is strictly the same "zone on/off"
- * Spotify gate the web app's toggle is, never touches override inputs.
+ * Spotify gate the web app's toggle is, never touches override inputs. 5=
+ * markMaintenanceDone — the Status screen's "Mark Done" button, shown only
+ * while something's actually due. Acted on regardless of `mode`, unlike
+ * toggleSpotifyEnabled: completes every currently-due maintenance.js task
+ * (see pollAllDials()), same completeTask() the web app's Maintenance page
+ * calls — one code path either way. Faults are NOT completable from here
+ * on purpose (they clear on their own once the underlying condition
+ * resolves — see faults.js), so there's no equivalent tapEvent for them.
  *
  * ── Zone audio nodes (per-room amp hardware — NOT the dial, a separate
  * node) ────────────────────────────────────────────────────────────────
@@ -264,10 +280,11 @@ const RECONNECT_INTERVAL_MS = 10000; // how often to retry opening the port afte
 const DIAL_POLL_RESPONSE_TIMEOUT_MS = 200;
 const DIAL_SWEEP_GAP_MS = 20;
 const DIAL_MODE = { thermostat: 0, sound: 1 };
-const DIAL_TAP_EVENT = { none: 0, wake: 1, menuSelect: 2, toggleSpotifyEnabled: 3, returnToMenu: 4 };
-// tapEvent values other than toggleSpotifyEnabled are parsed but not acted
-// on server-side — menu/mode navigation is entirely local to the dial's
-// own UI state machine. Reserved protocol surface, same as SET_RELAY above.
+const DIAL_TAP_EVENT = { none: 0, wake: 1, menuSelect: 2, toggleSpotifyEnabled: 3, returnToMenu: 4, markMaintenanceDone: 5 };
+// tapEvent values other than toggleSpotifyEnabled/markMaintenanceDone are
+// parsed but not acted on server-side — menu/mode navigation is entirely
+// local to the dial's own UI state machine. Reserved protocol surface,
+// same as SET_RELAY above.
 
 // zoneAudio nodes reuse the sensor-rate 10s pollAll() loop, not the dial's
 // fast loop — see this file's header for why sub-second responsiveness
@@ -589,6 +606,40 @@ function handleFrame(addr, cmd, payload) {
 // working" with no record of where.
 let consecutiveMisses = new Map(); // busAddress -> count, reset to 0 on any response
 
+// A single node going silent while the bus/port itself is fine (dongle
+// still connected, other nodes still answering) is a DIFFERENT failure
+// than isBusDown() above — that one's about the port/transport; this is
+// "one specific RP2040 stopped answering," the exact "clean REPORT, then
+// total silence for 12+ hours" failure mode this file's header/git history
+// documents. Console logs alone don't help if nobody's watching them at
+// 2am, so once a node has been silent long enough to rule out a transient
+// blip (NODE_DOWN_ALERT_MISSES, chosen to line up with shouldLogMiss()'s
+// own "this is no longer just noise" threshold), send a Bark push —
+// edge-triggered via nodesAlerted so a multi-hour outage sends exactly one
+// "down" push and one "recovered" push, not one every poll.
+const NODE_DOWN_ALERT_MISSES = 6; // ~1 minute of consecutive silence at POLL_INTERVAL_MS
+const nodesAlerted = new Set(); // busAddress currently in an alerted "down" state
+
+function alertNodeDown(address, label, misses) {
+  if (misses < NODE_DOWN_ALERT_MISSES || nodesAlerted.has(address)) return;
+  nodesAlerted.add(address);
+  // Approximate — one miss roughly every POLL_INTERVAL_MS, the cadence
+  // pollAll()'s own timer runs at (a bit loose when other nodes on the
+  // same cycle are also timing out, but well within "good enough for a
+  // push notification").
+  const silentSeconds = Math.round(misses * POLL_INTERVAL_MS / 1000);
+  sendPush(
+    `RS485 node ${label} has stopped responding (~${silentSeconds}s of silence). Go check its Serial Monitor log and send it over.`,
+    'RS485: Node Down'
+  );
+}
+
+function alertNodeRecovered(address, label, priorMisses) {
+  if (!nodesAlerted.has(address)) return;
+  nodesAlerted.delete(address);
+  sendPush(`RS485 node ${label} is responding again after ${priorMisses} consecutive missed polls.`, 'RS485: Node Recovered');
+}
+
 // A sustained outage logging one warning every single 10s cycle, forever,
 // is what buried an entire day's worth of every other service's logs
 // under ~3800 identical "NO RESPONSE" lines and made it impossible to see
@@ -621,6 +672,7 @@ function pollNode(address, zoneId) {
       if (shouldLogMiss(misses)) {
         console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row)`);
       }
+      alertNodeDown(address, label, misses);
       resolve([]);
     }, POLL_RESPONSE_TIMEOUT_MS);
     pendingReportResolvers.set(address, (readings) => {
@@ -632,6 +684,7 @@ function pollNode(address, zoneId) {
       const priorMisses = consecutiveMisses.get(address) || 0;
       if (priorMisses > 0) {
         console.log(`[RS485] Poll ${label} — RECOVERED after ${priorMisses} consecutive misses`);
+        alertNodeRecovered(address, label, priorMisses);
       }
       consecutiveMisses.set(address, 0);
       resolve(readings);
@@ -662,6 +715,7 @@ function pollZoneAudioNode(address, zoneId) {
       if (shouldLogMiss(misses)) {
         console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row)`);
       }
+      alertNodeDown(address, label, misses);
       resolve();
     }, ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS);
     pendingZoneAudioResolvers.set(address, ({ activeSource }) => {
@@ -670,6 +724,7 @@ function pollZoneAudioNode(address, zoneId) {
       if (priorMisses > 0) {
         const sourceName = ACTIVE_SOURCE_NAME[activeSource] || 'off';
         console.log(`[RS485] Poll ${label} — RECOVERED after ${priorMisses} consecutive misses (now playing ${sourceName})`);
+        alertNodeRecovered(address, label, priorMisses);
       }
       consecutiveMisses.set(address, 0);
       soundSvc.reportActiveSource(zoneId, activeSource);
@@ -931,6 +986,22 @@ async function pollAllDials(getConfiguredNodes) {
         await soundSvc.setZoneEnabled(node.soundZoneId, !current?.spotifyEnabled);
       } catch (err) {
         console.warn(`[RS485] Dial ${node.uniqueId} enable-toggle rejected:`, err.message);
+      }
+    }
+
+    // The Status screen's "Mark Done" button — independent of `mode` (it's
+    // a separate screen from Thermostat/Sound), so no `reply.mode` gate
+    // here unlike the Spotify toggle above. Completes every currently-due
+    // task rather than a specific one: the dial deliberately never renders
+    // per-task text (see dial_node.ino's header), so there's no way for it
+    // to identify a single task to complete — a coarser "clear what's due
+    // right now" action is the only one that makes sense from this screen.
+    if (reply.tapEvent === DIAL_TAP_EVENT.markMaintenanceDone) {
+      try {
+        const due = maintenanceSvc.getState().tasks.filter(t => t.isDue);
+        for (const task of due) await maintenanceSvc.completeTask(task.id);
+      } catch (err) {
+        console.warn(`[RS485] Dial ${node.uniqueId} maintenance-done rejected:`, err.message);
       }
     }
 
