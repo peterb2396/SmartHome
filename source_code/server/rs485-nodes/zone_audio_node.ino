@@ -88,10 +88,23 @@
  * shared input, at announcement priority," not a second physical input]
  * — always this node's current locally-decided value, computed
  * independent of this poll.
+ *
+ * ── Remote firmware update + debug log relay ────────────────────────
+ * Same mechanism as rs485_node.ino — see that file's header for the full
+ * reasoning (no USB wire to a deployed node, so updates ride the RS485
+ * bus itself via arduino-pico's Updater.h into an inactive flash
+ * partition, with this protocol's own CRC32 gating whether FW_END ever
+ * finalizes/reboots) and rs485.js's header for the wire protocol
+ * (FW_BEGIN/FW_CHUNK/FW_END/GET_LOG). Requires the same one-time
+ * OTA-enabled "Flash Size" Arduino IDE setting before this board's first
+ * USB flash. UNVERIFIED against real hardware, same as the rest of this
+ * file — this node type hasn't been built yet.
  */
 
 #include <EEPROM.h>
 #include <Wire.h>
+#include <Updater.h>
+#include <stdarg.h>
 #include "pico/unique_id.h"
 
 // ── Config — edit if your wiring differs ───────────────────────────
@@ -122,8 +135,14 @@ const uint8_t PT2258_I2C_ADDR = 0x88 >> 1; // datasheet gives the 8-bit write ad
 const uint8_t SYNC = 0xAA;
 const uint8_t CMD_ASSIGN = 0x02;
 const uint8_t CMD_POLL_ZONE_AUDIO = 0x05;
+const uint8_t CMD_FW_BEGIN = 0x06;
+const uint8_t CMD_FW_CHUNK = 0x07;
+const uint8_t CMD_FW_END = 0x08;
+const uint8_t CMD_GET_LOG = 0x09;
 const uint8_t CMD_ANNOUNCE = 0x81;
 const uint8_t CMD_ZONE_AUDIO_STATE = 0x85;
+const uint8_t CMD_FW_ACK = 0x86;
+const uint8_t CMD_LOG_LINE = 0x87;
 
 const uint8_t SOURCE_OFF = 0, SOURCE_SPOTIFY = 1, SOURCE_OVERRIDE1 = 2, SOURCE_ANNOUNCEMENT = 3;
 
@@ -150,6 +169,37 @@ uint8_t crc8(const uint8_t* data, size_t len) {
     for (int b = 0; b < 8; b++) crc = (crc & 0x80) ? ((crc << 1) ^ 0x07) : (crc << 1);
   }
   return crc;
+}
+
+// ── Debug log relay — see this file's header ────────────────────────
+// Identical shape to rs485_node.ino's logLine()/popLogLine() — see that
+// file's comment for the ring-buffer reasoning.
+const uint8_t LOG_BUFFER_LINES = 8;
+const uint8_t LOG_LINE_MAX_LEN = 30; // must match rs485.js's LOG_LINE payload budget
+char logBuffer[LOG_BUFFER_LINES][LOG_LINE_MAX_LEN + 1];
+uint8_t logHead = 0, logCount = 0;
+
+void logLine(const char* fmt, ...) {
+  char formatted[96];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(formatted, sizeof(formatted), fmt, args);
+  va_end(args);
+  Serial.println(formatted);
+
+  uint8_t writeIdx = (logHead + logCount) % LOG_BUFFER_LINES;
+  strncpy(logBuffer[writeIdx], formatted, LOG_LINE_MAX_LEN);
+  logBuffer[writeIdx][LOG_LINE_MAX_LEN] = '\0';
+  if (logCount < LOG_BUFFER_LINES) logCount++;
+  else logHead = (logHead + 1) % LOG_BUFFER_LINES;
+}
+
+bool popLogLine(char* out) {
+  if (logCount == 0) return false;
+  strncpy(out, logBuffer[logHead], LOG_LINE_MAX_LEN + 1);
+  logHead = (logHead + 1) % LOG_BUFFER_LINES;
+  logCount--;
+  return true;
 }
 
 // ── Half-duplex send: assert DE/RE, write, wait for the line to clear ──
@@ -251,11 +301,103 @@ void saveAddressToEEPROM(uint8_t addr) {
 uint8_t rxBuf[64];
 uint8_t rxLen = 0;
 
+// ── Remote firmware update — identical to rs485_node.ino's handlers, see
+// that file's comments for the full reasoning; not repeated here.
+bool fwActive = false;
+uint32_t fwExpectedSize = 0;
+uint32_t fwExpectedCrc = 0;
+uint32_t fwBytesWritten = 0;
+uint32_t fwCrcState = 0xFFFFFFFF;
+
+uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    crc ^= data[i];
+    for (int b = 0; b < 8; b++) {
+      crc = (crc & 1) ? (0xEDB88320 ^ (crc >> 1)) : (crc >> 1);
+    }
+  }
+  return crc;
+}
+
+void handleFwBegin(uint8_t* payload, uint8_t len) {
+  uint8_t ack[2] = { 0, 0 };
+  if (len < 8) { sendFrame(busAddress, CMD_FW_ACK, ack, 2); return; }
+  memcpy(&fwExpectedSize, payload, 4);
+  memcpy(&fwExpectedCrc, payload + 4, 4);
+  fwBytesWritten = 0;
+  fwCrcState = 0xFFFFFFFF;
+  fwActive = Update.begin(fwExpectedSize);
+  if (!fwActive) logLine("[ZoneAudio] Firmware update rejected: Update.begin(%lu) failed.", (unsigned long)fwExpectedSize);
+  ack[1] = fwActive ? 1 : 0;
+  sendFrame(busAddress, CMD_FW_ACK, ack, 2);
+}
+
+void handleFwChunk(uint8_t* payload, uint8_t len) {
+  uint16_t seq = 0;
+  bool ok = false;
+  if (len >= 2) {
+    memcpy(&seq, payload, 2);
+    if (fwActive) {
+      uint8_t* data = payload + 2;
+      uint8_t dataLen = len - 2;
+      size_t written = Update.write(data, dataLen);
+      ok = (written == dataLen);
+      if (ok) {
+        fwCrcState = crc32Update(fwCrcState, data, dataLen);
+        fwBytesWritten += dataLen;
+      } else {
+        logLine("[ZoneAudio] Firmware chunk write failed at seq %u.", seq);
+        fwActive = false;
+      }
+    }
+  }
+  uint8_t ack[4] = { 1, (uint8_t)(ok ? 1 : 0), 0, 0 };
+  memcpy(ack + 2, &seq, 2);
+  sendFrame(busAddress, CMD_FW_ACK, ack, 4);
+}
+
+void handleFwEnd() {
+  bool ok = false;
+  if (fwActive && fwBytesWritten == fwExpectedSize) {
+    uint32_t finalCrc = ~fwCrcState;
+    if (finalCrc == fwExpectedCrc) {
+      ok = Update.end(true);
+      if (!ok) logLine("[ZoneAudio] Firmware Update.end() failed verification.");
+    } else {
+      logLine("[ZoneAudio] Firmware CRC mismatch (got %08lX, expected %08lX).", (unsigned long)finalCrc, (unsigned long)fwExpectedCrc);
+    }
+  } else {
+    logLine("[ZoneAudio] Firmware END with no active/incomplete transfer (%lu/%lu bytes).", (unsigned long)fwBytesWritten, (unsigned long)fwExpectedSize);
+  }
+  fwActive = false;
+
+  uint8_t ack[2] = { 2, (uint8_t)(ok ? 1 : 0) };
+  sendFrame(busAddress, CMD_FW_ACK, ack, 2);
+  if (ok) {
+    delay(100);
+    rp2040.reboot();
+  }
+}
+
+void handleGetLog() {
+  char text[LOG_LINE_MAX_LEN + 1];
+  uint8_t payload[1 + LOG_LINE_MAX_LEN];
+  if (popLogLine(text)) {
+    uint8_t textLen = strlen(text);
+    payload[0] = 1;
+    memcpy(payload + 1, text, textLen);
+    sendFrame(busAddress, CMD_LOG_LINE, payload, 1 + textLen);
+  } else {
+    payload[0] = 0;
+    sendFrame(busAddress, CMD_LOG_LINE, payload, 1);
+  }
+}
+
 void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
   if (cmd == CMD_ASSIGN && addr == 0x00 && len == 9) {
     if (memcmp(payload, uniqueId, 8) == 0) {
       saveAddressToEEPROM(payload[8]);
-      Serial.printf("[ZoneAudio] Assigned bus address %d\n", busAddress);
+      logLine("[ZoneAudio] Assigned bus address %d", busAddress);
     }
     return;
   }
@@ -269,6 +411,14 @@ void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
     // main loop — not recomputed here, this poll doesn't drive the
     // decision, it only reads it.
     sendZoneAudioState();
+  } else if (cmd == CMD_FW_BEGIN) {
+    handleFwBegin(payload, len);
+  } else if (cmd == CMD_FW_CHUNK) {
+    handleFwChunk(payload, len);
+  } else if (cmd == CMD_FW_END) {
+    handleFwEnd();
+  } else if (cmd == CMD_GET_LOG) {
+    handleGetLog();
   }
 }
 
@@ -276,7 +426,7 @@ void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
 // pollSerial(); see that file's comment for the full explanation. Without
 // this, a single noise glitch permanently wedges this node's receiver
 // until power-cycled, indistinguishable from a dead node to the master.
-const uint8_t MAX_PAYLOAD_LEN = 32; // largest real payload today is well under this
+const uint8_t MAX_PAYLOAD_LEN = 40; // largest real payload today is FW_CHUNK's 34B (2B seq + 32B data) — matches rs485.js's MAX_PAYLOAD_LEN
 const unsigned long FRAME_STALL_MS = 500;
 bool awaitingFrame = false;
 unsigned long awaitingFrameSince = 0;
@@ -354,7 +504,7 @@ void setup() {
 
   rp2040.wdt_begin(WATCHDOG_TIMEOUT_MS); // see WATCHDOG_TIMEOUT_MS's comment above
 
-  Serial.printf("[ZoneAudio] Boot complete. Address: %d\n", busAddress);
+  logLine("[ZoneAudio] Boot complete. Address: %d", busAddress);
 }
 
 // ── Main loop ────────────────────────────────────────────────────────

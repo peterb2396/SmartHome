@@ -70,10 +70,34 @@
  * persisted to flash-emulated EEPROM — it survives power cycles. A node
  * ships with no address (0x00) and announces itself until configured from
  * the Console's "New Nodes" panel.
+ *
+ * ── Remote firmware update (see rs485.js's header for the wire protocol) ─
+ * The Pi has no USB wire to a deployed node — only this RS485 pair — so a
+ * pushed image arrives in small chunks over the SAME bus normal polling
+ * uses, via Updater.h (arduino-pico's port of the ESP32/ESP8266 Update
+ * library): it writes into an INACTIVE flash partition and only marks it
+ * bootable after a clean finish, so an interrupted/corrupt push leaves
+ * this board running its OLD firmware, not bricked. That safety only
+ * holds if this exact sketch was compiled with an OTA-enabled "Flash
+ * Size" option under Arduino IDE's Tools menu (RP2040 boards package) —
+ * REQUIRED, one-time, per node, via USB, before remote updates can ever
+ * work on it; a build without one just has no second partition to
+ * receive into. UNVERIFIED against real hardware — confirm Updater.h's
+ * exact API against your installed arduino-pico core version.
+ *
+ * ── Debug log relay (GET_LOG) ─────────────────────────────────────
+ * logLine() (below) both Serial.prints (useful on the bench, unchanged)
+ * and queues into a small ring buffer that GET_LOG drains one line per
+ * poll — so field debug output (BME680/SCD41 not found, dial I2C errors,
+ * etc.) shows up in the Console's log Terminal panel with no USB cable,
+ * tagged by node name. Slow/round-robin on the master's side — debug
+ * convenience riding along on production bus time, not control traffic.
  */
 
 #include <Wire.h>
 #include <EEPROM.h>
+#include <Updater.h>
+#include <stdarg.h>
 #include <Adafruit_Sensor.h>
 #include "Adafruit_BME680.h"
 #include "pico/unique_id.h"
@@ -130,10 +154,16 @@ const uint8_t CMD_POLL = 0x01;
 const uint8_t CMD_ASSIGN = 0x02;
 const uint8_t CMD_SET_RELAY = 0x03;
 const uint8_t CMD_POLL_DIAL = 0x04;
+const uint8_t CMD_FW_BEGIN = 0x06;
+const uint8_t CMD_FW_CHUNK = 0x07;
+const uint8_t CMD_FW_END = 0x08;
+const uint8_t CMD_GET_LOG = 0x09;
 const uint8_t CMD_ANNOUNCE = 0x81;
 const uint8_t CMD_REPORT = 0x82;
 const uint8_t CMD_ACK = 0x83;
 const uint8_t CMD_DIAL_STATE = 0x84;
+const uint8_t CMD_FW_ACK = 0x86;
+const uint8_t CMD_LOG_LINE = 0x87;
 
 // ── I2C dial bridge — see this file's header ──────────────────────
 // TBD: pick an address that doesn't collide with BME680 (0x76/0x77) or
@@ -164,6 +194,40 @@ uint8_t crc8(const uint8_t* data, size_t len) {
     }
   }
   return crc;
+}
+
+// ── Debug log relay — see GET_LOG in this file's header ────────────
+const uint8_t LOG_BUFFER_LINES = 8;
+const uint8_t LOG_LINE_MAX_LEN = 30; // must match rs485.js's LOG_LINE payload budget
+char logBuffer[LOG_BUFFER_LINES][LOG_LINE_MAX_LEN + 1];
+uint8_t logHead = 0, logCount = 0;
+
+void logLine(const char* fmt, ...) {
+  char formatted[96];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(formatted, sizeof(formatted), fmt, args);
+  va_end(args);
+  Serial.println(formatted);
+
+  // Ring buffer: write at the next free slot, or — once full — overwrite
+  // the oldest and advance logHead past it (drop it), rather than block
+  // or grow. (logHead+logCount)%N lands exactly on logHead once full,
+  // which is what makes the overwrite-oldest behavior fall out for free.
+  uint8_t writeIdx = (logHead + logCount) % LOG_BUFFER_LINES;
+  strncpy(logBuffer[writeIdx], formatted, LOG_LINE_MAX_LEN);
+  logBuffer[writeIdx][LOG_LINE_MAX_LEN] = '\0';
+  if (logCount < LOG_BUFFER_LINES) logCount++;
+  else logHead = (logHead + 1) % LOG_BUFFER_LINES;
+}
+
+// Fills out[LOG_LINE_MAX_LEN+1] and returns true if a line was queued.
+bool popLogLine(char* out) {
+  if (logCount == 0) return false;
+  strncpy(out, logBuffer[logHead], LOG_LINE_MAX_LEN + 1);
+  logHead = (logHead + 1) % LOG_BUFFER_LINES;
+  logCount--;
+  return true;
 }
 
 // ── Half-duplex send: assert DE/RE, write, wait for the line to clear ─
@@ -208,7 +272,7 @@ void sendReport() {
     appendReading(payload, offset, SENSOR_PRESSURE, bme.pressure / 100.0);
     appendReading(payload, offset, SENSOR_VOC, vocHeuristic(bme.gas_resistance));
   } else {
-    Serial.println("[RS485 Node] BME680 read failed, skipping this report's readings.");
+    logLine("[RS485 Node] BME680 read failed, skipping this report's readings.");
   }
 
   if (HAS_SCD41 && scd41Ready && scd41.readMeasurement()) {
@@ -234,13 +298,13 @@ void bridgeDialPoll(uint8_t* pushPayload, uint8_t pushLen) {
   Wire.write(pushPayload, pushLen);
   uint8_t writeResult = Wire.endTransmission();
   if (writeResult != 0) {
-    Serial.printf("[RS485 Node] Dial I2C write failed (code %d)\n", writeResult);
+    logLine("[RS485 Node] Dial I2C write failed (code %d)", writeResult);
     return;
   }
 
   uint8_t got = Wire.requestFrom(DIAL_I2C_ADDR, DIAL_REPLY_LEN);
   if (got < DIAL_REPLY_LEN) {
-    Serial.printf("[RS485 Node] Dial I2C read short (%d/%d bytes)\n", got, DIAL_REPLY_LEN);
+    logLine("[RS485 Node] Dial I2C read short (%d/%d bytes)", got, DIAL_REPLY_LEN);
     while (Wire.available()) Wire.read(); // drain whatever partial reply there was
     return;
   }
@@ -295,7 +359,7 @@ uint8_t rxLen = 0;
 // nothing clears rxBuf/rxLen except a power cycle, since nothing else in
 // this file ever touches them. Two checks: an implausible len drops the
 // sync byte immediately, a plausible-but-never-completing one times out.
-const uint8_t MAX_PAYLOAD_LEN = 32; // largest real payload today is REPORT's 25B
+const uint8_t MAX_PAYLOAD_LEN = 40; // largest real payload today is FW_CHUNK's 34B (2B seq + 32B data) — matches rs485.js's MAX_PAYLOAD_LEN
 const unsigned long FRAME_STALL_MS = 500; // a full 30B frame takes ~30ms at 9600 baud — generous margin
 bool awaitingFrame = false;
 unsigned long awaitingFrameSince = 0;
@@ -344,11 +408,107 @@ void pollSerial() {
   rxLen -= frameLen;
 }
 
+// ── Remote firmware update — see this file's header + rs485.js's header ─
+bool fwActive = false;
+uint32_t fwExpectedSize = 0;
+uint32_t fwExpectedCrc = 0;
+uint32_t fwBytesWritten = 0;
+uint32_t fwCrcState = 0xFFFFFFFF; // running, NOT yet inverted — inverted only when finalizing, see handleFwEnd()
+
+// Same standard CRC-32 (IEEE 802.3/zlib) as rs485.js's crc32() — must
+// match bit-for-bit, since FW_END's whole-image check only means anything
+// if both sides compute the identical value. Runs one byte at a time (no
+// lookup table) — only executes during an explicit firmware push, never on
+// the hot poll path, so the extra cycles don't matter.
+uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    crc ^= data[i];
+    for (int b = 0; b < 8; b++) {
+      crc = (crc & 1) ? (0xEDB88320 ^ (crc >> 1)) : (crc >> 1);
+    }
+  }
+  return crc;
+}
+
+void handleFwBegin(uint8_t* payload, uint8_t len) {
+  uint8_t ack[2] = { 0, 0 }; // stage=0, ok=0 unless proven otherwise below
+  if (len < 8) { sendFrame(busAddress, CMD_FW_ACK, ack, 2); return; }
+  memcpy(&fwExpectedSize, payload, 4);
+  memcpy(&fwExpectedCrc, payload + 4, 4);
+  fwBytesWritten = 0;
+  fwCrcState = 0xFFFFFFFF;
+  fwActive = Update.begin(fwExpectedSize);
+  if (!fwActive) logLine("[RS485 Node] Firmware update rejected: Update.begin(%lu) failed.", (unsigned long)fwExpectedSize);
+  ack[1] = fwActive ? 1 : 0;
+  sendFrame(busAddress, CMD_FW_ACK, ack, 2);
+}
+
+void handleFwChunk(uint8_t* payload, uint8_t len) {
+  uint16_t seq = 0;
+  bool ok = false;
+  if (len >= 2) {
+    memcpy(&seq, payload, 2);
+    if (fwActive) {
+      uint8_t* data = payload + 2;
+      uint8_t dataLen = len - 2;
+      size_t written = Update.write(data, dataLen);
+      ok = (written == dataLen);
+      if (ok) {
+        fwCrcState = crc32Update(fwCrcState, data, dataLen);
+        fwBytesWritten += dataLen;
+      } else {
+        logLine("[RS485 Node] Firmware chunk write failed at seq %u.", seq);
+        fwActive = false; // abort — FW_END will see the incomplete count and refuse to finalize
+      }
+    }
+  }
+  uint8_t ack[4] = { 1, (uint8_t)(ok ? 1 : 0), 0, 0 };
+  memcpy(ack + 2, &seq, 2);
+  sendFrame(busAddress, CMD_FW_ACK, ack, 4);
+}
+
+void handleFwEnd() {
+  bool ok = false;
+  if (fwActive && fwBytesWritten == fwExpectedSize) {
+    uint32_t finalCrc = ~fwCrcState;
+    if (finalCrc == fwExpectedCrc) {
+      ok = Update.end(true);
+      if (!ok) logLine("[RS485 Node] Firmware Update.end() failed verification.");
+    } else {
+      logLine("[RS485 Node] Firmware CRC mismatch (got %08lX, expected %08lX).", (unsigned long)finalCrc, (unsigned long)fwExpectedCrc);
+    }
+  } else {
+    logLine("[RS485 Node] Firmware END with no active/incomplete transfer (%lu/%lu bytes).", (unsigned long)fwBytesWritten, (unsigned long)fwExpectedSize);
+  }
+  fwActive = false;
+
+  uint8_t ack[2] = { 2, (uint8_t)(ok ? 1 : 0) };
+  sendFrame(busAddress, CMD_FW_ACK, ack, 2);
+  if (ok) {
+    delay(100); // let the ACK's bytes actually clear the RS485 transceiver before this board disappears
+    rp2040.reboot();
+  }
+}
+
+void handleGetLog() {
+  char text[LOG_LINE_MAX_LEN + 1];
+  uint8_t payload[1 + LOG_LINE_MAX_LEN];
+  if (popLogLine(text)) {
+    uint8_t textLen = strlen(text);
+    payload[0] = 1;
+    memcpy(payload + 1, text, textLen);
+    sendFrame(busAddress, CMD_LOG_LINE, payload, 1 + textLen);
+  } else {
+    payload[0] = 0;
+    sendFrame(busAddress, CMD_LOG_LINE, payload, 1);
+  }
+}
+
 void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
   if (cmd == CMD_ASSIGN && addr == 0x00 && len == 9) {
     if (memcmp(payload, uniqueId, 8) == 0) {
       saveAddressToEEPROM(payload[8]);
-      Serial.printf("[RS485 Node] Assigned bus address %d\n", busAddress);
+      logLine("[RS485 Node] Assigned bus address %d", busAddress);
     }
     return;
   }
@@ -358,6 +518,14 @@ void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
     sendReport();
   } else if (cmd == CMD_POLL_DIAL && HAS_DIAL) {
     bridgeDialPoll(payload, len);
+  } else if (cmd == CMD_FW_BEGIN) {
+    handleFwBegin(payload, len);
+  } else if (cmd == CMD_FW_CHUNK) {
+    handleFwChunk(payload, len);
+  } else if (cmd == CMD_FW_END) {
+    handleFwEnd();
+  } else if (cmd == CMD_GET_LOG) {
+    handleGetLog();
   } else if (cmd == CMD_SET_RELAY) {
     // No relay hardware on sensor nodes today — acknowledge so the master
     // doesn't retry, in case a future node type does carry one.
@@ -391,13 +559,13 @@ void setup() {
     bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
     bme.setGasHeater(320, 150); // 320°C for 150ms, standard B  SEC-independent profile
   } else {
-    Serial.println("[RS485 Node] BME680 not found.");
+    logLine("[RS485 Node] BME680 not found.");
   }
 
   if (HAS_SCD41) {
     scd41Ready = scd41.begin();
     if (!scd41Ready) {
-      Serial.println("[RS485 Node] SCD41 not found.");
+      logLine("[RS485 Node] SCD41 not found.");
     } else {
       // begin() only initializes the sensor — it doesn't start sampling.
       // Without this, readMeasurement() always returns false (no new data
@@ -408,7 +576,7 @@ void setup() {
 
   rp2040.wdt_begin(WATCHDOG_TIMEOUT_MS); // see WATCHDOG_TIMEOUT_MS's comment above
 
-  Serial.printf("[RS485 Node] Boot complete. Address: %d\n", busAddress);
+  logLine("[RS485 Node] Boot complete. Address: %d", busAddress);
 }
 
 // ── Main loop ─────────────────────────────────────────────────────

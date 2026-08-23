@@ -6,10 +6,12 @@ import {
 import { useConsole } from "../hooks/useConsole";
 import { useConsoleLogs } from "../hooks/useConsoleLogs";
 import { useSettings } from "../hooks/useSettings";
-import { configureConsoleNode, deleteConsoleNode } from "../api";
+import { configureConsoleNode, deleteConsoleNode, getFirmwareList } from "../api";
 import PageHeader from "../components/PageHeader";
 import CameraTile from "../components/CameraTile";
 import NodeSetupModal from "../components/NodeSetupModal";
+import NodeFlashControl from "../components/NodeFlashControl";
+import FirmwarePanel from "../components/FirmwarePanel";
 import GpioMapEditor from "../components/GpioMapEditor";
 import RelayMapEditor from "../components/RelayMapEditor";
 import Spinner from "../components/Spinner";
@@ -55,7 +57,15 @@ export default function Console() {
   const { lines: logLines, connected: logsConnected } = useConsoleLogs();
   const { settings, updateSetting } = useSettings();
   const [setupNode, setSetupNode] = useState(null);
+  const [firmwareFiles, setFirmwareFiles] = useState([]);
   const terminalRef = useRef(null);
+
+  // Fetched here (not inside NodeFlashControl) so every node row shares
+  // one list instead of each firing its own request — see FirmwarePanel
+  // for where these images get uploaded.
+  useEffect(() => {
+    getFirmwareList().then(({ data }) => setFirmwareFiles(data)).catch(e => console.error("Console firmware list:", e));
+  }, []);
   // Which log sources (the "[ServiceName]" prefix every service already
   // logs with — see server/services/logStream.js) to hide from the
   // terminal. Stores the hidden set, not the visible one, so a source that
@@ -271,20 +281,24 @@ export default function Console() {
                   <div key={n.uniqueId} style={{
                     display: "flex", justifyContent: "space-between", alignItems: "center",
                     background: colors.surface, borderRadius: 10, padding: "0.6rem 0.85rem",
+                    flexWrap: "wrap", gap: "0.5rem",
                   }}>
                     <div>
                       <div style={{ fontWeight: 600, fontSize: "0.85rem", color: colors.textPrimary }}>{n.name}</div>
                       <div style={{ fontSize: "0.75rem", color: colors.textMuted }}>{n.kind}{n.zoneId ? ` · ${n.zoneId}` : ""}</div>
                     </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button onClick={() => setSetupNode(n)} title="Edit" style={{
-                        width: 30, height: 30, background: "var(--bg-surface-alt)", border: "none", borderRadius: 8,
-                        color: colors.textSecondary, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-                      }}><FaCog size={12} /></button>
-                      <button onClick={() => handleRemoveNode(n.uniqueId)} title="Remove" style={{
-                        width: 30, height: 30, background: "var(--bg-surface-alt)", border: "none", borderRadius: 8,
-                        color: colors.danger, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-                      }}><FaTrash size={12} /></button>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <NodeFlashControl uniqueId={n.uniqueId} firmwareFiles={firmwareFiles} />
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => setSetupNode(n)} title="Edit" style={{
+                          width: 30, height: 30, background: "var(--bg-surface-alt)", border: "none", borderRadius: 8,
+                          color: colors.textSecondary, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                        }}><FaCog size={12} /></button>
+                        <button onClick={() => handleRemoveNode(n.uniqueId)} title="Remove" style={{
+                          width: 30, height: 30, background: "var(--bg-surface-alt)", border: "none", borderRadius: 8,
+                          color: colors.danger, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                        }}><FaTrash size={12} /></button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -294,6 +308,7 @@ export default function Console() {
         )}
       </div>
 
+      <FirmwarePanel />
       <GpioMapEditor />
       <RelayMapEditor />
 

@@ -165,6 +165,64 @@
  * shared Pi input, at announcement priority," not a second physical
  * input] — read straight into sound.js's reportActiveSource(), which is
  * display-only state, never fed back into a command.
+ *
+ * ── Remote firmware update (RP2040 nodes only — see firmwareUpdate.js) ───
+ * The Pi has no USB wire to a deployed node, only this RS485 pair — so
+ * "flash it remotely" means pushing a new image over the SAME half-duplex
+ * bus normal polling uses, in small chunks, and having the node install it
+ * itself. Node-side this rides arduino-pico's Update library (same shape
+ * as ESP32/ESP8266's): the new image goes into an inactive flash
+ * partition and is only marked bootable after a clean finish, so an
+ * interrupted or corrupt push leaves the node running its OLD firmware,
+ * not bricked — that safety only holds if the node was BUILT with an
+ * OTA-enabled "Flash Size" partition scheme in the Arduino IDE, which is
+ * a one-time per-node manual-USB-flash requirement, not something this
+ * protocol can do for a node that doesn't already have it.
+ *
+ * This protocol layer adds its OWN whole-image CRC32 check (below,
+ * independent of whatever Update.end() itself verifies) specifically so
+ * correctness doesn't depend on exactly matching some Updater library
+ * version's internal behavior — FW_BEGIN carries the sender's expected
+ * CRC32, the node accumulates its own running CRC32 over every byte
+ * written, and FW_END only finalizes/reboots if they match.
+ *
+ * One flash runs at a time, one node at a time — reuses pollingAddresses
+ * (see above) so an in-progress push simply excludes that address from
+ * normal polling until it finishes or times out; every OTHER node keeps
+ * polling normally throughout. At 9600 baud, half-duplex, one small chunk
+ * per round trip, a few-hundred-KB image realistically takes low single
+ * digit MINUTES — see flashFirmware()'s own comment before assuming
+ * something's stuck.
+ *
+ * 0x06 FW_BEGIN  (master→node) — payload: [totalSize u32][crc32 u32] (8B).
+ *                  Node calls Update.begin(totalSize), resets its running
+ *                  CRC32 accumulator. Replies FW_ACK stage=0.
+ * 0x07 FW_CHUNK  (master→node) — payload: [seq u16][data...] (up to
+ *                  FW_CHUNK_DATA_LEN=32B data). Node calls
+ *                  Update.write(data, len), folds data into the running
+ *                  CRC32. Replies FW_ACK stage=1, echoing seq.
+ * 0x08 FW_END    (master→node) — payload: none. Node compares its
+ *                  running CRC32 against the one FW_BEGIN sent; if it
+ *                  matches, calls Update.end(true) and — only if THAT also
+ *                  reports success — replies FW_ACK stage=2 ok=1 and
+ *                  reboots into the new image; on any mismatch it replies
+ *                  ok=0 and keeps running the current firmware, untouched.
+ * 0x09 GET_LOG   (master→node) — payload: none. Node replies LOG_LINE with
+ *                  its next buffered debug line, if any queued — see
+ *                  rs485_node.ino's logLine() — so field debug output
+ *                  (BME680/SCD41 not found, dial I2C errors, etc.) is
+ *                  visible from the Console's existing log Terminal panel
+ *                  without a USB cable, tagged by node name (see
+ *                  pollNodeLog() below). Polled slowly and round-robin
+ *                  (LOG_POLL_INTERVAL_MS/one node per tick) — this is
+ *                  debug convenience, not control traffic, and
+ *                  deliberately kept cheap on bus time.
+ *
+ * 0x86 FW_ACK    (node→master) — payload: [stage 1B][ok 1B][seq u16 — only
+ *                  meaningful for stage=1, echoes the chunk seq].
+ * 0x87 LOG_LINE  (node→master) — payload: [hasLine 1B][text...] (up to
+ *                  30B, UTF-8/ASCII). hasLine=0 with no text means nothing
+ *                  was queued this poll.
  */
 
 const sensors = require('./sensorStore');
@@ -173,7 +231,9 @@ const { sendPush } = require('./mail');
 const SYNC = 0xaa;
 const CMD = {
   POLL: 0x01, ASSIGN: 0x02, SET_RELAY: 0x03, POLL_DIAL: 0x04, POLL_ZONE_AUDIO: 0x05,
+  FW_BEGIN: 0x06, FW_CHUNK: 0x07, FW_END: 0x08, GET_LOG: 0x09,
   ANNOUNCE: 0x81, REPORT: 0x82, ACK: 0x83, DIAL_STATE: 0x84, ZONE_AUDIO_STATE: 0x85,
+  FW_ACK: 0x86, LOG_LINE: 0x87,
 };
 const ACTIVE_SOURCE_NAME = { 0: 'off', 1: 'spotify', 2: 'override1', 3: 'override2' };
 const SENSOR_TYPE = { temperature: 0x01, humidity: 0x02, pressure: 0x03, voc: 0x04, co2: 0x05 };
@@ -215,6 +275,37 @@ const DIAL_TAP_EVENT = { none: 0, wake: 1, menuSelect: 2, toggleSpotifyEnabled: 
 // on the node, independent of this poll).
 const ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS = 2000;
 
+// ── Remote firmware update — see this file's header for the protocol ────
+const FW_CHUNK_DATA_LEN = 32; // + 2B seq = 34B payload, under MAX_PAYLOAD_LEN (40)
+const FW_BEGIN_TIMEOUT_MS = 3000; // Update.begin() may erase flash — give it room
+const FW_CHUNK_TIMEOUT_MS = 2000; // Update.write() can cross a sector boundary and erase
+const FW_END_TIMEOUT_MS = 6000; // finalize + verify + (on success) the node reboots itself
+const FW_CHUNK_RETRIES = 5; // a dropped chunk is just re-sent, not a fatal abort
+
+// Debug-convenience only (see GET_LOG in this file's header) — deliberately
+// slow and one node per tick so this never competes meaningfully with real
+// polling for bus time.
+const LOG_POLL_INTERVAL_MS = 3000;
+const LOG_POLL_RESPONSE_TIMEOUT_MS = 500;
+
+// Standard CRC-32 (IEEE 802.3 / zlib) — must match crc32Update() in
+// rs485_node.ino/zone_audio_node.ino bit-for-bit, since FW_END's whole-image
+// check is only meaningful if both sides compute the identical value.
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function crc32(buf) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) crc = CRC32_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 // onData()'s resync safety net — see its own comment for the failure mode
 // this guards against. Largest real payload today is POLL_DIAL's 27B;
 // generous headroom over that so a legitimate future protocol addition
@@ -247,6 +338,8 @@ let rxBuffer = Buffer.alloc(0);
 let pendingReportResolvers = new Map(); // address -> resolve fn, for the current in-flight POLL
 let pendingDialResolvers = new Map(); // address -> resolve fn, for the current in-flight POLL_DIAL
 let pendingZoneAudioResolvers = new Map(); // address -> resolve fn, for the current in-flight POLL_ZONE_AUDIO
+let pendingFwResolvers = new Map(); // address -> resolve fn, for the current in-flight FW_BEGIN/CHUNK/END
+let pendingLogResolvers = new Map(); // address -> resolve fn, for the current in-flight GET_LOG
 
 // A combined sensor+dial node (nodeRegistry.js's `hasDial`) answers both
 // pollAll()'s 10s sensor sweep and pollAllDials()'s ~20ms dial sweep on the
@@ -471,6 +564,21 @@ function handleFrame(addr, cmd, payload) {
     if (!resolve || payload.length < 1) return;
     resolve({ activeSource: payload[0] });
     pendingZoneAudioResolvers.delete(addr);
+    return;
+  }
+  if (cmd === CMD.FW_ACK) {
+    const resolve = pendingFwResolvers.get(addr);
+    if (!resolve || payload.length < 2) return;
+    resolve({ stage: payload[0], ok: !!payload[1], seq: payload.length >= 4 ? payload.readUInt16LE(2) : null });
+    pendingFwResolvers.delete(addr);
+    return;
+  }
+  if (cmd === CMD.LOG_LINE) {
+    const resolve = pendingLogResolvers.get(addr);
+    if (!resolve || payload.length < 1) return;
+    const hasLine = !!payload[0];
+    resolve(hasLine ? payload.subarray(1).toString('utf8').replace(/\0+$/, '') : null);
+    pendingLogResolvers.delete(addr);
   }
 }
 
@@ -569,6 +677,116 @@ function pollZoneAudioNode(address, zoneId) {
     });
     writeFrame(buildFrame(address, CMD.POLL_ZONE_AUDIO, push));
   });
+}
+
+// ── Remote firmware update ──────────────────────────────────────────────
+// One request/reply exchange over the FW_* protocol — mirrors pollNode()'s
+// shape (promise + timeout + pendingFwResolvers) but generic over which
+// frame gets sent, since FW_BEGIN/FW_CHUNK/FW_END are all "send one frame,
+// await one FW_ACK" with different timeouts.
+function fwExchange(address, frame, timeoutMs) {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      pendingFwResolvers.delete(address);
+      resolve(null);
+    }, timeoutMs);
+    pendingFwResolvers.set(address, (ack) => {
+      clearTimeout(timeout);
+      resolve(ack);
+    });
+    writeFrame(frame, true); // OTA traffic is rare and important enough to always log
+  });
+}
+
+// Pushes `buffer` (a full firmware .bin) to `address` over RS485, one
+// FW_CHUNK_DATA_LEN chunk at a time. Claims `address` in pollingAddresses
+// for the whole operation — see this file's header — so normal polling of
+// THIS node pauses until it finishes (expected: it's about to reboot) while
+// every other node keeps polling normally. Resolves true only if FW_END
+// both CRC-matched and the node's own Update.end() reported success; false
+// for anything else (timeout, NACK, CRC mismatch) — in every false case the
+// node is defined to still be running its OLD firmware untouched, so a
+// caller can just retry the whole push.
+//
+// Speed reality check: 9600 baud, half-duplex, one small chunk per round
+// trip (send + node's Update.write() + ack) — figure roughly 100-150ms per
+// chunk including driver/turnaround overhead, so a 300KB image (~9,400
+// chunks at 32B) is realistically several minutes, not seconds. onProgress
+// (if given) is called after every chunk with {sent, total} so a caller can
+// show real progress instead of a spinner with no sense of how long this
+// legitimately takes.
+async function flashFirmware(address, buffer, onProgress) {
+  if (usingMock) return false;
+  if (pollingAddresses.has(address)) return false; // already mid-exchange with something else
+  pollingAddresses.add(address);
+  try {
+    const totalCrc = crc32(buffer);
+    const beginPayload = Buffer.alloc(8);
+    beginPayload.writeUInt32LE(buffer.length, 0);
+    beginPayload.writeUInt32LE(totalCrc, 4);
+    const beginAck = await fwExchange(address, buildFrame(address, CMD.FW_BEGIN, beginPayload), FW_BEGIN_TIMEOUT_MS);
+    if (!beginAck || !beginAck.ok) return false;
+
+    let seq = 0;
+    for (let offset = 0; offset < buffer.length; offset += FW_CHUNK_DATA_LEN) {
+      const data = buffer.subarray(offset, offset + FW_CHUNK_DATA_LEN);
+      const chunkPayload = Buffer.concat([Buffer.alloc(2), data]);
+      chunkPayload.writeUInt16LE(seq, 0);
+      const frame = buildFrame(address, CMD.FW_CHUNK, chunkPayload);
+
+      let ack = null;
+      for (let attempt = 0; attempt < FW_CHUNK_RETRIES && !ack; attempt++) {
+        const reply = await fwExchange(address, frame, FW_CHUNK_TIMEOUT_MS);
+        if (reply && reply.ok && reply.seq === seq) ack = reply;
+      }
+      if (!ack) return false; // exhausted retries — node unresponsive mid-transfer
+
+      seq++;
+      if (onProgress) onProgress({ sent: Math.min(offset + FW_CHUNK_DATA_LEN, buffer.length), total: buffer.length });
+    }
+
+    const endAck = await fwExchange(address, buildFrame(address, CMD.FW_END), FW_END_TIMEOUT_MS);
+    return !!(endAck && endAck.ok);
+  } finally {
+    pollingAddresses.delete(address);
+  }
+}
+
+// ── Node debug-log relay — see GET_LOG in this file's header ───────────
+// One node per tick, round-robin, deliberately slow — this is debug
+// convenience riding along on production bus time, not control traffic.
+let logPollCursor = 0;
+let logPollTimer = null;
+async function pollNodeLog(getConfiguredNodes) {
+  const nodes = getConfiguredNodes().filter(n => n.busAddress != null);
+  if (nodes.length === 0 || usingMock) {
+    logPollTimer = setTimeout(() => pollNodeLog(getConfiguredNodes), LOG_POLL_INTERVAL_MS);
+    return;
+  }
+  const node = nodes[logPollCursor % nodes.length];
+  logPollCursor++;
+
+  if (!pollingAddresses.has(node.busAddress)) {
+    pollingAddresses.add(node.busAddress);
+    const line = await new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        pendingLogResolvers.delete(node.busAddress);
+        resolve(null);
+      }, LOG_POLL_RESPONSE_TIMEOUT_MS);
+      pendingLogResolvers.set(node.busAddress, (text) => {
+        clearTimeout(timeout);
+        resolve(text);
+      });
+      writeFrame(buildFrame(node.busAddress, CMD.GET_LOG));
+    });
+    pollingAddresses.delete(node.busAddress);
+    // sourceFor() in logStream.js groups by the leading [Bracket] — this
+    // makes each node's field debug output show up as its own source in
+    // the Console's existing Terminal panel, no new UI needed.
+    if (line) console.log(`[Node:${node.name}] ${line}`);
+  }
+
+  logPollTimer = setTimeout(() => pollNodeLog(getConfiguredNodes), LOG_POLL_INTERVAL_MS);
 }
 
 async function pollAll(configuredNodes) {
@@ -754,6 +972,7 @@ function init(getConfiguredNodes) {
   openTransport();
   pollTimer = setInterval(() => pollAll(getConfiguredNodes()), POLL_INTERVAL_MS);
   pollAllDials(getConfiguredNodes); // self-reschedules — see its own comment
+  pollNodeLog(getConfiguredNodes); // self-reschedules — see its own comment
   console.log('[RS485] Service initialized.');
 }
 
@@ -761,4 +980,7 @@ function isBusDown() {
   return busDown;
 }
 
-module.exports = { init, getPending, assignAddress, isBusDown, CMD, SENSOR_TYPE, DIAL_MODE };
+// address must currently be idle (not mid-poll/mid-dial-sweep) — callers
+// needing a node's live busAddress should read it from nodeRegistry, same
+// as everywhere else in this codebase.
+module.exports = { init, getPending, assignAddress, isBusDown, flashFirmware, CMD, SENSOR_TYPE, DIAL_MODE };

@@ -79,6 +79,17 @@ export const upsertRelay        = (relay) => api.post("/console/relay-map", rela
 export const deleteRelay        = (address, channel) => api.delete(`/console/relay-map/${address}/${channel}`);
 export const getConsoleFaults   = () => api.get("/console/faults");
 
+// Remote firmware update (RP2040 nodes) — see server/services/rs485.js's
+// header for the wire protocol and server/services/firmwareUpdate.js for
+// the storage/orchestration this drives. Images upload as base64 (see
+// firmwareUpdate.js's comment on why — reuses the existing JSON body
+// limit rather than adding a raw-upload dependency).
+export const getFirmwareList    = () => api.get("/console/firmware");
+export const uploadFirmware     = (filename, dataBase64) => api.post("/console/firmware", { filename, dataBase64 });
+export const deleteFirmwareFile = (filename) => api.delete(`/console/firmware/${filename}`);
+export const flashNode          = (uniqueId, filename) => api.post(`/console/nodes/${uniqueId}/flash`, { filename });
+export const getFlashStatus     = (uniqueId) => api.get(`/console/nodes/${uniqueId}/flash-status`);
+
 // ── Sound (software scaffold — see server/services/sound.js) ───────────────
 export const getSound         = () => api.get("/sound");
 export const setSoundZone     = (id, body) => api.post(`/sound/zone/${id}`, body);
