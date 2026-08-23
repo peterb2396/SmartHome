@@ -467,14 +467,12 @@ function writeFrame(frame, verbose = false) {
 let awaitingFrameSince = null;
 
 function onData(chunk) {
-  // Raw, unparsed — the one log line that can tell "nothing at all came
-  // back" apart from "something came back but didn't parse right." Every
-  // chunk, not just complete frames, so a garbled/partial reply is visible
-  // too. Unthrottled, unlike TX/NO-RESPONSE — this only ever fires when
-  // bytes actually arrive, which is exactly the rare, valuable case during
-  // an outage (self-limiting: if truly nothing comes back, this simply
-  // never logs, no flooding risk).
-  console.log(`[RS485] RX ${chunk.length}B: ${chunk.toString('hex')}`);
+  // No routine RX log here on purpose — every chunk on a healthy bus used
+  // to print a hex dump, which is exactly the noise this was asked to
+  // remove. The raw bytes still show up when they actually matter: see the
+  // CRC-mismatch warning below, which now carries the offending frame's
+  // hex directly on the same line instead of relying on a separate,
+  // unconditional per-chunk log to have captured it.
   rxBuffer = Buffer.concat([rxBuffer, chunk]);
   let syncIdx;
   while ((syncIdx = rxBuffer.indexOf(SYNC)) !== -1) {
@@ -520,11 +518,12 @@ function onData(chunk) {
     const payload = rxBuffer.subarray(syncIdx + 4, syncIdx + 4 + len);
     const receivedCrc = rxBuffer[frameEnd - 1];
     const expectedCrc = crc8(rxBuffer.subarray(syncIdx + 1, syncIdx + 4 + len));
+    const rawFrame = rxBuffer.subarray(syncIdx, frameEnd); // captured before advancing, only used if this turns out to be a failure below
     rxBuffer = rxBuffer.subarray(frameEnd);
     awaitingFrameSince = null;
 
     if (receivedCrc !== expectedCrc) {
-      console.warn('[RS485] CRC mismatch, dropping frame.');
+      console.warn(`[RS485] CRC mismatch, dropping frame (raw ${rawFrame.length}B: ${rawFrame.toString('hex')})`);
       continue;
     }
     handleFrame(addr, cmd, payload);
@@ -664,13 +663,21 @@ function pollNode(address, zoneId) {
     if (pollingAddresses.has(address)) return resolve([]);
     pollingAddresses.add(address);
     const label = `addr=${address}${zoneId ? ` zone=${zoneId}` : ''}`;
+    const frame = buildFrame(address, CMD.POLL);
     const timeout = setTimeout(() => {
       pendingReportResolvers.delete(address);
       pollingAddresses.delete(address);
       const misses = (consecutiveMisses.get(address) || 0) + 1;
       consecutiveMisses.set(address, misses);
       if (shouldLogMiss(misses)) {
-        console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row)`);
+        // The TX hex used to be logged speculatively, BEFORE knowing
+        // whether this poll would even miss — which meant it fired on
+        // nearly every single healthy poll too (a fresh miss count of 1
+        // always passed the "first 5" checkpoint in shouldLogMiss()),
+        // exactly the routine noise this was asked to remove. Now it's
+        // only ever printed here, attached to an actual miss, so a quiet
+        // bus stays quiet and a real outage still shows what was sent.
+        console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row) — sent ${frame.length}B: ${frame.toString('hex')}`);
       }
       alertNodeDown(address, label, misses);
       resolve([]);
@@ -689,12 +696,7 @@ function pollNode(address, zoneId) {
       consecutiveMisses.set(address, 0);
       resolve(readings);
     });
-    // Predicts whether THIS attempt, if it times out, would land on a
-    // shouldLogMiss() checkpoint — so the TX hex dump and the eventual
-    // "NO RESPONSE, N in a row" warning it corresponds to show up
-    // together, not logged independently of each other.
-    const prospectiveMisses = (consecutiveMisses.get(address) || 0) + 1;
-    writeFrame(buildFrame(address, CMD.POLL), shouldLogMiss(prospectiveMisses));
+    writeFrame(frame); // no speculative hex dump on the routine send — see the NO RESPONSE warning above for the failure-tied one instead
   });
 }
 
@@ -708,12 +710,13 @@ function pollZoneAudioNode(address, zoneId) {
     const { spotifyEnabled, announcementActive, volumePercent } = soundSvc.getZoneAudioPush(zoneId);
     const flags = (spotifyEnabled ? 1 : 0) | (announcementActive ? 2 : 0);
     const push = Buffer.from([flags, volumePercent]);
+    const frame = buildFrame(address, CMD.POLL_ZONE_AUDIO, push);
     const timeout = setTimeout(() => {
       pendingZoneAudioResolvers.delete(address);
       const misses = (consecutiveMisses.get(address) || 0) + 1;
       consecutiveMisses.set(address, misses);
       if (shouldLogMiss(misses)) {
-        console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row)`);
+        console.warn(`[RS485] Poll ${label} — NO RESPONSE (timed out after ${ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row) — sent ${frame.length}B: ${frame.toString('hex')}`);
       }
       alertNodeDown(address, label, misses);
       resolve();
@@ -730,7 +733,7 @@ function pollZoneAudioNode(address, zoneId) {
       soundSvc.reportActiveSource(zoneId, activeSource);
       resolve();
     });
-    writeFrame(buildFrame(address, CMD.POLL_ZONE_AUDIO, push));
+    writeFrame(frame);
   });
 }
 

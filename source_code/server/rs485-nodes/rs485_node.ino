@@ -190,7 +190,7 @@
 // that the hard way — see git history. The library/object below now always
 // compile in; scd41 just never gets begin()'d or read when this is false.
 const bool HAS_SCD41 = true; // false for basement/attic monitor nodes
-const bool HAS_DIAL = true;  // false for zones with no wall dial attached
+const bool HAS_DIAL = false;  // false for zones with no wall dial attached
 
 const int RS485_DE_RE_PIN = 2;
 const unsigned long BAUD_RATE = 9600;
@@ -544,14 +544,27 @@ void readSensorsOnCore1() {
     }
   }
 
-  bool co2Ok = false;
+  // The SCD41 only produces a NEW measurement roughly every 5 seconds
+  // (its own internal periodic-measurement cadence, started once in
+  // setup1()) — it does not mean anything went wrong if we happen to ask
+  // again before that's elapsed. getDataReadyStatus() is a fast (~1ms)
+  // status-register check with no data transfer; only call the real
+  // readMeasurement() once it says yes, so a `false` from readMeasurement()
+  // itself always means an ACTUAL read failure, never "just not yet" —
+  // which is also what a 1ms-and-done cycle turned out to mean before this
+  // fix: readMeasurement() itself was returning false near-instantly for
+  // "not ready," and every one of those was being miscounted as a failure.
+  bool co2DataReady = false, co2Ok = false;
   unsigned long scdMs = 0;
   float co2 = 0;
   if (HAS_SCD41 && scd41ReadyLocal) {
-    unsigned long start = millis();
-    co2Ok = scd41.readMeasurement();
-    scdMs = millis() - start;
-    if (co2Ok) co2 = (float)scd41.getCO2();
+    co2DataReady = scd41.getDataReadyStatus();
+    if (co2DataReady) {
+      unsigned long start = millis();
+      co2Ok = scd41.readMeasurement();
+      scdMs = millis() - start;
+      if (co2Ok) co2 = (float)scd41.getCO2();
+    }
   }
 
   unsigned long now = millis();
@@ -571,7 +584,10 @@ void readSensorsOnCore1() {
     }
     bmeFailStreakNow = shared.bmeFailStreak;
   }
-  if (HAS_SCD41 && scd41ReadyLocal) {
+  // No data-ready yet is NOT a failure — leave co2Ok/streak/counters
+  // completely untouched (the last known-good value, and its staleness
+  // clock, just keep holding until a real new attempt actually happens).
+  if (HAS_SCD41 && scd41ReadyLocal && co2DataReady) {
     shared.lastScd41ReadMs = scdMs;
     if (co2Ok) {
       shared.co2Ok = true;
@@ -583,12 +599,12 @@ void readSensorsOnCore1() {
       shared.scd41FailTotal++;
       shared.scd41FailStreak++;
     }
-    scd41FailStreakNow = shared.scd41FailStreak;
   }
+  scd41FailStreakNow = shared.scd41FailStreak;
   critical_section_exit(&sharedLock);
 
   if (bmeReadyLocal && !bmeOk) logLine("[RS485 Node] BME680 read failed (%lums, streak %lu)", bmeMs, bmeFailStreakNow);
-  if (HAS_SCD41 && scd41ReadyLocal && !co2Ok) logLine("[RS485 Node] SCD41 read failed (%lums, streak %lu)", scdMs, scd41FailStreakNow);
+  if (HAS_SCD41 && scd41ReadyLocal && co2DataReady && !co2Ok) logLine("[RS485 Node] SCD41 read failed (%lums, streak %lu)", scdMs, scd41FailStreakNow);
 
   if (bmeFailStreakNow >= I2C_FAIL_RECOVERY_THRESHOLD || scd41FailStreakNow >= I2C_FAIL_RECOVERY_THRESHOLD) i2cBusRecovery();
 }
