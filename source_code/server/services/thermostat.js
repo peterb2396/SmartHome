@@ -968,6 +968,24 @@ async function init() {
   i2cRelay.init();
   boiler.init();
 
+  // Closes a real startup gap: i2cRelay.js only zeroes a board's registers
+  // the first time setChannel() is ever called for that address, and
+  // AIR_HANDLER_BOARD's first-ever call used to be inside driveAirHandler()
+  // — which only runs from tick(), which doesn't fire until TICK_MS after
+  // boot (setInterval, not an immediate call). Meanwhile the PCA9535-family
+  // chip these boards use defaults every pin to INPUT mode at power-on,
+  // with an internal ~100kΩ pull-up on each pin — so every channel floats
+  // HIGH (energized, since these boards are active-high) from the moment
+  // the 24V bus powers up until Node finally touches that address. Damper/
+  // boiler boards never showed this because they're both zeroed a few
+  // lines below/in boiler.init() — synchronously, within the same startup
+  // burst — closing their version of this same gap in milliseconds instead
+  // of leaving it open for TICK_MS. Real-world effect before this fix: the
+  // reversing valve, both heat stages, and the fan all sat energized
+  // together on every single restart — a combination that should never
+  // happen even briefly on a real air handler.
+  for (const ch of Object.values(AH_CH)) i2cRelay.setChannel(AIR_HANDLER_BOARD, ch, false);
+
   // R and C are physically jumpered, not relay-switched — see AH_CH's
   // comment — so there's nothing to energize here for them.
 
