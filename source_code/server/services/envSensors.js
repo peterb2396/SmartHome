@@ -1,11 +1,18 @@
 /**
  * Environmental Sensor Classification
  * ─────────────────────────────────────────────────────────────────
- * Shared by thermostat.js (4-zone air handler) and boiler.js (3-zone gas
- * boiler) — every zone on both systems has an RS485 node (BME680 + SCD41)
- * reporting humidity/pressure/voc/co2 the same way, so the read/classify/
- * alert logic only needs to exist once. Pressure has no safety
- * implication — read and displayed, never classified.
+ * Shared by thermostat.js (4-zone air handler), boiler.js (its matching
+ * 4 zones), and monitorZones.js (basement/attic) — one read/classify/
+ * alert implementation for all of them, since they all read through the
+ * same `<type>-<zoneId>` sensorStore convention. Hardware is NOT uniform
+ * across zones, though: thermostat/boiler zones only ever carry an SCD41
+ * (co2 only — no BME680 on those nodes), while basement/attic carry a
+ * full BME680 + SCD41 (humidity/pressure/voc/co2). That's fine as-is —
+ * every field here already reads as `null`/"no reading" when a zone's
+ * node doesn't report that type, the same graceful path any not-yet-wired
+ * sensor takes, so nothing about this file needs to special-case which
+ * zones have which chips. Pressure has no safety implication — read and
+ * displayed, never classified.
  */
 
 const sensors = require('./sensorStore');

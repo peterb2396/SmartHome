@@ -264,8 +264,16 @@ void applyAudioRouting(uint8_t source, uint8_t volumePercent) {
 
   digitalWrite(AMP_MUTE_PIN, source == SOURCE_OFF ? HIGH : LOW);
 
-  // Only the shared input's own volume is under this node's control —
-  // override1 passes through at its native line level, per the design.
+  // Only the shared (Spotify/announcement) input's own volume is under
+  // this node's control, by design — override1 (the TV) passes straight
+  // through the CD4066 to the amp at its native line level, completely
+  // untouched by the PT2258. This is deliberate, not an oversight: it
+  // means the TV's OWN remote is what controls loudness end to end
+  // through this amp, exactly as if the amp weren't in the signal path at
+  // all — the app's "Music Volume" page/dial only ever adjusts Spotify's
+  // level (see sound.js's header and web/src/pages/Sound.jsx), and would
+  // otherwise silently double-attenuate the TV on top of whatever the TV
+  // itself is already outputting, making its own remote feel broken.
   if (useShared && volumePercent != lastAppliedVolumePercent) {
     setPT2258Volume(volumePercent);
     lastAppliedVolumePercent = volumePercent;

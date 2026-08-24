@@ -29,9 +29,11 @@
  *
  * ── Faults/maintenance — deliberately non-blocking ─────────────────
  * A small ambient badge (see drawStatusBadge()) appears on the Clock,
- * Thermostat, and Sound screens whenever faultCount or
- * maintenanceDueCount is nonzero — glanceable, never a popup/modal, never
- * gates input. The menu only ever has 2 items (Sound, Thermostat) under
+ * Thermostat, and Music Volume (internally still SCREEN_SOUND/"sound" in
+ * identifiers — only the user-facing menu label changed, see
+ * showMenuScreen()) screens whenever faultCount or maintenanceDueCount is
+ * nonzero — glanceable, never a popup/modal, never gates input. The menu
+ * only ever has 2 items (Music Volume, Thermostat) under
  * normal conditions — a 3rd item ("Status") appears ONLY while faultCount
  * or maintenanceDueCount is nonzero (see statusItemVisible()/
  * menuItemCount()), so there's nothing to check when nothing's wrong.
@@ -308,6 +310,15 @@ lv_obj_t* soundBadgeDot;
 struct DialState {
   float targetF = 68, currentF = 0, humidity = 0, co2 = 0, outdoorF = 0;
   bool callingHeat = false, callingCool = false, safetyActive = false, weatherStale = true;
+  // Most zones only carry an SCD41 (co2 only, no BME680 — see
+  // envSensors.js's header on the server) — `humidity` arrives as a
+  // meaningless 0.0 sentinel on those, and this flag is the only way to
+  // tell that apart from a real 0%. Defaults false (not true) so a
+  // bench-tested dial with no real push yet shows "no sensor" rather than
+  // flashing a false "0% RH" danger reading before the first real state
+  // ever arrives — the safe direction to be wrong in, same reasoning as
+  // weatherStale defaulting true.
+  bool humidityAvailable = false;
   uint8_t hour = 0, minute = 0;
   uint8_t volumePercent = 0;
   uint8_t activeSource = 0;    // 0=off,1=spotify,2=override1,3=override2 — hardware-detected, read-only here
@@ -374,6 +385,7 @@ void applyPush(const uint8_t* p, uint8_t len) {
   state.safetyActive   = flags & 0x04;
   state.weatherStale   = flags & 0x08;
   state.spotifyEnabled = flags & 0x10; // authoritative — overwrites any optimistic tap-toggle
+  state.humidityAvailable = flags & 0x20;
   state.hour   = p[21];
   state.minute = p[22];
   state.volumePercent = p[23];
@@ -775,7 +787,14 @@ void showMenuScreen() {
   int count = menuItemCount();
   if (menuSelection >= count) menuSelection = count - 1; // Status can vanish out from under an existing selection
 
-  const char* labels[MENU_ITEM_CAPACITY] = { "Sound", "Thermostat", "Status" };
+  // "Music Volume", not "Sound" — this screen only ever adjusts the
+  // Spotify/shared-input's own volume (see soundArcEventCb()/DialState's
+  // volumePercent); a TV plugged into this room's override1 input always
+  // plays at its own native level, controlled by the TV's own remote, and
+  // this dial has no say in that — see zone_audio_node.ino's header. The
+  // old "Sound" label implied this screen was a general room-audio
+  // control, which it never was.
+  const char* labels[MENU_ITEM_CAPACITY] = { "Music Volume", "Thermostat", "Status" };
   const int ySpacing = 70;
   for (int i = 0; i < count; i++) {
     bool selected = (i == menuSelection);
@@ -918,17 +937,26 @@ void showThermostatScreen() {
   // air quality guidance (30-50% ideal, 20-60% acceptable, outside that
   // either too dry or promoting mold/dust mites); CO2 per ASHRAE-style
   // guidance (<800ppm good, 800-1200 acceptable, >1200 poor ventilation).
-  lv_color_t humidityColor = (state.humidity >= 30 && state.humidity <= 50) ? COLOR_SUCCESS
-    : (state.humidity >= 20 && state.humidity <= 60) ? COLOR_WARNING
-    : COLOR_DANGER;
   lv_color_t co2Color = state.co2 < 800 ? COLOR_SUCCESS
     : state.co2 <= 1200 ? COLOR_WARNING
     : COLOR_DANGER;
 
-  char humidityStr[16];
-  snprintf(humidityStr, sizeof(humidityStr), "%.0f%% RH", state.humidity);
-  lv_label_set_text(thermostatHumidityLabel, humidityStr);
-  lv_obj_set_style_text_color(thermostatHumidityLabel, humidityColor, 0);
+  // Most zones only ever carry an SCD41 (co2 only — see this file's header
+  // on humidityAvailable/DialState) — showing "0% RH" in danger-red on a
+  // zone that will never have a real humidity reading was a real bug, not
+  // a cosmetic one; this is the fix.
+  char humidityStr[20];
+  if (state.humidityAvailable) {
+    snprintf(humidityStr, sizeof(humidityStr), "%.0f%% RH", state.humidity);
+    lv_label_set_text(thermostatHumidityLabel, humidityStr);
+    lv_obj_set_style_text_color(thermostatHumidityLabel,
+      (state.humidity >= 30 && state.humidity <= 50) ? COLOR_SUCCESS
+      : (state.humidity >= 20 && state.humidity <= 60) ? COLOR_WARNING
+      : COLOR_DANGER, 0);
+  } else {
+    lv_label_set_text(thermostatHumidityLabel, "No RH sensor");
+    lv_obj_set_style_text_color(thermostatHumidityLabel, COLOR_MUTED, 0);
+  }
 
   char co2Str[24];
   snprintf(co2Str, sizeof(co2Str), "%.0f ppm CO2", state.co2);

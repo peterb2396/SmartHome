@@ -22,7 +22,7 @@ export default function Sound() {
 
   return (
     <div style={pageContainerStyle(CONTAINER_WIDE)}>
-      <PageHeader title="Sound" subtitle="Per-zone Spotify volume and enable — TV/override inputs always win locally" />
+      <PageHeader title="Music Volume" subtitle="Per-zone Spotify volume and enable — a TV plugged into a zone always wins locally and plays at its own native volume, controlled by its own remote, regardless of anything set here" />
 
       <div style={{
         display: "flex", alignItems: "center", gap: 8, marginBottom: "1.25rem",

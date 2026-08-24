@@ -111,10 +111,21 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBal
 
       {environment && (
         <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
-          <EnvironmentRow icon={FaTint} label="Humidity" unit="%" precision={0}
-            min={0} max={100} value={environment.humidity.value} status={environment.humidity.status} />
-          <EnvironmentRow icon={FaSmog} label="VOC" unit="" precision={0}
-            min={0} max={100} value={environment.voc.value} status={environment.voc.status} />
+          {/* Humidity/VOC come from a BME680, which these HVAC zone nodes
+              don't carry (only basement/attic do — see monitorZones.js) —
+              only SCD41 (co2), so those rows are gated on a value having
+              actually ever arrived rather than always rendering a
+              permanently-empty "—" placeholder. Not a hardcoded per-zone
+              assumption: if a zone's hardware ever changes, this just
+              starts showing the row again on its own. */}
+          {environment.humidity.value != null && (
+            <EnvironmentRow icon={FaTint} label="Humidity" unit="%" precision={0}
+              min={0} max={100} value={environment.humidity.value} status={environment.humidity.status} />
+          )}
+          {environment.voc.value != null && (
+            <EnvironmentRow icon={FaSmog} label="VOC" unit="" precision={0}
+              min={0} max={100} value={environment.voc.value} status={environment.voc.status} />
+          )}
           <EnvironmentRow icon={FaWind} label="CO2" unit=" ppm" precision={0}
             min={400} max={3000} value={environment.co2.value} status={environment.co2.status} />
         </div>

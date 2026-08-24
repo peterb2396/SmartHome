@@ -1,8 +1,8 @@
 import { useState } from "react";
 
 const KIND_OPTIONS = [
-  { value: "thermostat", label: "Thermostat zone (BME680 + SCD41)" },
-  { value: "monitor",    label: "Monitor-only zone (temp + humidity)" },
+  { value: "thermostat", label: "Thermostat zone (SCD41 only — CO2)" },
+  { value: "monitor",    label: "Monitor-only zone (BME680 + SCD41)" },
   { value: "zoneAudio",  label: "Zone audio hardware (speaker amp)" },
   { value: "other",      label: "Other" },
 ];

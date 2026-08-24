@@ -94,7 +94,11 @@
  * without waiting for a new poll — 27B): [targetF f32][currentF f32]
  * [humidity f32][co2 f32][outdoorF f32][flags 1B: bit0 callingHeat, bit1
  * callingCool, bit2 safetyActive, bit3 weatherStale, bit4
- * spotifyEnabled][hour 1B][minute 1B][volumePercent 1B][activeSource 1B:
+ * spotifyEnabled, bit5 humidityAvailable — most zones only carry an SCD41
+ * (co2 only, no BME680 — see envSensors.js's header), so the humidity
+ * float is a meaningless 0.0 sentinel unless this bit says otherwise; the
+ * dial must not render it as a real reading when unset][hour 1B][minute
+ * 1B][volumePercent 1B][activeSource 1B:
  * 0=off,1=spotify,2=override1,3=override2][faultCount 1B]
  * [maintenanceDueCount 1B]. volume/spotifyEnabled come from sound.js's
  * persisted per-zone settings; activeSource is that zone's own audio
@@ -884,9 +888,16 @@ function buildDialPushPayload(zone, outdoor, soundZone, now, faultCount, mainten
   buf.writeFloatLE(zone?.environment?.humidity?.value ?? 0, 8);
   buf.writeFloatLE(zone?.environment?.co2?.value ?? 0, 12);
   buf.writeFloatLE(outdoor?.tempF ?? 0, 16);
+  // bit5 humidityAvailable — most zones only carry an SCD41 (co2 only, no
+  // BME680 — see envSensors.js's header), so humidity reads permanently
+  // null there, not just "not yet reported." Without this flag the dial
+  // has no way to tell "genuinely no sensor" apart from "sensor exists but
+  // hasn't reported yet" — both would otherwise arrive as the same 0.0
+  // sentinel float and render as a false "0% RH" danger reading forever.
   const flags = (zone?.calling ? 1 : 0) | (zone?.coolCalling ? 2 : 0) |
     (zone && zone.safety !== 'normal' ? 4 : 0) | (outdoor?.stale ? 8 : 0) |
-    (soundZone?.spotifyEnabled ? 16 : 0);
+    (soundZone?.spotifyEnabled ? 16 : 0) |
+    (zone?.environment?.humidity?.value != null ? 32 : 0);
   buf.writeUInt8(flags, 20);
   buf.writeUInt8(now.getHours(), 21);
   buf.writeUInt8(now.getMinutes(), 22);

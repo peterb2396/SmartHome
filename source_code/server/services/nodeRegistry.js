@@ -45,8 +45,11 @@ async function configureNode(uniqueId, { name, kind, zoneId, soundZoneId, hasDia
   const node = {
     uniqueId,
     name: name.trim(),
-    // `kind` is this node's OWN sensor role — 'thermostat' (BME680+SCD41),
-    // 'monitor' (BME680 only), or 'other' (no sensors). `zoneAudio` is a
+    // `kind` is this node's OWN sensor role — 'thermostat' (SCD41 only —
+    // no BME680 on these; CO2 is the only real reading a wired-up HVAC
+    // zone will ever report), 'monitor' (BME680 + SCD41, basement/attic
+    // only — the full sensor set lives there, not on the thermostat
+    // zones), or 'other' (no sensors). `zoneAudio` is a
     // separate, unrelated node type. `hasDial` is orthogonal to `kind` —
     // a physical RP2040 board bridges to an attached ESP32 dial over I2C
     // and answers BOTH POLL/REPORT (its own sensors, if any) and
