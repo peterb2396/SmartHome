@@ -44,13 +44,19 @@ export default function SoundZoneCard({ zone, onVolumeChange, onEnabledChange })
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        {muted ? <FaVolumeMute color="var(--text-muted)" /> : <FaVolumeUp color={active.color} />}
+        {/* Always Spotify green, never active.color — this slider only
+            ever adjusts Spotify's own volume (see this file's header), so
+            it shouldn't borrow whatever color the CURRENTLY playing source
+            happens to be (TV blue, override red, etc.) — that made it look
+            like it was controlling whatever's actually audible right now,
+            which it never is. */}
+        {muted ? <FaVolumeMute color="var(--text-muted)" /> : <FaVolumeUp color="#1DB954" />}
         <input
           type="range" min={0} max={100} step={1}
           value={volumePercent}
           onChange={e => onVolumeChange(id, Number(e.target.value))}
           aria-label={`${label} Spotify volume`}
-          style={{ flex: 1, accentColor: active.color }}
+          style={{ flex: 1, accentColor: "#1DB954" }}
         />
         <span style={{
           fontVariantNumeric: "tabular-nums", fontWeight: 700, fontSize: "0.85rem",

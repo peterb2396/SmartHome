@@ -983,15 +983,17 @@ void showSoundScreen() {
     lv_obj_set_style_arc_color(soundArc, COLOR_TRACK, LV_PART_MAIN);
     lv_obj_set_style_arc_width(soundArc, 26, LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(soundArc, true, LV_PART_INDICATOR);
-    // Always blue — this is the volume level, not a source indicator (that
-    // confused more than it told anyone — see soundSourceLabel below,
-    // which now carries that information as its own explicit caption
-    // instead of being implied by arc color). Knob set explicitly too —
-    // it defaults to the LVGL theme's own accent otherwise, which is what
-    // real bench feedback ("volume is orange") turned out to be, not the
-    // indicator fill (which was already correctly blue).
-    lv_obj_set_style_arc_color(soundArc, COLOR_ACCENT, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(soundArc, COLOR_ACCENT, LV_PART_KNOB);
+    // Always Spotify green — this screen only ever adjusts Spotify's own
+    // volume (see this file's header on why it's labeled "Music Volume,"
+    // not a general room control), so it should look like a Spotify
+    // control, not borrow the app's generic blue accent. Also not a
+    // source indicator (that confused more than it told anyone — see
+    // soundSourceLabel below, which carries that information as its own
+    // explicit caption instead of being implied by arc color). Knob set
+    // explicitly too — it defaults to the LVGL theme's own accent
+    // otherwise.
+    lv_obj_set_style_arc_color(soundArc, COLOR_SPOTIFY, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(soundArc, COLOR_SPOTIFY, LV_PART_KNOB);
     lv_obj_align(soundArc, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_event_cb(soundArc, soundArcEventCb, LV_EVENT_VALUE_CHANGED, NULL);
 
