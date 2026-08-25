@@ -37,10 +37,14 @@
  *   LM2596 buck converter — steps the bus's 24V feed down to 5V for the
  *     RP2040's VSYS input (RP2040 logic itself is 3.3V, regulated on-board)
  *     — this same 5V rail also feeds an attached dial, if any
- *   Thermostat-zone nodes only: BME680 (temp/pressure/humidity/VOC) +
- *     SCD41 (CO2), both I2C
- *   Basement/attic monitor nodes: BME680 only, SCD41 omitted — set
- *     HAS_SCD41 to false below
+ *   Thermostat-zone nodes: SCD41 only (CO2 + its own onboard RH — see
+ *     readSensorsOnCore1()/SharedSensorState's comment on why humidity can
+ *     come from either chip) — no BME680 on these. Set HAS_SCD41 to true,
+ *     BME680 simply won't be found at setup1() and bmeReady stays false,
+ *     no separate flag needed for "no BME680."
+ *   Basement/attic monitor nodes only: BME680 (temp/pressure/humidity/
+ *     VOC) + SCD41 (CO2) — the full sensor set lives here, not on the
+ *     thermostat zones
  *   Zones with a wall dial: set HAS_DIAL to true below — no extra RP2040
  *     hardware needed beyond the existing I2C0 bus/5V rail already wired
  *     for the sensors
@@ -293,6 +297,15 @@ struct SharedSensorState {
   float tempF = 0, humidity = 0, pressureHpa = 0, voc = 0, co2 = 0;
   bool bmeReady = false, scd41Ready = false; // sensor FOUND at setup1() — never changes after
   bool bmeOk = false, co2Ok = false;         // did the LAST read attempt succeed
+  // Humidity is tracked separately from bmeOk on purpose — it can come
+  // from EITHER chip (SCD4x measures its own onboard RH for CO2
+  // compensation, and exposes it via getHumidity(), same as BME680 does)
+  // — see readSensorsOnCore1() for which one actually wins on a given
+  // node. Zones with no BME680 at all (most of them — see envSensors.js's
+  // header on the server) still get a real RH reading this way, not just
+  // co2.
+  bool humidityOk = false;
+  unsigned long lastGoodHumidityAtMs = 0;
   unsigned long lastGoodBmeAtMs = 0;         // core 1's millis() at its last successful BME680 read
   unsigned long lastGoodCo2AtMs = 0;         // core 1's millis() at its last successful SCD41 read
 
@@ -556,14 +569,21 @@ void readSensorsOnCore1() {
   // "not ready," and every one of those was being miscounted as a failure.
   bool co2DataReady = false, co2Ok = false;
   unsigned long scdMs = 0;
-  float co2 = 0;
+  float co2 = 0, scdHumidity = 0;
   if (HAS_SCD41 && scd41ReadyLocal) {
     co2DataReady = scd41.getDataReadyStatus();
     if (co2DataReady) {
       unsigned long start = millis();
       co2Ok = scd41.readMeasurement();
       scdMs = millis() - start;
-      if (co2Ok) co2 = (float)scd41.getCO2();
+      // getHumidity() reads back the SAME measurement readMeasurement()
+      // just cached (the SCD4x measures its own onboard RH internally,
+      // for its own CO2 compensation) — no extra I2C transaction, so this
+      // is "free" alongside the CO2 read. Most zones have no BME680 at
+      // all (see envSensors.js's header on the server) — this is their
+      // ONLY source of a real humidity reading, not a fallback for a
+      // "nice to have."
+      if (co2Ok) { co2 = (float)scd41.getCO2(); scdHumidity = scd41.getHumidity(); }
     }
   }
 
@@ -575,8 +595,15 @@ void readSensorsOnCore1() {
     if (bmeOk) {
       shared.bmeOk = true;
       shared.bmeFailStreak = 0;
-      shared.tempF = tempF; shared.humidity = humidity; shared.pressureHpa = pressureHpa; shared.voc = voc;
+      shared.tempF = tempF; shared.pressureHpa = pressureHpa; shared.voc = voc;
       shared.lastGoodBmeAtMs = now;
+      // BME680 wins whenever this node actually has one — it's the more
+      // dedicated humidity sensor of the two chips (see readEnvironment()
+      // never combining both; this is where that single-source guarantee
+      // actually gets decided).
+      shared.humidity = humidity;
+      shared.humidityOk = true;
+      shared.lastGoodHumidityAtMs = now;
     } else {
       shared.bmeOk = false;
       shared.bmeFailTotal++;
@@ -594,6 +621,12 @@ void readSensorsOnCore1() {
       shared.scd41FailStreak = 0;
       shared.co2 = co2;
       shared.lastGoodCo2AtMs = now;
+      // Only when this node has no BME680 at all — see above.
+      if (!bmeReadyLocal) {
+        shared.humidity = scdHumidity;
+        shared.humidityOk = true;
+        shared.lastGoodHumidityAtMs = now;
+      }
     } else {
       shared.co2Ok = false;
       shared.scd41FailTotal++;
@@ -797,9 +830,15 @@ void buildAndSendReport() {
 
   if (s.bmeReady && s.bmeOk) {
     appendReading(payload, offset, SENSOR_TEMPERATURE, s.tempF);
-    appendReading(payload, offset, SENSOR_HUMIDITY, s.humidity);
     appendReading(payload, offset, SENSOR_PRESSURE, s.pressureHpa);
     appendReading(payload, offset, SENSOR_VOC, s.voc);
+  }
+  // Independent of bmeOk on purpose — humidity can come from either chip,
+  // see readSensorsOnCore1()/SharedSensorState's comment. Still capped at
+  // 5 readings total either way: BME680 present -> temp+pressure+voc (3)
+  // + humidity (1) + co2 (1) = 5; BME680 absent -> humidity (1) + co2 (1).
+  if (s.humidityOk) {
+    appendReading(payload, offset, SENSOR_HUMIDITY, s.humidity);
   }
   if (HAS_SCD41 && s.scd41Ready && s.co2Ok) {
     appendReading(payload, offset, SENSOR_CO2, s.co2);
