@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   FaExclamationTriangle, FaLightbulb,
   FaThermometerHalf, FaMicrochip, FaTerminal, FaThumbtack, FaTrash, FaCog,
@@ -62,10 +62,16 @@ export default function Console() {
 
   // Fetched here (not inside NodeFlashControl) so every node row shares
   // one list instead of each firing its own request — see FirmwarePanel
-  // for where these images get uploaded.
-  useEffect(() => {
+  // for where these images get uploaded. FirmwarePanel keeps its own
+  // separate copy for its own list UI, so it calls onFilesChanged after a
+  // successful upload/delete to keep THIS copy in sync too — without that,
+  // a freshly-uploaded file would sit invisible in every node's dropdown
+  // (NodeFlashControl renders nothing at all while firmwareFiles is empty)
+  // until an unrelated full page reload happened to re-run this effect.
+  const fetchFirmwareFiles = useCallback(() => {
     getFirmwareList().then(({ data }) => setFirmwareFiles(data)).catch(e => console.error("Console firmware list:", e));
   }, []);
+  useEffect(() => { fetchFirmwareFiles(); }, [fetchFirmwareFiles]);
   // Which log sources (the "[ServiceName]" prefix every service already
   // logs with — see server/services/logStream.js) to hide from the
   // terminal. Stores the hidden set, not the visible one, so a source that
@@ -242,6 +248,14 @@ export default function Console() {
         </div>
       </div>
 
+      {/* FirmwarePanel's own copy says "pick it from a node's row below" —
+          the RS485 Nodes section (with each node's NodeFlashControl) is
+          placed right after it for that to actually be true. It used to
+          sit above this panel, which meant the row it was pointing at was
+          physically above where you'd be reading that sentence, not below
+          it — a real, reported point of confusion, not just a nitpick. */}
+      <FirmwarePanel onFilesChanged={fetchFirmwareFiles} />
+
       {/* ── New Nodes / node setup ── */}
       <div style={{ ...cardStyle, marginBottom: "1.5rem" }}>
         <h2 style={{ margin: "0 0 0.85rem", fontSize: "1rem", fontWeight: 700, color: colors.textPrimary, display: "flex", alignItems: "center", gap: 8 }}>
@@ -308,7 +322,6 @@ export default function Console() {
         )}
       </div>
 
-      <FirmwarePanel />
       <GpioMapEditor />
       <RelayMapEditor />
 

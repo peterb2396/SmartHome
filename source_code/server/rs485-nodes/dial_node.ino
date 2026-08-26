@@ -145,7 +145,7 @@ const char* OTA_SERVER_HOST = "server.153home.online"; // same host the rest of 
 // the Console's firmware panel — see server/services/firmwareUpdate.js's
 // getLatestDialFirmware() for the exact naming convention this is
 // compared against.
-const char* FIRMWARE_VERSION = "1.0.0";
+const char* FIRMWARE_VERSION = "1.0.1";
 const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60 * 60 * 1000; // every 6 hours
 const unsigned long OTA_FIRST_CHECK_DELAY_MS = 30000; // wait until well after boot — see checkForOTA()'s comment on why this blocks loop()
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000; // don't hang indefinitely if WiFi's unavailable
@@ -300,7 +300,7 @@ lv_obj_t* thermostatBadgeDot;
 
 lv_obj_t* soundArc;
 lv_obj_t* soundVolLabel;
-lv_obj_t* soundSourceLabel;
+lv_obj_t* soundCaptionLabel; // static "Spotify Volume" — see showSoundScreen()
 lv_obj_t* soundEnabledBtn; // the pill-shaped container (background color reflects on/off)
 lv_obj_t* soundEnabledLabel; // the text inside it — soundEnabledBtn stopped being a label itself once it became a real button
 lv_obj_t* soundBadgeDot;
@@ -639,7 +639,7 @@ void soundEnabledBtnEventCb(lv_event_t* e) {
   portEXIT_CRITICAL(&stateMux);
 
   char enabledStr[16];
-  snprintf(enabledStr, sizeof(enabledStr), "Spotify: %s", state.spotifyEnabled ? "On" : "Off");
+  snprintf(enabledStr, sizeof(enabledStr), "Zone %s", state.spotifyEnabled ? "On" : "Off");
   lv_label_set_text(soundEnabledLabel, enabledStr);
   lv_obj_set_style_text_color(soundEnabledLabel, state.spotifyEnabled ? lv_color_white() : COLOR_TEXT, 0);
   lv_obj_set_style_bg_color(soundEnabledBtn, state.spotifyEnabled ? COLOR_SPOTIFY : COLOR_TRACK, 0);
@@ -986,10 +986,7 @@ void showSoundScreen() {
     // Always Spotify green — this screen only ever adjusts Spotify's own
     // volume (see this file's header on why it's labeled "Music Volume,"
     // not a general room control), so it should look like a Spotify
-    // control, not borrow the app's generic blue accent. Also not a
-    // source indicator (that confused more than it told anyone — see
-    // soundSourceLabel below, which carries that information as its own
-    // explicit caption instead of being implied by arc color). Knob set
+    // control, not borrow the app's generic blue accent. Knob set
     // explicitly too — it defaults to the LVGL theme's own accent
     // otherwise.
     lv_obj_set_style_arc_color(soundArc, COLOR_SPOTIFY, LV_PART_INDICATOR);
@@ -1010,17 +1007,17 @@ void showSoundScreen() {
     lv_obj_set_style_text_font(soundVolLabel, &lv_font_montserrat_48, 0);
     lv_obj_align(soundVolLabel, LV_ALIGN_CENTER, 0, -15);
 
-    // activeSource is hardware-detected reality (what's actually audible
-    // right now — needs a real zoneAudio node on the bus to ever be
-    // anything but "Off"; on a bench-tested dial with no such node
-    // attached yet, "Off" is the correct, expected value, not a bug).
-    // spotifyEnabled (soundEnabledBtn below) is the separate SETTING this
-    // screen's toggle button controls — shown with its own explicit
-    // caption specifically because a bare source name with no label read
-    // as an unexplained/broken value.
-    soundSourceLabel = lv_label_create(screenSound);
-    lv_obj_set_style_text_font(soundSourceLabel, &lv_font_montserrat_14, 0);
-    lv_obj_align(soundSourceLabel, LV_ALIGN_CENTER, 0, 40);
+    // Static — this screen only ever controls Spotify, so there's nothing
+    // to indicate here (no per-poll "what's actually audible right now"
+    // source name — that lived here before but just confused people into
+    // thinking this screen had some say over the TV/override inputs,
+    // which it never does; see this file's header). Set once here, never
+    // touched again in the redraw path below.
+    soundCaptionLabel = lv_label_create(screenSound);
+    lv_obj_set_style_text_font(soundCaptionLabel, &lv_font_montserrat_14, 0);
+    lv_obj_align(soundCaptionLabel, LV_ALIGN_CENTER, 0, 40);
+    lv_label_set_text(soundCaptionLabel, "Spotify Volume");
+    lv_obj_set_style_text_color(soundCaptionLabel, COLOR_MUTED, 0);
 
     // Real pill-shaped button, not bare clickable text — both for a larger
     // actual tap target (padding is part of the hit area, not just the
@@ -1054,21 +1051,8 @@ void showSoundScreen() {
   lv_label_set_text(soundVolLabel, volStr);
   lv_obj_set_style_text_color(soundVolLabel, COLOR_TEXT, 0);
 
-  lv_color_t sourceColor = state.activeSource == 1 ? COLOR_SPOTIFY
-    : state.activeSource == 2 ? COLOR_ACCENT
-    : state.activeSource == 3 ? COLOR_DANGER
-    : COLOR_MUTED;
-  const char* sourceName = state.activeSource == 1 ? "Spotify"
-    : state.activeSource == 2 ? "TV"
-    : state.activeSource == 3 ? "Priority Override"
-    : "Off";
-  char sourceStr[32];
-  snprintf(sourceStr, sizeof(sourceStr), "Source: %s", sourceName);
-  lv_label_set_text(soundSourceLabel, sourceStr);
-  lv_obj_set_style_text_color(soundSourceLabel, sourceColor, 0);
-
   char enabledStr[16];
-  snprintf(enabledStr, sizeof(enabledStr), "Spotify: %s", state.spotifyEnabled ? "On" : "Off");
+  snprintf(enabledStr, sizeof(enabledStr), "Zone %s", state.spotifyEnabled ? "On" : "Off");
   lv_label_set_text(soundEnabledLabel, enabledStr);
   lv_obj_set_style_text_color(soundEnabledLabel, state.spotifyEnabled ? lv_color_white() : COLOR_TEXT, 0);
   lv_obj_set_style_bg_color(soundEnabledBtn, state.spotifyEnabled ? COLOR_SPOTIFY : COLOR_TRACK, 0);

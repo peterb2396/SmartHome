@@ -28,7 +28,7 @@ function readAsBase64(file) {
 // firmwareUpdate.js for storage) — per-node "which image to flash" lives
 // on the node row itself (see NodeFlashControl), this panel is just the
 // library of uploaded images.
-export default function FirmwarePanel() {
+export default function FirmwarePanel({ onFilesChanged }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [pendingFile, setPendingFile] = useState(null);
@@ -67,6 +67,7 @@ export default function FirmwarePanel() {
       setPendingFile(null);
       setFilename("");
       fetchFiles();
+      onFilesChanged?.(); // Console.jsx keeps its own separate copy for NodeFlashControl's dropdown — without this it stays stale until an unrelated page reload
     } catch (e) {
       setError(e.response?.data?.error || e.message);
     } finally {
@@ -78,6 +79,7 @@ export default function FirmwarePanel() {
     if (!window.confirm(`Delete ${f.filename}? Any node still on it keeps running fine — this only removes it from the library.`)) return;
     await deleteFirmwareFile(f.filename);
     fetchFiles();
+    onFilesChanged?.();
   }
 
   if (loading) return null;
