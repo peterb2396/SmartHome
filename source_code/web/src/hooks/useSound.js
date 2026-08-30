@@ -12,6 +12,14 @@ export function useSound() {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
   const pauseUntil = useRef(0);
+  // A drag fires onChange continuously (one setVolume call per pixel of
+  // movement), each kicking off its own independent request. Those
+  // responses can arrive out of order — a slightly-earlier request's
+  // response landing AFTER a later one's would snap the slider back to a
+  // lower value mid-drag, which is exactly the reported jitter. This
+  // tracks which call is the most recent; any response whose call has
+  // since been superseded gets silently dropped instead of applied.
+  const latestCallId = useRef(0);
 
   const fetchState = useCallback(async () => {
     try {
@@ -35,8 +43,13 @@ export function useSound() {
   const runMutation = useCallback(async (optimisticUpdater, body) => {
     pauseUntil.current = Date.now() + PAUSE_MS;
     setState(prev => prev && optimisticUpdater(prev));
+    const callId = ++latestCallId.current;
     try {
       const { data } = await setSoundZone(body.zoneId, body);
+      // A newer call has since been issued (e.g. the drag kept moving) —
+      // this response is stale even if it happened to arrive intact;
+      // applying it would undo whatever the newer call already did.
+      if (callId !== latestCallId.current) return;
       if (data?.ok && data.state) setState(data.state);
     } catch (e) {
       console.warn("sound mutation failed:", e.message);

@@ -315,6 +315,22 @@ struct SharedSensorState {
   unsigned long i2cRecoveries = 0; // see i2cBusRecovery()
 
   unsigned long core1HeartbeatMs = 0; // core 1's own millis(), updated every loop1() iteration — see loop()
+  // Core 1's OWN measurement of its longest iteration-to-iteration gap —
+  // see loop1(). Exists specifically to answer "is core 1 itself actually
+  // getting slower over days of uptime, or is core1HeartbeatAgoMs's slow
+  // climb (seen in the field) just sampling bias from core 0 occasionally
+  // catching core 1 mid-sensor-read?" Since SENSOR_READ_INTERVAL_MS
+  // (2000ms) divides POLL_INTERVAL_MS (10000ms, rs485.js) exactly, core
+  // 0's ~10s report cadence and core 1's ~2s read cadence can drift in and
+  // out of phase against each other over long uptimes — core0's OWN
+  // sampled "how long ago" number can slowly walk toward the worst-case
+  // moment in that cycle (right as a read begins) without core 1 having
+  // gotten any slower at all. This field is measured directly ON core 1,
+  // with no external sampling involved, so it tells the two apart for
+  // real: it should stay pinned at whatever readSensorsOnCore1() actually
+  // takes (see lastBmeReadMs/lastScd41ReadMs) if core 1 is healthy, and
+  // only genuinely climb over time if core 1 itself is slowing down.
+  unsigned long maxLoop1GapMs = 0;
 };
 SharedSensorState shared;
 critical_section_t sharedLock;
@@ -426,9 +442,25 @@ void sendFrame(uint8_t addr, uint8_t cmd, const uint8_t* payload, uint8_t len) {
   Serial1.write(head, 3);
   if (len > 0) Serial1.write(payload, len);
   Serial1.write(crc);
-  Serial1.flush();
-  delayMicroseconds(50);
-  digitalWrite(RS485_DE_RE_PIN, LOW); // back to receive
+  // Real production evidence: this used to be Serial1.flush(), which waits
+  // on the UART's own TX-empty HARDWARE status flag. If that flag ever
+  // fails to assert (a UART peripheral glitch — plausible on the same
+  // noisy bus that already causes I2C hangs), flush() spins forever, the
+  // digitalWrite(...LOW) below it never runs, DE/RE stays latched in
+  // transmit mode permanently, and this node's receiver is now
+  // permanently disabled — total, silent, unrecoverable RS485 deafness
+  // with zero CRC/resync/frame-stall trace (nothing garbled ever arrives;
+  // nothing arrives at all), and NO reboot, since this is a hardware
+  // status-register spin, not a true infinite instruction loop the
+  // watchdog reliably interrupts. Confirmed against a real 16+ minute
+  // outage that never self-recovered. Fixed by never touching that flag
+  // at all: a delay computed from the actual frame length and baud rate
+  // is pure arithmetic against a timer — it cannot hang regardless of
+  // what the UART peripheral's internal state does, and DE/RE dropping
+  // back to receive is now unconditional.
+  uint8_t frameLen = 4 + len + 1; // sync+addr+cmd+len header (4) + payload + crc
+  delayMicroseconds((unsigned long)frameLen * 1200UL); // ~1.04ms/byte at 9600 baud (10 bit-times/byte), ~15% margin
+  digitalWrite(RS485_DE_RE_PIN, LOW); // back to receive — unconditional, never gated on a hardware flag
 }
 
 void sendAnnounce() {
@@ -741,14 +773,26 @@ void setup1() {
   critical_section_exit(&sharedLock);
 }
 
+unsigned long lastLoop1At = 0; // core 1 local — see maxLoop1GapMs's comment on SharedSensorState
+
 void loop1() {
+  // Measured BEFORE the heartbeat write below, using the same millis()
+  // call, so this and shared.core1HeartbeatMs always agree on "now" for a
+  // given iteration — see SharedSensorState's maxLoop1GapMs comment for
+  // why this exists (distinguishing a real core 1 slowdown from core 0
+  // just occasionally sampling mid-read).
+  unsigned long now1 = millis();
+  unsigned long loop1Gap = lastLoop1At == 0 ? 0 : now1 - lastLoop1At;
+  lastLoop1At = now1;
+
   // Heartbeat FIRST, unconditionally, before anything that could block —
   // this is what core 0 watches to decide whether it's still safe to keep
   // petting the watchdog (see loop()). If a read hangs right after this,
   // the heartbeat simply stops advancing from here, which is exactly the
   // signal core 0 needs.
   critical_section_enter_blocking(&sharedLock);
-  shared.core1HeartbeatMs = millis();
+  shared.core1HeartbeatMs = now1;
+  if (loop1Gap > shared.maxLoop1GapMs) shared.maxLoop1GapMs = loop1Gap;
   critical_section_exit(&sharedLock);
 
   // Dial exchanges are latency-sensitive (the dial polls every ~20ms) and
@@ -1114,12 +1158,19 @@ void printDiagnostics() {
   diagPrint("[RS485 Node] diag: scd41(ready=%d ok=%d fail=%lu streak=%lu lastReadMs=%lu staleMs=%lu)",
     s.scd41Ready, s.co2Ok, s.scd41FailTotal, s.scd41FailStreak, s.lastScd41ReadMs,
     s.lastGoodCo2AtMs ? now - s.lastGoodCo2AtMs : 0);
-  // core1HeartbeatAgoMs is the single most important line if this hang
-  // ever recurs: should sit near 0 always (loop1() updates it every
-  // iteration); a large/growing value here IS core 1 wedged, in real time,
-  // well before CORE1_STALL_THRESHOLD_MS forces a reboot.
-  diagPrint("[RS485 Node] diag: hasDial=%d dialI2cFail=%lu i2cRecoveries=%lu maxLoopGapMs=%lu core1HeartbeatAgoMs=%lu",
-    HAS_DIAL, s.dialI2cFailTotal, s.i2cRecoveries, maxLoopGapMs, now - s.core1HeartbeatMs);
+  // core1HeartbeatAgoMs is the single most important line if a core 1 hang
+  // ever recurs: a large/growing value here IS core 1 wedged, in real
+  // time, well before CORE1_STALL_THRESHOLD_MS forces a reboot. It's also
+  // expected to drift SLOWLY over many days even when core 1 is perfectly
+  // healthy — see SharedSensorState's maxLoop1GapMs comment for why —
+  // which is what maxLoop1GapMs is for: measured directly on core 1 with
+  // no external sampling involved, it should stay pinned at whatever a
+  // real sensor read takes (see bme/scd41's own lastReadMs above) for the
+  // life of this node. If THIS number is ever the one climbing, core 1 is
+  // genuinely slowing down; if it stays flat while core1HeartbeatAgoMs
+  // above keeps drifting, that drift is harmless sampling-phase noise.
+  diagPrint("[RS485 Node] diag: hasDial=%d dialI2cFail=%lu i2cRecoveries=%lu maxLoopGapMs=%lu core1HeartbeatAgoMs=%lu maxLoop1GapMs=%lu",
+    HAS_DIAL, s.dialI2cFailTotal, s.i2cRecoveries, maxLoopGapMs, now - s.core1HeartbeatMs, s.maxLoop1GapMs);
   diagPrint("[RS485 Node] diag: bootCount=%u watchdogReboots=%u lastRebootWasWatchdog=%d",
     bootCount, watchdogRebootCount, lastRebootWasWatchdog);
 }

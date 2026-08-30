@@ -29,12 +29,19 @@
  *
  * A single NODE going silent while the port/bus itself is fine is a
  * separate, more common failure — see consecutiveMisses/alertNodeDown()
- * below. Past evidence (git history) points at the node's own MCU getting
- * wedged (an RP2040 I2C hang inside sendReport()'s sensor reads), not the
- * bus — a hardware watchdog on the node side force-reboots it if that ever
- * happens (see rs485_node.ino), and this side sends a Bark push once a
- * node's been silent long enough to rule out a blip, so a real outage gets
- * noticed without staring at the console.
+ * below. Earlier evidence (git history) pointed at the node's own MCU
+ * getting wedged (an RP2040 I2C hang inside sendReport()'s sensor reads),
+ * not the bus — the node side has its own hardware watchdog and UART-hang
+ * mitigations for that (see rs485_node.ino). Since then, a SEPARATE real
+ * incident (a node down for 450+ consecutive misses, fixed only by
+ * physically unplugging/replugging the Pi's own USB-to-RS485 adapter —
+ * nothing on the node side could explain that fix) pointed at the adapter
+ * itself instead — see resetUsbAdapter()/attemptUsbResetRecovery() below,
+ * which now attempts that same fix in software (one shot per outage) the
+ * moment a node crosses the alert threshold, before falling back to just
+ * notifying you like before. Either way, this side sends a Bark push once
+ * a node's been silent long enough to rule out a blip, so a real outage
+ * gets noticed without staring at the console.
  *
  * ── Wire protocol ────────────────────────────────────────────────────────
  * Frame: [0xAA sync][addr 1B][cmd 1B][len 1B][payload...][crc8 1B]
@@ -245,6 +252,8 @@
  *                  was queued this poll.
  */
 
+const fs = require('fs');
+const path = require('path');
 const sensors = require('./sensorStore');
 const { sendPush } = require('./mail');
 
@@ -388,18 +397,93 @@ function buildFrame(addr, cmd, payload = Buffer.alloc(0)) {
   return Buffer.concat([Buffer.from([SYNC]), body, Buffer.from([crc8(body)])]);
 }
 
+// ── USB adapter reset — see alertNodeDown()/attemptUsbResetRecovery() ──────
+// Real production evidence: a node went completely unresponsive (450+
+// consecutive misses, ~75 minutes) while this file's own bus-transport
+// tracking reported the connection as healthy the whole time — nothing on
+// the NODE side (which already has its own watchdog and I2C-isolation
+// mitigations) can explain a fix that only ever touched the Pi's end of
+// the wire. Physically unplugging and replugging the USB-to-RS485 adapter
+// fixed it instantly, meaning the adapter chip itself (or the kernel's
+// view of it) was the thing actually wedged, not any node. This
+// reproduces that same fix without needing physical access: unbind then
+// rebind the USB device at the driver level, forcing the kernel to fully
+// tear down and re-enumerate it — the closest software equivalent to a
+// real unplug/replug available. It does NOT power-cycle the device (no
+// VBUS drop) — if the fault ever turns out to need an actual power
+// interruption to clear, this won't help, but it's the strongest fix
+// available without adding hardware (a powered, switchable USB hub).
+//
+// Finds the top-level USB device's sysfs bus-id (e.g. "1-1.2") backing a
+// /dev/ttyUSBx path by walking up from the tty's own sysfs device symlink
+// until hitting a directory that carries idVendor/idProduct — the actual
+// USB device node, not one of its child interfaces. Works regardless of
+// which specific USB-serial chip is in the adapter (CH340, CP210x, FTDI,
+// etc. all expose this same generic USB core sysfs shape).
+function findUsbBusId(ttyPath) {
+  let dir;
+  try {
+    dir = fs.realpathSync(`/sys/class/tty/${path.basename(ttyPath)}/device`);
+  } catch {
+    return null;
+  }
+  while (dir && dir !== '/' && dir !== '.') {
+    if (fs.existsSync(path.join(dir, 'idVendor')) && fs.existsSync(path.join(dir, 'idProduct'))) {
+      return path.basename(dir);
+    }
+    dir = path.dirname(dir);
+  }
+  return null;
+}
+
+const USB_RESET_SETTLE_MS = 500; // gap between unbind and bind — lets the kernel fully tear the device down first
+let intentionalUsbReset = false; // suppresses the bus-down/back-online Bark push below for a reset WE triggered — see attemptUsbResetRecovery()
+let usbUnbindPermissionWarned = false; // one-time — see the catch block below
+
+// Returns true if the unbind write succeeded (the rebind is scheduled
+// regardless — even if it somehow also fails, scheduleReconnect()'s normal
+// retry loop is still running underneath this as a fallback).
+function resetUsbAdapter() {
+  const busId = findUsbBusId(RS485_PORT_PATH);
+  if (!busId) {
+    console.error(`[RS485] USB reset requested but couldn't locate the USB device backing ${RS485_PORT_PATH} — skipping.`);
+    return false;
+  }
+  try {
+    fs.writeFileSync('/sys/bus/usb/drivers/usb/unbind', busId);
+  } catch (e) {
+    console.error(`[RS485] USB unbind failed (${e.message}) — likely not running with enough privilege to do this (needs root).`);
+    if (!usbUnbindPermissionWarned) {
+      usbUnbindPermissionWarned = true;
+      sendPush('Tried to auto-reset the RS485 USB adapter after a node went down, but lack permission to do it (needs root) — this will keep failing silently until fixed.', 'RS485: Auto-Reset Broken');
+    }
+    return false;
+  }
+  setTimeout(() => {
+    try {
+      fs.writeFileSync('/sys/bus/usb/drivers/usb/bind', busId);
+    } catch (e) {
+      console.error(`[RS485] USB rebind failed (${e.message}).`);
+    }
+  }, USB_RESET_SETTLE_MS);
+  return true;
+}
+
 // Edge-triggered, same pattern as gpio.js's HVAC fault handling — push once
 // on the transition, not on every failed reconnect attempt while it stays
-// down.
+// down. Suppressed for a reset we triggered ourselves (intentionalUsbReset)
+// — see attemptUsbResetRecovery() — since that's an expected side effect,
+// not a surprise outage; the console lines still print either way, so it's
+// still visible in the Console terminal history.
 function setBusDown(down) {
   if (down === busDown) return;
   busDown = down;
   if (down) {
     console.warn('[RS485] Bus is down.');
-    sendPush('The RS485 sensor bus is unreachable — zone sensors will stop updating until this recovers.', 'RS485: Bus Down');
+    if (!intentionalUsbReset) sendPush('The RS485 sensor bus is unreachable — zone sensors will stop updating until this recovers.', 'RS485: Bus Down');
   } else {
     console.log('[RS485] Bus back online.');
-    sendPush('The RS485 sensor bus is back online.', 'RS485: Resolved');
+    if (!intentionalUsbReset) sendPush('The RS485 sensor bus is back online.', 'RS485: Resolved');
   }
 }
 
@@ -620,7 +704,7 @@ let consecutiveMisses = new Map(); // busAddress -> count, reset to 0 on any res
 // own "this is no longer just noise" threshold), send a Bark push —
 // edge-triggered via nodesAlerted so a multi-hour outage sends exactly one
 // "down" push and one "recovered" push, not one every poll.
-const NODE_DOWN_ALERT_MISSES = 6; // ~1 minute of consecutive silence at POLL_INTERVAL_MS
+const NODE_DOWN_ALERT_MISSES = 2; // ~1 minute of consecutive silence at POLL_INTERVAL_MS
 const nodesAlerted = new Set(); // busAddress currently in an alerted "down" state
 
 function alertNodeDown(address, label, misses) {
@@ -635,12 +719,33 @@ function alertNodeDown(address, label, misses) {
     `RS485 node ${label} has stopped responding (~${silentSeconds}s of silence). Go check its Serial Monitor log and send it over.`,
     'RS485: Node Down'
   );
+  attemptUsbResetRecovery(label);
+}
+
+// One-shot per outage — see resetUsbAdapter()'s header for why this exists
+// at all. Deliberately just ONE attempt, not a retry loop: if the adapter
+// genuinely isn't the problem this time, hammering unbind/rebind
+// repeatedly risks doing more harm than good, and the existing escalating
+// "N in a row" logging + this same node-down push already keep you
+// informed either way.
+let usbResetAttemptedThisOutage = false;
+function attemptUsbResetRecovery(triggeredByLabel) {
+  if (usbResetAttemptedThisOutage || usingMock || process.platform !== 'linux') return;
+  usbResetAttemptedThisOutage = true;
+  intentionalUsbReset = true;
+  console.log(`[RS485] Node ${triggeredByLabel} down — attempting a one-shot USB adapter reset (see resetUsbAdapter()'s header).`);
+  if (!resetUsbAdapter()) { intentionalUsbReset = false; return; }
+  // Comfortably longer than USB_RESET_SETTLE_MS + one full reconnect
+  // cycle, so a genuinely still-down bus/node after this window resumes
+  // normal (unsuppressed) alerting rather than staying silently masked.
+  setTimeout(() => { intentionalUsbReset = false; }, USB_RESET_SETTLE_MS + RECONNECT_INTERVAL_MS + 5000);
 }
 
 function alertNodeRecovered(address, label, priorMisses) {
   if (!nodesAlerted.has(address)) return;
   nodesAlerted.delete(address);
   sendPush(`RS485 node ${label} is responding again after ${priorMisses} consecutive missed polls.`, 'RS485: Node Recovered');
+  usbResetAttemptedThisOutage = false; // this outage is over — a future, separate one gets its own reset attempt
 }
 
 // A sustained outage logging one warning every single 10s cycle, forever,

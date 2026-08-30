@@ -13,6 +13,7 @@ const rs485 = require('../services/rs485');
 const nodeRegistry = require('../services/nodeRegistry');
 const faultLed = require('../services/faultLed');
 const sound = require('../services/sound');
+const zoneAudioHardware = require('../services/zoneAudioHardware');
 const spotify = require('../services/spotify');
 const lutron = require('../services/lutron');
 
@@ -44,6 +45,14 @@ logStream.install();
   await thermostat.init();
   maintenance.init();
   await sound.init();
+  // Direct-I2C zone audio driver — see that file's header for why this
+  // exists alongside (not instead of) the RS485 zoneAudio node path below.
+  // A given zone only ever gets driven by whichever transport actually has
+  // real hardware wired for it; running both unconditionally is harmless —
+  // a zone with no I2C hardware present just fails its reads/writes
+  // silently into this file's own error logging, same as any other
+  // not-yet-wired sensor elsewhere in this app.
+  zoneAudioHardware.init();
   spotify.init();
   // lutron.init() disabled — lights/fans are back on SmartThings and the
   // physical bridge connection was flapping (repeated connect/disconnect),

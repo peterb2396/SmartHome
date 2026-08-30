@@ -216,9 +216,17 @@ void sendFrame(uint8_t addr, uint8_t cmd, const uint8_t* payload, uint8_t len) {
   Serial1.write(head, 3);
   if (len > 0) Serial1.write(payload, len);
   Serial1.write(crc);
-  Serial1.flush();
-  delayMicroseconds(50);
-  digitalWrite(RS485_DE_RE_PIN, LOW);
+  // NOT Serial1.flush() — see rs485_node.ino's sendFrame() for the real
+  // production incident that motivated this: flush() waits on the UART's
+  // own TX-empty hardware status flag, and if that flag ever fails to
+  // assert (a peripheral glitch), flush() spins forever, DE/RE never
+  // drops back to receive, and this node goes permanently deaf to the
+  // bus with no reboot (a hardware status-register spin, not something
+  // the watchdog reliably interrupts). A delay computed from frame length
+  // and baud rate is pure arithmetic against a timer — it can't hang.
+  uint8_t frameLen = 4 + len + 1;
+  delayMicroseconds((unsigned long)frameLen * 1200UL); // ~1.04ms/byte at 9600 baud, ~15% margin
+  digitalWrite(RS485_DE_RE_PIN, LOW); // unconditional, never gated on a hardware flag
 }
 
 void sendAnnounce() {

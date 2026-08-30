@@ -96,17 +96,37 @@ async function getTempFAt7am(date) {
 let cachedOutdoor = { tempF: null, fetchedAt: 0 };
 const OUTDOOR_CACHE_MAX_AGE_MS = 2 * 60 * 60 * 1000; // stale past this, but still shown (flagged stale)
 
+async function refreshOutdoorCacheOnce() {
+  const now = new Date();
+  const { times, temps } = await getHourlyForecast(now);
+  const target = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T${String(now.getHours()).padStart(2, '0')}:00`;
+  const idx = times.indexOf(target);
+  if (idx !== -1) {
+    cachedOutdoor = { tempF: temps[idx], fetchedAt: Date.now() };
+  }
+}
+
+// Real-world evidence: this reliably failed with 503s every single hour,
+// on the hour — the exact same URL/params succeed fine when tried again
+// moments later, so this isn't a bad request, it's the classic "thundering
+// herd" problem: this used to be scheduled for :00 exactly (see
+// scheduleCronJobs()), the single most congested instant for any free
+// public API, since an enormous number of OTHER cron jobs worldwide are
+// also scheduled for the top of the hour and all hit it simultaneously.
+// Moving off :00 (below) fixes most of it on its own; this one retry after
+// a short backoff mops up whatever's left, since a load spike like that
+// typically clears within seconds, not the hour you'd otherwise wait for
+// the next scheduled attempt.
 async function refreshOutdoorCache() {
   try {
-    const now = new Date();
-    const { times, temps } = await getHourlyForecast(now);
-    const target = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T${String(now.getHours()).padStart(2, '0')}:00`;
-    const idx = times.indexOf(target);
-    if (idx !== -1) {
-      cachedOutdoor = { tempF: temps[idx], fetchedAt: Date.now() };
-    }
+    await refreshOutdoorCacheOnce();
   } catch (err) {
-    console.warn('[Astro] Outdoor cache refresh failed (keeping last known value):', err.message);
+    await new Promise(resolve => setTimeout(resolve, 15000));
+    try {
+      await refreshOutdoorCacheOnce();
+    } catch (err2) {
+      console.warn('[Astro] Outdoor cache refresh failed twice in a row (keeping last known value):', err2.message);
+    }
   }
 }
 
@@ -170,8 +190,10 @@ function scheduleCronJobs() {
   }, CRON_OPTS);
 
   // Keep the dial nodes' outdoor-conditions cache fresh — see
-  // refreshOutdoorCache()'s comment above.
-  cron.schedule('0 * * * *', refreshOutdoorCache, CRON_OPTS);
+  // refreshOutdoorCache()'s comment above. Deliberately NOT :00 — see that
+  // comment for why the exact top of the hour is the worst possible time
+  // to hit a free public API.
+  cron.schedule('6 * * * *', refreshOutdoorCache, CRON_OPTS);
 
   // Auto-start car at 7:00 AM — await so unhandled rejections can't escape
 //   cron.schedule('0 7 * * *', async () => {
