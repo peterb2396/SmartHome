@@ -22,8 +22,13 @@ BUS_ID="${1:?Usage: $0 <usb-bus-id>}"
 # Guard against being pointed at something that isn't a real bus-id shape
 # (defense in depth — the sudoers rule already limits this script to root,
 # but a stray/garbled argument should still fail loudly, not silently
-# unbind/rebind an unintended device).
-if [[ ! "$BUS_ID" =~ ^[0-9]+(-[0-9]+)+$ ]]; then
+# unbind/rebind an unintended device). Real shape is <bus>-<port>, then
+# zero or more .<subport> segments for anything behind a hub (e.g. "1-1"
+# directly on the root controller, "1-1.2" one hub-port deep, "1-1.2.3"
+# two deep) — the FIRST cut of this only allowed repeated "-N" groups and
+# rejected the "." a hub-connected device (like this exact adapter) always
+# has, which is its own bug, caught the moment this ran for real.
+if [[ ! "$BUS_ID" =~ ^[0-9]+-[0-9]+(\.[0-9]+)*$ ]]; then
   echo "Refusing to act on implausible bus id: $BUS_ID" >&2
   exit 1
 fi
