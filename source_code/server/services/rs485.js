@@ -254,6 +254,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 const sensors = require('./sensorStore');
 const { sendPush } = require('./mail');
 
@@ -436,36 +437,51 @@ function findUsbBusId(ttyPath) {
   return null;
 }
 
-const USB_RESET_SETTLE_MS = 500; // gap between unbind and bind — lets the kernel fully tear the device down first
+// The Node server does NOT run as root (and shouldn't — this is one narrow
+// action, not a reason to hand a long-running internet-facing process root
+// on the whole Pi). Writing /sys/bus/usb/drivers/usb/{unbind,bind}
+// directly needs root, so instead this shells out via `sudo` to a tiny,
+// single-purpose wrapper script (server/scripts/rs485-usb-reset.sh) that's
+// the ONLY thing a scoped sudoers rule grants passwordless root on — see
+// that script's own header and the deployment setup notes for the exact
+// sudoers line required. If that one-time setup was never done, this fails
+// loudly (once, via a dedicated Bark push) rather than silently doing
+// nothing forever.
+const USB_RESET_SCRIPT = '/usr/local/bin/rs485-usb-reset.sh'; // installed copy — see the script's own header for the repo source
+const USB_RESET_SETTLE_MS = 500; // matches the script's own internal unbind->bind gap, kept here only for the "how long to keep suppressing bus-down alerts" window below
 let intentionalUsbReset = false; // suppresses the bus-down/back-online Bark push below for a reset WE triggered — see attemptUsbResetRecovery()
-let usbUnbindPermissionWarned = false; // one-time — see the catch block below
+let usbResetPermissionWarned = false; // one-time — see the exec callback below
 
-// Returns true if the unbind write succeeded (the rebind is scheduled
-// regardless — even if it somehow also fails, scheduleReconnect()'s normal
-// retry loop is still running underneath this as a fallback).
+// Fires the reset script asynchronously via sudo and returns immediately —
+// success/failure is only known once the child process exits, handled in
+// the callback below. Returns false only for the synchronous "couldn't
+// even figure out which device to reset" case; a script/sudo failure is
+// reported asynchronously instead, since child_process.execFile can't be
+// synchronous.
 function resetUsbAdapter() {
   const busId = findUsbBusId(RS485_PORT_PATH);
   if (!busId) {
     console.error(`[RS485] USB reset requested but couldn't locate the USB device backing ${RS485_PORT_PATH} — skipping.`);
     return false;
   }
-  try {
-    fs.writeFileSync('/sys/bus/usb/drivers/usb/unbind', busId);
-  } catch (e) {
-    console.error(`[RS485] USB unbind failed (${e.message}) — likely not running with enough privilege to do this (needs root).`);
-    if (!usbUnbindPermissionWarned) {
-      usbUnbindPermissionWarned = true;
-      sendPush('Tried to auto-reset the RS485 USB adapter after a node went down, but lack permission to do it (needs root) — this will keep failing silently until fixed.', 'RS485: Auto-Reset Broken');
+  // -n (non-interactive) is load-bearing, not optional: without it, a
+  // missing/wrong sudoers rule makes `sudo` sit waiting for a password on
+  // a TTY that doesn't exist (this is a background service, not an
+  // interactive shell) — a hung child process, forever, the exact class of
+  // bug this whole file's history has been about avoiding. With -n, a
+  // misconfigured sudoers rule instead fails immediately and reports
+  // through the catch below, same as any other setup mistake.
+  execFile('sudo', ['-n', USB_RESET_SCRIPT, busId], (err, _stdout, stderr) => {
+    if (err) {
+      console.error(`[RS485] USB reset script failed (${err.message}${stderr ? ` — ${stderr.trim()}` : ''}) — see server/scripts/rs485-usb-reset.sh's header for the required one-time sudoers setup.`);
+      if (!usbResetPermissionWarned) {
+        usbResetPermissionWarned = true;
+        sendPush('Tried to auto-reset the RS485 USB adapter after a node went down, but the reset script failed (sudoers setup likely missing/wrong) — this will keep failing silently until fixed.', 'RS485: Auto-Reset Broken');
+      }
+    } else {
+      console.log(`[RS485] USB adapter reset (bus id ${busId}) completed.`);
     }
-    return false;
-  }
-  setTimeout(() => {
-    try {
-      fs.writeFileSync('/sys/bus/usb/drivers/usb/bind', busId);
-    } catch (e) {
-      console.error(`[RS485] USB rebind failed (${e.message}).`);
-    }
-  }, USB_RESET_SETTLE_MS);
+  });
   return true;
 }
 
