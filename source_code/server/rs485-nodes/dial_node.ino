@@ -19,13 +19,29 @@
  * sequence, and the touch init below are matched against Elecrow's own
  * confirmed-working example for this exact board (RotaryScreen_2_1.ino,
  * github.com/Elecrow-RD/CrowPanel-2.1inch-HMI-ESP32-Rotary-Display-480-480-
- * IPS-Round-Touch-Knob-Screen) — not guessed. The SECOND I2C bus
- * (DIAL_I2C_SDA_PIN/DIAL_I2C_SCL_PIN, the link to the RP2040 node) is this
- * file's own addition, absent from Elecrow's example, and is still on
- * GENUINELY UNKNOWN pins — this board's other pins already consume most of
- * the ESP32-S3's GPIOs (display bus + encoder + backlight + the display's
- * OWN internal I2C for touch/expander), so confirm two truly free GPIOs
- * against your specific board variant before wiring this.
+ * IPS-Round-Touch-Knob-Screen) — not guessed.
+ *
+ * The RP2040 link is NOT a second, isolated I2C bus — a real, hard-won
+ * finding, not a guess: this board's other pins already consume nearly
+ * every available GPIO (display bus + encoder + backlight + touch/
+ * expander I2C + flash/PSRAM), so an earlier revision of this file put
+ * the RP2040 link on GPIO 43/44 as its own separate Wire1 slave bus,
+ * confirmed on paper but never against this board's actual schematic.
+ * The real, physical external I2C header (GND/VCC/SCL/SDA) this board
+ * exposes is wired to SDA=38/SCL=39 — the EXACT SAME pins as Wire0 below
+ * (touch + PCF8574), confirmed against real hardware, not assumed. It was
+ * never an isolated link; it's a tap directly onto this board's own
+ * already-mastered internal I2C bus. Wiring the RP2040 onto it as a
+ * SECOND active master (the original design) caused a real two-master
+ * collision — see rs485_node.ino's header for the full real-hardware
+ * evidence that pinned this down (fresh replacement hardware reproduced
+ * it, a powered-off short check found nothing, and unplugging the dial
+ * alone immediately restored the RP2040's own separate SCD41 sensor,
+ * proving the dial's mere presence, not its address, was corrupting the
+ * whole shared bus). Fixed by keeping this board the sole master of its
+ * own bus (as it always had to be) and making the RP2040 the I2C SLAVE
+ * instead, on its own separate, non-shared i2c1 peripheral — see
+ * pollRp2040() below.
  *
  * ── Faults/maintenance — deliberately non-blocking ─────────────────
  * A small ambient badge (see drawStatusBadge()) appears on the Clock,
@@ -79,9 +95,15 @@
  *   Encoder:    A=42 B=4 (rotation, quadrature) — press comes via the
  *               PCF8574's P5 above, not a direct GPIO
  *   Backlight:  GPIO 6
- *   RP2040 link (Wire1, slave mode — GENUINELY UNKNOWN, pick 2 free
- *               GPIOs): SDA=DIAL_I2C_SDA_PIN SCL=DIAL_I2C_SCL_PIN, plus
- *               shared GND and 5V from the RP2040 node's LM2596
+ *   RP2040 link: shares this board's OWN internal I2C bus (Wire0, SDA=38
+ *               SCL=39 — the SAME two pins as the touch controller/
+ *               PCF8574 above) via the external 4-pin GND/VCC/SCL/SDA
+ *               header. This board is now the I2C MASTER of that whole
+ *               bus (touch, PCF8574, AND the RP2040) — see this file's
+ *               header for why. The RP2040 side must NOT be on ITS
+ *               sensor I2C bus (i2c0/BME680/SCD41) — it needs its own
+ *               separate i2c1 peripheral; see rs485_node.ino's wiring
+ *               section for those pins.
  *
  * ── I2C protocol (must match rs485_node.ino's DIAL_I2C_ADDR/
  *    DIAL_PUSH_LEN/DIAL_REPLY_LEN, and rs485.js's POLL_DIAL/DIAL_STATE —
@@ -145,7 +167,7 @@ const char* OTA_SERVER_HOST = "server.153home.online"; // same host the rest of 
 // the Console's firmware panel — see server/services/firmwareUpdate.js's
 // getLatestDialFirmware() for the exact naming convention this is
 // compared against.
-const char* FIRMWARE_VERSION = "1.0.1";
+const char* FIRMWARE_VERSION = "1.0.3";
 const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60 * 60 * 1000; // every 6 hours
 const unsigned long OTA_FIRST_CHECK_DELAY_MS = 30000; // wait until well after boot — see checkForOTA()'s comment on why this blocks loop()
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000; // don't hang indefinitely if WiFi's unavailable
@@ -167,10 +189,10 @@ const uint8_t PCF_TOUCH_RESET = 0, PCF_TOUCH_IRQ = 2, PCF_LCD_POWER = 3, PCF_LCD
 const int ENCODER_PIN_A = 42;
 const int ENCODER_PIN_B = 4;
 
-// GENUINELY UNKNOWN — see this file's header. Wire1, slave mode, the link
-// to the paired RP2040 node.
-const int DIAL_I2C_SDA_PIN = 43;
-const int DIAL_I2C_SCL_PIN = 44;
+// The RP2040's own I2C slave address on its separate i2c1 peripheral —
+// see this file's header on why this board is now the master of this
+// link, over the SAME Wire (I2C_SDA_PIN/I2C_SCL_PIN above) already used
+// for touch/PCF8574, not a second bus.
 const uint8_t DIAL_I2C_ADDR = 0x42; // MUST match rs485_node.ino's DIAL_I2C_ADDR
 const uint8_t DIAL_PUSH_LEN = 27;   // MUST match rs485.js's POLL_DIAL payload size
 const uint8_t DIAL_REPLY_LEN = 8;   // MUST match rs485.js's DIAL_STATE payload size
@@ -366,7 +388,8 @@ Screen screenForMenuIndex(int index) {
   return SCREEN_STATUS;
 }
 
-// ── I2C slave: RP2040 push in, reply out ────────────────────────────────
+// ── Dial bridge: push in, reply out (this board now MASTERS this link —
+// see this file's header) ───────────────────────────────────────────────
 // Parses a push straight into `state` — no protocol translation, this is
 // the exact same 27B layout that used to arrive over RS485 directly.
 void applyPush(const uint8_t* p, uint8_t len) {
@@ -409,30 +432,41 @@ void buildReply() {
   pendingTapEvent = 0;
 }
 
-// Runs in the Wire1 slave task's own context, not loop() — keep this
-// fast: just copy bytes and update state/build the reply. The actual
-// screen redraw is deferred to loop() via needsRedraw, since LVGL work is
-// too slow to do safely here.
+// Called from loop() every RP2040_POLL_INTERVAL_MS — this board is now
+// the I2C master of this link (see this file's header), so it initiates:
+// write our own local reply-equivalent state, then read back whatever the
+// RP2040 last had pushed to it over RS485. Same two payloads as before,
+// same meaning, just swapped who writes vs. reads — the master always
+// writes first and reads second in this library regardless of which side
+// logically "pushes."
 volatile bool needsRedraw = false;
-uint8_t i2cRxBuf[DIAL_PUSH_LEN];
+const unsigned long RP2040_POLL_INTERVAL_MS = 20; // mirrors the old fast-dial-poll cadence (rs485.js's DIAL_SWEEP_GAP_MS)
+unsigned long lastRp2040PollAt = 0;
 
-void onI2CReceive(int numBytes) {
-  uint8_t len = 0;
-  while (Wire1.available() && len < sizeof(i2cRxBuf)) i2cRxBuf[len++] = Wire1.read();
-  while (Wire1.available()) Wire1.read(); // drain anything past what we expected
+void pollRp2040() {
+  if (millis() - lastRp2040PollAt < RP2040_POLL_INTERVAL_MS) return;
+  lastRp2040PollAt = millis();
 
+  uint8_t replyPayload[DIAL_REPLY_LEN];
   portENTER_CRITICAL(&stateMux);
-  applyPush(i2cRxBuf, len);
   buildReply();
+  memcpy(replyPayload, replyBuffer, DIAL_REPLY_LEN);
   portEXIT_CRITICAL(&stateMux);
 
-  needsRedraw = true;
-}
+  Wire.beginTransmission(DIAL_I2C_ADDR);
+  Wire.write(replyPayload, DIAL_REPLY_LEN);
+  if (Wire.endTransmission() != 0) return; // RP2040 not reachable this cycle — try again next tick, same tolerance a dropped exchange always had
 
-void onI2CRequest() {
+  uint8_t got = Wire.requestFrom(DIAL_I2C_ADDR, DIAL_PUSH_LEN);
+  if (got < DIAL_PUSH_LEN) { while (Wire.available()) Wire.read(); return; }
+
+  uint8_t pushBuf[DIAL_PUSH_LEN];
+  for (uint8_t i = 0; i < DIAL_PUSH_LEN; i++) pushBuf[i] = Wire.read();
+
   portENTER_CRITICAL(&stateMux);
-  Wire1.write(replyBuffer, DIAL_REPLY_LEN);
+  applyPush(pushBuf, DIAL_PUSH_LEN);
   portEXIT_CRITICAL(&stateMux);
+  needsRedraw = true;
 }
 
 // ── Rotary encoder ──────────────────────────────────────────────────────
@@ -1370,6 +1404,19 @@ void LVGL_TOUCH_INIT() {
   lv_indev_set_display(lvIndev, lvDisplay);
 }
 
+// Parses two "X.Y.Z" strings and returns true only if `server` is strictly
+// greater than `current` — a real numeric comparison, not string equality.
+// See the "Real production evidence" comment at this function's one call
+// site (checkForOTA()) for the downgrade loop this replaced.
+bool isServerVersionNewer(const String& server, const char* current) {
+  int sMaj = 0, sMin = 0, sPatch = 0, cMaj = 0, cMin = 0, cPatch = 0;
+  sscanf(server.c_str(), "%d.%d.%d", &sMaj, &sMin, &sPatch);
+  sscanf(current, "%d.%d.%d", &cMaj, &cMin, &cPatch);
+  if (sMaj != cMaj) return sMaj > cMaj;
+  if (sMin != cMin) return sMin > cMin;
+  return sPatch > cPatch;
+}
+
 // ── WiFi/HTTP OTA — see this file's header on why this exists instead of
 // the RS485-based scheme the RP2040 nodes use ──────────────────────────
 // Deliberately BLOCKING and called from loop(), not a separate task — a
@@ -1438,8 +1485,15 @@ void checkForOTA() {
   String serverFilename = body.substring(filenameStart, body.indexOf('"', filenameStart));
 
   Serial.printf("[Dial] OTA: running %s, server has %s\n", FIRMWARE_VERSION, serverVersion.c_str());
-  if (serverVersion == FIRMWARE_VERSION) {
-    Serial.println("[Dial] OTA: already up to date.");
+  // Real production evidence: this used to be a plain string inequality
+  // (serverVersion != FIRMWARE_VERSION), which treats ANY different
+  // version as "available" — including an OLDER one. The very first time
+  // a freshly-flashed board (running a version newer than whatever stale
+  // .bin was still sitting on the server) checked in, it happily
+  // downgraded itself right back to that older build. Compare numerically
+  // instead, and only proceed if the server's version is actually greater.
+  if (!isServerVersionNewer(serverVersion, FIRMWARE_VERSION)) {
+    Serial.println("[Dial] OTA: server version is not newer — nothing to do.");
     WiFi.mode(WIFI_OFF);
     return;
   }
@@ -1460,6 +1514,8 @@ void checkForOTA() {
   int contentLength = http.getSize();
   if (contentLength <= 0) {
     Serial.println("[Dial] OTA: firmware download had no usable Content-Length — aborting.");
+    client.stop(); // see the comment below — don't let http.end() try to gracefully
+                    // tear down a connection whose body was never read.
     http.end();
     WiFi.mode(WIFI_OFF);
     return;
@@ -1472,6 +1528,18 @@ void checkForOTA() {
   // firmware, not bricked.
   if (!Update.begin(contentLength)) {
     Serial.printf("[Dial] OTA: Update.begin(%d) failed: %s\n", contentLength, Update.errorString());
+    // Real production evidence: at this point only the response HEADERS
+    // have been read (getSize() above) — the full multi-hundred-KB-to-
+    // multi-MB body is still sitting entirely unread in the TLS
+    // connection. Letting http.end() attempt its normal graceful
+    // close/reuse handling on a connection with that much unread data
+    // pending is what actually crashed this board the first time this
+    // fired for real (Guru Meditation, PC=0/EXCVADDR=0 — a corrupted
+    // return address, consistent with a bad teardown deep in the TLS
+    // stack). Force-closing the raw socket first sidesteps whatever that
+    // path does, at the cost of not reusing the connection — irrelevant
+    // here, this board is about to turn WiFi off anyway.
+    client.stop();
     http.end();
     WiFi.mode(WIFI_OFF);
     return;
@@ -1531,14 +1599,10 @@ void setup() {
   showIdleScreen();
   Serial.println("[Dial] screens created, idle shown");
 
-  buildReply(); // seeds replyBuffer before the RP2040's first request ever arrives
-
-  // Wire1, slave mode — the link to the paired RP2040 node. Deliberately
-  // separate from Wire0 above (touch/PCF8574) rather than sharing one bus
-  // in two roles.
-  Wire1.begin(DIAL_I2C_ADDR, DIAL_I2C_SDA_PIN, DIAL_I2C_SCL_PIN);
-  Wire1.onReceive(onI2CReceive);
-  Wire1.onRequest(onI2CRequest);
+  // No separate Wire1 setup needed anymore — the dial bridge now rides
+  // the SAME Wire (I2C_SDA_PIN/I2C_SCL_PIN, already begun above) that
+  // touch/PCF8574 use, with this board as master (see pollRp2040(),
+  // called from loop()). See this file's header for why.
 
   lastInteractionAt = millis();
   Serial.println("[Dial] Boot complete.");
@@ -1557,6 +1621,7 @@ void loop() {
   processEncoder();
   checkEncoderButton();
   checkIdleTimeout();
+  pollRp2040();
 
   if (needsRedraw) {
     needsRedraw = false;

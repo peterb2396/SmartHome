@@ -15,19 +15,46 @@
  * addresses each node individually.
  *
  * ── I2C dial bridge (see HAS_DIAL below) ───────────────────────────
- * This is the ONE mass-produced board — a wall dial (server/rs485-nodes/
- * dial_node.ino, an ESP32 touch+rotary display) is NOT a separate RS485
- * node; it's an I2C ACCESSORY hanging off THIS board, exactly like the
- * BME680/SCD41 sensors are, sharing the same I2C0 bus (a 3rd device
- * address alongside them, no separate bus needed) and the same 5V rail
- * off this board's own LM2596. This board answers RS485 for BOTH roles on
- * ONE bus address: CMD_POLL/CMD_REPORT for its own sensors (if HAS_SCD41/
- * a BME680 are present) and CMD_POLL_DIAL/CMD_DIAL_STATE for the attached
- * dial (if HAS_DIAL). The bridge is a pure byte-for-byte relay between
- * RS485 and I2C; this board never needs to understand the dial payload's
- * structure, just shuttle it. The dial itself carries NO RS485 logic at
- * all and doesn't need to know this bus exists — see that file's own
+ * A wall dial (server/rs485-nodes/dial_node.ino, an ESP32 touch+rotary
+ * display) is NOT a separate RS485 node; it's an I2C peer of THIS board,
+ * relayed between RS485 and I2C without this board ever needing to
+ * understand the dial payload's structure. CMD_POLL/CMD_REPORT (this
+ * board's own sensors, if HAS_SCD41/a BME680 are present) and
+ * CMD_POLL_DIAL/CMD_DIAL_STATE (the attached dial, if HAS_DIAL) both
+ * answer on the SAME bus address. The dial itself carries NO RS485 logic
+ * at all and doesn't need to know this bus exists — see that file's own
  * header.
+ *
+ * CRITICAL, hard-won: the dial link does NOT share this board's I2C0 bus
+ * (the BME680/SCD41 bus, I2C_SDA_PIN/I2C_SCL_PIN below) — it's on this
+ * board's SEPARATE i2c1 peripheral (DIAL_I2C1_SDA_PIN/DIAL_I2C1_SCL_PIN),
+ * with the dial as MASTER and this board as SLAVE — both the opposite of
+ * an earlier revision of this file. Real production evidence: the dial
+ * board's external "I2C" header (the one the RP2040 physically connects
+ * to) turned out to be a tap directly onto the ESP32's OWN internal I2C
+ * bus — the same one it already masters for its touch controller and
+ * PCF8574 expander (see dial_node.ino's header) — not an isolated link.
+ * Wiring this board onto it as a SECOND master, sharing GPIO4/5 with
+ * BME680/SCD41 (the original design), created a genuine two-master
+ * collision: fresh replacement hardware (new dial, new SCD41) reproduced
+ * the exact same failure, a powered-off continuity check found no short
+ * (a live master/master collision isn't a static short), and — the
+ * decisive test — physically unplugging the dial alone restored the
+ * SCD41 to immediately healthy, confirming the dial's mere electrical
+ * presence, not its own address specifically, was corrupting the whole
+ * shared bus. Splitting the dial link onto this board's independent
+ * second I2C peripheral, with the ESP32 (which must stay sole master of
+ * ITS OWN internal bus) now mastering this link too, removes the
+ * collision entirely — this board's sensor bus (i2c0) and the dial link
+ * (i2c1) are now fully separate hardware, nothing shared.
+ *
+ * Practically: this board is now an I2C SLAVE on i2c1 (Wire1), answering
+ * whatever the dial's own polling loop asks — see onDialI2CReceive()/
+ * onDialI2CRequest() below. It never initiates the dial exchange itself
+ * anymore; it just publishes the latest RS485-pushed state for the dial
+ * to read on its own schedule, and reports back whatever the dial most
+ * recently wrote — same "serve the latest known value, never block"
+ * pattern this file already uses for BME680/SCD41 readings.
  *
  * ── Hardware per node ────────────────────────────────────────────
  *   RP2040 board (e.g. Pico, Pico W used purely for its RP2040 — no
@@ -37,17 +64,20 @@
  *   LM2596 buck converter — steps the bus's 24V feed down to 5V for the
  *     RP2040's VSYS input (RP2040 logic itself is 3.3V, regulated on-board)
  *     — this same 5V rail also feeds an attached dial, if any
- *   Thermostat-zone nodes: SCD41 only (CO2 + its own onboard RH — see
- *     readSensorsOnCore1()/SharedSensorState's comment on why humidity can
- *     come from either chip) — no BME680 on these. Set HAS_SCD41 to true,
+ *   Thermostat-zone nodes: SCD41 only (CO2 + its own onboard RH and temp —
+ *     see readSensorsOnCore1()/SharedSensorState's comment on why humidity
+ *     and temperature can each come from either chip) — no BME680 on
+ *     these. Set HAS_SCD41 to true,
  *     BME680 simply won't be found at setup1() and bmeReady stays false,
  *     no separate flag needed for "no BME680."
  *   Basement/attic monitor nodes only: BME680 (temp/pressure/humidity/
  *     VOC) + SCD41 (CO2) — the full sensor set lives here, not on the
  *     thermostat zones
- *   Zones with a wall dial: set HAS_DIAL to true below — no extra RP2040
- *     hardware needed beyond the existing I2C0 bus/5V rail already wired
- *     for the sensors
+ *   Zones with a wall dial: set HAS_DIAL to true below — needs its OWN
+ *     I2C wiring on this board's second I2C peripheral (i2c1), separate
+ *     from the I2C0 bus the sensors use — see DIAL_I2C1_SDA_PIN/
+ *     DIAL_I2C1_SCL_PIN below and this file's "I2C dial bridge" section
+ *     for why sharing i2c0 with the sensors doesn't work
  *
  * ── Libraries (Arduino Library Manager) ───────────────────────────
  *   Adafruit BME680 Library     by Adafruit
@@ -63,8 +93,10 @@
  *   RS485 module A/B                     → bus twisted pair (shared)
  *   BME680 SDA/SCL                       → RP2040 GPIO 4 / GPIO 5 (I2C0)
  *   SCD41  SDA/SCL                       → same I2C0 bus (if present)
- *   Dial   SDA/SCL/GND/5V                → same I2C0 bus + same 5V rail as
- *                                           the sensors (if present) — see
+ *   Dial   SDA/SCL                        → RP2040 GPIO 6 / GPIO 7 (i2c1 —
+ *                                           NOT the I2C0 bus above, see
+ *                                           this file's header) + same GND/
+ *                                           5V rail as the sensors — see
  *                                           dial_node.ino's own wiring notes
  *                                           for its side of this same link
  *   LM2596 OUT+ (5V)                     → RP2040 VSYS
@@ -158,22 +190,19 @@
  * heartbeat age so a repeat of this exact failure is unambiguous in the
  * log instead of a mystery.
  *
- * The dial bridge (bridgeDialPoll's old job) is inherently a two-way,
- * this-cycle's-payload exchange, not a simple cached value — see
- * requestDialBridge()/serviceDialFifoOnCore1() for how core 0 hands a
- * push payload to core 1 and gets a reply back over the RP2040's hardware
- * inter-core FIFO, bounded by DIAL_BRIDGE_TIMEOUT_MS so core 0 can never
- * block on it either; a timeout there is treated exactly like a dropped
- * RS485 frame (retried next ~20ms sweep), same tolerance the old
- * single-core version already had.
+ * The dial bridge no longer uses the inter-core FIFO at all — see this
+ * file's "I2C dial bridge" section above for the real reason (this board
+ * is now an i2c1 SLAVE, not a master doing an on-demand exchange), and
+ * onDialI2CReceive()/onDialI2CRequest() for how core 1 publishes/consumes
+ * that state under sharedLock instead, same "serve latest known value"
+ * pattern as everything else in `shared`.
  *
  * UNVERIFIED AGAINST REAL HARDWARE, flagging clearly per this file's own
- * convention: (1) rp2040.fifo's exact push_nb()/pop_nb()/available() method
- * shapes, confirm against your installed arduino-pico core version; (2)
- * this relies on arduino-pico's documented core-1-starts-after-core-0's-
- * setup()-returns ordering so critical_section_init() below is guaranteed
- * to run before core 1 ever touches the lock — confirm this still holds on
- * your installed core version before trusting it blind.
+ * convention: this relies on arduino-pico's documented core-1-starts-
+ * after-core-0's-setup()-returns ordering so critical_section_init()
+ * below is guaranteed to run before core 1 ever touches the lock —
+ * confirm this still holds on your installed core version before trusting
+ * it blind.
  */
 
 #include <Wire.h>
@@ -194,7 +223,7 @@
 // that the hard way — see git history. The library/object below now always
 // compile in; scd41 just never gets begin()'d or read when this is false.
 const bool HAS_SCD41 = true; // false for basement/attic monitor nodes
-const bool HAS_DIAL = false;  // false for zones with no wall dial attached
+const bool HAS_DIAL = true;  // false for zones with no wall dial attached
 
 const int RS485_DE_RE_PIN = 2;
 const unsigned long BAUD_RATE = 9600;
@@ -208,6 +237,12 @@ const int EEPROM_WDT_REBOOT_COUNT_BYTE = 2; // wraps at 255 — count of boots c
 // the same explicit treatment via setTX()/setRX() in setup().
 const int I2C_SDA_PIN = 4;
 const int I2C_SCL_PIN = 5;
+
+// The dial link's OWN, separate I2C peripheral (i2c1/Wire1) — deliberately
+// NOT sharing I2C_SDA_PIN/I2C_SCL_PIN above. See this file's header ("I2C
+// dial bridge") for the real two-master collision this replaced.
+const int DIAL_I2C1_SDA_PIN = 6;
+const int DIAL_I2C1_SCL_PIN = 7;
 
 // See this file's header for the full story. 8000 is close to
 // arduino-pico's hardware ceiling (~8388ms, a 24-bit counter).
@@ -229,13 +264,6 @@ const unsigned long CORE1_STALL_THRESHOLD_MS = 5000;
 // setup1() (Wire.begin(), bme.begin(), scd41.begin()+startPeriodicMeasurement())
 // once, which could plausibly take a second or two on its own.
 const unsigned long CORE0_BOOT_GRACE_MS = 8000;
-
-// Bounded wait for a core-1 dial exchange (see requestDialBridge()) — must
-// stay comfortably under the MASTER's own DIAL_POLL_RESPONSE_TIMEOUT_MS
-// (200ms, rs485.js) after accounting for RS485 turnaround, since a
-// dial poll that times out here is otherwise indistinguishable from a
-// dropped frame and just gets retried ~20ms later anyway.
-const unsigned long DIAL_BRIDGE_TIMEOUT_MS = 60;
 
 #include <SparkFun_SCD4x_Arduino_Library.h>
 SCD4x scd41;
@@ -260,22 +288,14 @@ const uint8_t CMD_FW_ACK = 0x86;
 const uint8_t CMD_LOG_LINE = 0x87;
 
 // ── I2C dial bridge — see this file's header ──────────────────────
-// TBD: pick an address that doesn't collide with BME680 (0x76/0x77) or
-// SCD41 (0x62) on the same bus — 0x42 is a placeholder, confirm/change if
-// it conflicts with anything else you add to this bus later.
+// This board's OWN slave address on its i2c1 peripheral now (the dial is
+// master — see this file's header on the role reversal), NOT an address
+// on the I2C0/BME680/SCD41 bus, so no collision risk with 0x76/0x77/0x62
+// regardless of value. Must still match dial_node.ino's own DIAL_I2C_ADDR
+// constant exactly.
 const uint8_t DIAL_I2C_ADDR = 0x42;
 const uint8_t DIAL_PUSH_LEN = 27;  // must match rs485.js's POLL_DIAL payload size
 const uint8_t DIAL_REPLY_LEN = 8;  // must match rs485.js's DIAL_STATE payload size
-
-// Inter-core FIFO framing for the dial bridge — see requestDialBridge()/
-// serviceDialFifoOnCore1(). Both directions are a fixed byte count every
-// time (no variable-length framing needed): 1 sequence byte (detects a
-// stale reply from an already-abandoned request) + the real payload,
-// packed into whole 32-bit words (the RP2040 inter-core FIFO only moves
-// words). 1+27=28B packs into exactly 7 words with zero padding; 1+8=9B
-// needs 3 words (3B padding, unused).
-const int DIAL_REQ_WORDS = (1 + DIAL_PUSH_LEN + 3) / 4;
-const int DIAL_REPLY_WORDS = (1 + DIAL_REPLY_LEN + 3) / 4;
 
 const uint8_t SENSOR_TEMPERATURE = 0x01;
 const uint8_t SENSOR_HUMIDITY = 0x02;
@@ -306,13 +326,34 @@ struct SharedSensorState {
   // co2.
   bool humidityOk = false;
   unsigned long lastGoodHumidityAtMs = 0;
+  // Temperature, same story as humidity above — the SCD41 measures its own
+  // onboard temperature (for its own CO2 compensation) and exposes it via
+  // getTemperature(), so a zone with no BME680 at all still gets a real
+  // temperature reading this way rather than reporting none. BME680 wins
+  // whenever present (readSensorsOnCore1() sets this branch first; the
+  // SCD41 branch only overwrites it when !bmeReadyLocal).
+  bool tempOk = false;
+  unsigned long lastGoodTempAtMs = 0;
   unsigned long lastGoodBmeAtMs = 0;         // core 1's millis() at its last successful BME680 read
   unsigned long lastGoodCo2AtMs = 0;         // core 1's millis() at its last successful SCD41 read
 
   unsigned long bmeFailTotal = 0, bmeFailStreak = 0, lastBmeReadMs = 0;
   unsigned long scd41FailTotal = 0, scd41FailStreak = 0, lastScd41ReadMs = 0;
-  unsigned long dialI2cFailTotal = 0;
-  unsigned long i2cRecoveries = 0; // see i2cBusRecovery()
+  unsigned long i2cRecoveries = 0; // see i2cBusRecovery() — I2C0/BME680/SCD41 only now, see below
+
+  // ── Dial bridge (i2c1, this board as SLAVE — see this file's header) ──
+  // dialPushBuf: core 0 publishes the latest RS485-received POLL_DIAL
+  // payload here for onDialI2CRequest() (core 1, IRQ context) to serve
+  // whenever the dial's own master loop asks — never blocks either side
+  // on the other. dialReplyBuf: the reverse direction, filled by
+  // onDialI2CReceive() whenever the dial writes, read by core 0 to answer
+  // the NEXT CMD_POLL_DIAL with whatever's most recently arrived (same
+  // "serve latest known" tolerance as sensor readings, not a synchronous
+  // round-trip).
+  uint8_t dialPushBuf[DIAL_PUSH_LEN] = {0};
+  uint8_t dialReplyBuf[DIAL_REPLY_LEN] = {0};
+  unsigned long lastDialReceivedAtMs = 0;
+  unsigned long dialPushesReceivedTotal = 0;
 
   unsigned long core1HeartbeatMs = 0; // core 1's own millis(), updated every loop1() iteration — see loop()
   // Core 1's OWN measurement of its longest iteration-to-iteration gap —
@@ -351,7 +392,6 @@ unsigned long lastLoopAt = 0;
 unsigned long lastPollAt = 0;      // millis() of the last CMD_POLL received, addressed to us
 unsigned long lastPollGapMs = 0;   // elapsed time between the two most recent polls — see handleFrame()
 unsigned long bootAtMs = 0;        // millis() at the top of setup() — see CORE0_BOOT_GRACE_MS
-uint8_t dialReqSeq = 0;            // see requestDialBridge()
 
 // ── CRC8 (poly 0x07) — must match crc8() in rs485.js ──────────────
 uint8_t crc8(const uint8_t* data, size_t len) {
@@ -601,21 +641,21 @@ void readSensorsOnCore1() {
   // "not ready," and every one of those was being miscounted as a failure.
   bool co2DataReady = false, co2Ok = false;
   unsigned long scdMs = 0;
-  float co2 = 0, scdHumidity = 0;
+  float co2 = 0, scdHumidity = 0, scdTempC = 0;
   if (HAS_SCD41 && scd41ReadyLocal) {
     co2DataReady = scd41.getDataReadyStatus();
     if (co2DataReady) {
       unsigned long start = millis();
       co2Ok = scd41.readMeasurement();
       scdMs = millis() - start;
-      // getHumidity() reads back the SAME measurement readMeasurement()
-      // just cached (the SCD4x measures its own onboard RH internally,
-      // for its own CO2 compensation) — no extra I2C transaction, so this
-      // is "free" alongside the CO2 read. Most zones have no BME680 at
-      // all (see envSensors.js's header on the server) — this is their
-      // ONLY source of a real humidity reading, not a fallback for a
-      // "nice to have."
-      if (co2Ok) { co2 = (float)scd41.getCO2(); scdHumidity = scd41.getHumidity(); }
+      // getHumidity()/getTemperature() read back the SAME measurement
+      // readMeasurement() just cached (the SCD4x measures its own onboard
+      // RH and temperature internally, for its own CO2 compensation) — no
+      // extra I2C transaction, so both are "free" alongside the CO2 read.
+      // Most zones have no BME680 at all (see envSensors.js's header on
+      // the server) — this is their ONLY source of real humidity/
+      // temperature readings, not a fallback for a "nice to have."
+      if (co2Ok) { co2 = (float)scd41.getCO2(); scdHumidity = scd41.getHumidity(); scdTempC = scd41.getTemperature(); }
     }
   }
 
@@ -636,6 +676,8 @@ void readSensorsOnCore1() {
       shared.humidity = humidity;
       shared.humidityOk = true;
       shared.lastGoodHumidityAtMs = now;
+      shared.tempOk = true;
+      shared.lastGoodTempAtMs = now;
     } else {
       shared.bmeOk = false;
       shared.bmeFailTotal++;
@@ -658,6 +700,9 @@ void readSensorsOnCore1() {
         shared.humidity = scdHumidity;
         shared.humidityOk = true;
         shared.lastGoodHumidityAtMs = now;
+        shared.tempF = scdTempC * 9.0 / 5.0 + 32.0;
+        shared.tempOk = true;
+        shared.lastGoodTempAtMs = now;
       }
     } else {
       shared.co2Ok = false;
@@ -674,66 +719,32 @@ void readSensorsOnCore1() {
   if (bmeFailStreakNow >= I2C_FAIL_RECOVERY_THRESHOLD || scd41FailStreakNow >= I2C_FAIL_RECOVERY_THRESHOLD) i2cBusRecovery();
 }
 
-// The real I2C exchange with the dial — unchanged from the original
-// single-core version except it no longer calls sendFrame() itself (core 1
-// never touches RS485); it just fills replyOut and returns whether it
-// worked. See serviceDialFifoOnCore1() for how this gets wired to core 0.
-bool doDialI2cExchange(uint8_t* pushPayload, uint8_t pushLen, uint8_t* replyOut) {
-  Wire.beginTransmission(DIAL_I2C_ADDR);
-  Wire.write(pushPayload, pushLen);
-  uint8_t writeResult = Wire.endTransmission();
-  if (writeResult != 0) {
-    unsigned long fails;
-    critical_section_enter_blocking(&sharedLock);
-    fails = ++shared.dialI2cFailTotal;
-    critical_section_exit(&sharedLock);
-    logLine("[RS485 Node] Dial I2C write failed (code %d, total failures %lu)", writeResult, fails);
-    if (fails % I2C_FAIL_RECOVERY_THRESHOLD == 0) i2cBusRecovery();
-    return false;
-  }
+// ── Dial bridge i2c1 slave callbacks — see this file's header ──────
+// Run from the Wire1 slave IRQ context, same convention dial_node.ino's
+// own callbacks used back when IT was the slave — keep these fast, just
+// copy bytes in/out of the shared buffers under sharedLock. Never touches
+// RS485/sendFrame (core 1 still never does that), and never blocks
+// waiting on core 0 — core 0 just reads whatever's here whenever its own
+// RS485 cycle needs it, same tolerance as every other shared-state field.
+void onDialI2CReceive(int numBytes) {
+  if (numBytes < DIAL_REPLY_LEN) { while (Wire1.available()) Wire1.read(); return; }
+  uint8_t buf[DIAL_REPLY_LEN];
+  for (uint8_t i = 0; i < DIAL_REPLY_LEN; i++) buf[i] = Wire1.read();
+  while (Wire1.available()) Wire1.read(); // drain anything past what we expected
 
-  uint8_t got = Wire.requestFrom(DIAL_I2C_ADDR, DIAL_REPLY_LEN);
-  if (got < DIAL_REPLY_LEN) {
-    unsigned long fails;
-    critical_section_enter_blocking(&sharedLock);
-    fails = ++shared.dialI2cFailTotal;
-    critical_section_exit(&sharedLock);
-    logLine("[RS485 Node] Dial I2C read short (%d/%d bytes, total failures %lu)", got, DIAL_REPLY_LEN, fails);
-    while (Wire.available()) Wire.read(); // drain whatever partial reply there was
-    if (fails % I2C_FAIL_RECOVERY_THRESHOLD == 0) i2cBusRecovery();
-    return false;
-  }
-  for (uint8_t i = 0; i < DIAL_REPLY_LEN; i++) replyOut[i] = Wire.read();
-  return true;
+  critical_section_enter_blocking(&sharedLock);
+  memcpy(shared.dialReplyBuf, buf, DIAL_REPLY_LEN);
+  shared.lastDialReceivedAtMs = millis();
+  shared.dialPushesReceivedTotal++;
+  critical_section_exit(&sharedLock);
 }
 
-// Drains a complete dial-bridge request from core 0 (if one is fully
-// queued — see requestDialBridge()'s framing) and pushes the reply back.
-// If doDialI2cExchange() fails, no reply is pushed at all — core 0's
-// bounded wait simply times out, indistinguishable from a dropped RS485
-// frame, exactly like the original single-core bridgeDialPoll()'s own
-// documented behavior.
-void serviceDialFifoOnCore1() {
-  if (!HAS_DIAL) return;
-  if (rp2040.fifo.available() < DIAL_REQ_WORDS) return; // no complete request waiting yet
-
-  uint32_t words[DIAL_REQ_WORDS];
-  for (int i = 0; i < DIAL_REQ_WORDS; i++) rp2040.fifo.pop_nb(&words[i]); // available() already confirmed all of these are there
-
-  uint8_t framed[DIAL_REQ_WORDS * 4];
-  memcpy(framed, words, sizeof(framed));
-  uint8_t seq = framed[0];
-  uint8_t* pushPayload = framed + 1;
-
-  uint8_t reply[DIAL_REPLY_LEN];
-  if (!doDialI2cExchange(pushPayload, DIAL_PUSH_LEN, reply)) return;
-
-  uint8_t framedReply[DIAL_REPLY_WORDS * 4] = {0};
-  framedReply[0] = seq;
-  memcpy(framedReply + 1, reply, DIAL_REPLY_LEN);
-  uint32_t replyWords[DIAL_REPLY_WORDS];
-  memcpy(replyWords, framedReply, sizeof(replyWords));
-  for (int i = 0; i < DIAL_REPLY_WORDS; i++) rp2040.fifo.push_nb(replyWords[i]);
+void onDialI2CRequest() {
+  uint8_t buf[DIAL_PUSH_LEN];
+  critical_section_enter_blocking(&sharedLock);
+  memcpy(buf, shared.dialPushBuf, DIAL_PUSH_LEN);
+  critical_section_exit(&sharedLock);
+  Wire1.write(buf, DIAL_PUSH_LEN);
 }
 
 // ── Core 1 entry points (arduino-pico multicore) ────────────────────
@@ -741,6 +752,17 @@ void setup1() {
   Wire.setSDA(I2C_SDA_PIN);
   Wire.setSCL(I2C_SCL_PIN);
   Wire.begin();
+
+  // Dial bridge — its OWN separate i2c1 peripheral, this board as SLAVE.
+  // See this file's header for why this can't share Wire/i2c0 above with
+  // BME680/SCD41.
+  if (HAS_DIAL) {
+    Wire1.setSDA(DIAL_I2C1_SDA_PIN);
+    Wire1.setSCL(DIAL_I2C1_SCL_PIN);
+    Wire1.begin(DIAL_I2C_ADDR);
+    Wire1.onReceive(onDialI2CReceive);
+    Wire1.onRequest(onDialI2CRequest);
+  }
 
   bool bmeOk = bme.begin();
   if (bmeOk) {
@@ -795,10 +817,11 @@ void loop1() {
   if (loop1Gap > shared.maxLoop1GapMs) shared.maxLoop1GapMs = loop1Gap;
   critical_section_exit(&sharedLock);
 
-  // Dial exchanges are latency-sensitive (the dial polls every ~20ms) and
-  // fast — service any pending one before considering a sensor read, so a
-  // slow sensor cycle doesn't stack dial latency up behind it.
-  serviceDialFifoOnCore1();
+  // Dial exchanges (i2c1) are now handled entirely by IRQ callbacks
+  // (onDialI2CReceive/onDialI2CRequest) — this board is the slave now, so
+  // there's nothing to actively service here; Wire1's hardware answers
+  // the dial's own master polling asynchronously, independent of this
+  // loop's timing.
 
   if (millis() - lastSensorReadAttempt >= SENSOR_READ_INTERVAL_MS) {
     lastSensorReadAttempt = millis();
@@ -811,50 +834,6 @@ void loop1() {
 // EEPROM and firmware update. NEVER calls into Wire/bme/scd41/DIAL_I2C_ADDR
 // — see this file's header.
 // ═══════════════════════════════════════════════════════════════════
-
-// Bounded hand-off to core 1 for the actual dial I2C exchange — see this
-// file's header on why ALL I2C, dial included, now lives exclusively on
-// core 1. Blocks core 0 for at most DIAL_BRIDGE_TIMEOUT_MS, never
-// indefinitely: if core 1 is mid-hang (or its inbox is backed up) this
-// just gives up and returns false, which the caller already treats
-// exactly like a dropped frame (no RS485 reply this cycle, retried next
-// sweep) — so a core-1 stall degrades the DIAL's responsiveness, never
-// core 0's/the rest of the bus's.
-bool requestDialBridge(uint8_t* pushPayload, uint8_t pushLen, uint8_t* replyOut) {
-  if (pushLen != DIAL_PUSH_LEN) return false;
-
-  // Drain anything stale left in OUR inbox from a previous timed-out
-  // exchange — otherwise a late reply from THAT one could be misread as
-  // this one's (the sequence-byte check below is the second, belt-and-
-  // suspenders layer of the same protection).
-  while (rp2040.fifo.available()) { uint32_t junk; rp2040.fifo.pop_nb(&junk); }
-
-  dialReqSeq++; // wraps at 256 — only needs to differ from the last one
-  uint8_t framed[DIAL_REQ_WORDS * 4];
-  framed[0] = dialReqSeq;
-  memcpy(framed + 1, pushPayload, pushLen);
-
-  uint32_t words[DIAL_REQ_WORDS];
-  memcpy(words, framed, sizeof(framed));
-  for (int i = 0; i < DIAL_REQ_WORDS; i++) {
-    if (!rp2040.fifo.push_nb(words[i])) return false; // core 1's inbox is backed up — bail, don't wait
-  }
-
-  unsigned long start = millis();
-  uint32_t replyWords[DIAL_REPLY_WORDS];
-  int got = 0;
-  while (got < DIAL_REPLY_WORDS && millis() - start < DIAL_BRIDGE_TIMEOUT_MS) {
-    uint32_t w;
-    if (rp2040.fifo.pop_nb(&w)) replyWords[got++] = w;
-  }
-  if (got < DIAL_REPLY_WORDS) return false; // core 1 never answered in time
-
-  uint8_t framedReply[DIAL_REPLY_WORDS * 4];
-  memcpy(framedReply, replyWords, sizeof(framedReply));
-  if (framedReply[0] != dialReqSeq) return false; // stale reply from a previous, already-abandoned request
-  memcpy(replyOut, framedReply + 1, DIAL_REPLY_LEN);
-  return true;
-}
 
 // Builds and sends a REPORT from whatever core 1 last published — never
 // touches I2C directly, so this can never block. A reading is included
@@ -873,14 +852,19 @@ void buildAndSendReport() {
   critical_section_exit(&sharedLock);
 
   if (s.bmeReady && s.bmeOk) {
-    appendReading(payload, offset, SENSOR_TEMPERATURE, s.tempF);
     appendReading(payload, offset, SENSOR_PRESSURE, s.pressureHpa);
     appendReading(payload, offset, SENSOR_VOC, s.voc);
   }
-  // Independent of bmeOk on purpose — humidity can come from either chip,
-  // see readSensorsOnCore1()/SharedSensorState's comment. Still capped at
-  // 5 readings total either way: BME680 present -> temp+pressure+voc (3)
-  // + humidity (1) + co2 (1) = 5; BME680 absent -> humidity (1) + co2 (1).
+  // Temperature and humidity are independent of bmeOk on purpose — both
+  // can come from either chip, see readSensorsOnCore1()/SharedSensorState's
+  // tempOk/humidityOk comments (BME680 wins when present; the SCD41 is the
+  // fallback for the many zones with no BME680 at all). Still capped at 5
+  // readings total either way: BME680 present -> pressure+voc (2) + temp
+  // (1) + humidity (1) + co2 (1) = 5; BME680 absent -> temp (1) + humidity
+  // (1) + co2 (1) = 3.
+  if (s.tempOk) {
+    appendReading(payload, offset, SENSOR_TEMPERATURE, s.tempF);
+  }
   if (s.humidityOk) {
     appendReading(payload, offset, SENSOR_HUMIDITY, s.humidity);
   }
@@ -1090,12 +1074,21 @@ void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
     pollsReceived++;
     buildAndSendReport();
   } else if (cmd == CMD_POLL_DIAL && HAS_DIAL) {
-    uint8_t reply[DIAL_REPLY_LEN];
-    if (requestDialBridge(payload, len, reply)) {
+    // No synchronous exchange anymore — the dial is the I2C master now
+    // (see this file's header), so core 0 can't request an on-demand
+    // fresh answer from it. Publish this cycle's push for
+    // onDialI2CRequest() to serve whenever the dial's own poll loop next
+    // asks, and reply immediately with whatever it most recently wrote —
+    // same "serve the latest known value" tolerance already used for
+    // BME680/SCD41 readings, not a per-poll round trip.
+    if (len == DIAL_PUSH_LEN) {
+      uint8_t reply[DIAL_REPLY_LEN];
+      critical_section_enter_blocking(&sharedLock);
+      memcpy(shared.dialPushBuf, payload, DIAL_PUSH_LEN);
+      memcpy(reply, shared.dialReplyBuf, DIAL_REPLY_LEN);
+      critical_section_exit(&sharedLock);
       sendFrame(busAddress, CMD_DIAL_STATE, reply, DIAL_REPLY_LEN);
     }
-    // else: no reply this cycle — indistinguishable from a dropped frame,
-    // master retries next sweep (~20ms later).
   } else if (cmd == CMD_FW_BEGIN) {
     handleFwBegin(payload, len);
   } else if (cmd == CMD_FW_CHUNK) {
@@ -1169,8 +1162,8 @@ void printDiagnostics() {
   // life of this node. If THIS number is ever the one climbing, core 1 is
   // genuinely slowing down; if it stays flat while core1HeartbeatAgoMs
   // above keeps drifting, that drift is harmless sampling-phase noise.
-  diagPrint("[RS485 Node] diag: hasDial=%d dialI2cFail=%lu i2cRecoveries=%lu maxLoopGapMs=%lu core1HeartbeatAgoMs=%lu maxLoop1GapMs=%lu",
-    HAS_DIAL, s.dialI2cFailTotal, s.i2cRecoveries, maxLoopGapMs, now - s.core1HeartbeatMs, s.maxLoop1GapMs);
+  diagPrint("[RS485 Node] diag: hasDial=%d dialPushesFromEsp32=%lu dialLastRecvAgoMs=%lu i2cRecoveries=%lu maxLoopGapMs=%lu core1HeartbeatAgoMs=%lu maxLoop1GapMs=%lu",
+    HAS_DIAL, s.dialPushesReceivedTotal, s.lastDialReceivedAtMs ? now - s.lastDialReceivedAtMs : 0, s.i2cRecoveries, maxLoopGapMs, now - s.core1HeartbeatMs, s.maxLoop1GapMs);
   diagPrint("[RS485 Node] diag: bootCount=%u watchdogReboots=%u lastRebootWasWatchdog=%d",
     bootCount, watchdogRebootCount, lastRebootWasWatchdog);
 }
