@@ -56,6 +56,21 @@
  * recently wrote — same "serve the latest known value, never block"
  * pattern this file already uses for BME680/SCD41 readings.
  *
+ * ── SCD41-on-the-dial-cable relay (real hardware config, not a fallback) ─
+ * Some builds solder the SCD41 to the SAME wire pair as the dial link, to
+ * avoid running extra conductors in the cable to the wall unit. Since that
+ * pair sits on the ESP32's own already-mastered bus (see above), this
+ * board can no longer master the SCD41 itself once HAS_DIAL wiring looks
+ * like this — set HAS_SCD41 to false for a node built this way. Instead,
+ * dial_node.ino masters the SCD41 directly (same bus it already owns) and
+ * relays temp/humidity/CO2 back over the SAME i2c1 exchange, appended
+ * after the original 8-byte reply (see DIAL_I2C_REPLY_LEN below) —
+ * onDialI2CReceive() writes those straight into `shared.tempF`/`humidity`/
+ * `co2`/their *Ok flags, the EXACT same fields readSensorsOnCore1() would
+ * have populated from a local read, so buildAndSendReport() needs zero
+ * changes: it doesn't know or care whether a reading came from this
+ * board's own I2C0 or was relayed in from the dial over i2c1.
+ *
  * ── Hardware per node ────────────────────────────────────────────
  *   RP2040 board (e.g. Pico, Pico W used purely for its RP2040 — no
  *     Wi-Fi needed for this node type)
@@ -91,14 +106,30 @@
  *   RS485 module RO  (receiver out / RX) → RP2040 GPIO 1  (UART0 RX)
  *   RS485 module DE+RE (tied together)   → RP2040 GPIO 2
  *   RS485 module A/B                     → bus twisted pair (shared)
- *   BME680 SDA/SCL                       → RP2040 GPIO 4 / GPIO 5 (I2C0)
+ *   BME680 SDA/SCL                       → RP2040 GPIO 4 / GPIO 5 (I2C0) —
+ *                                           this board's general-purpose
+ *                                           I2C0 bus, always brought up
+ *                                           regardless of what's actually
+ *                                           wired to it (BME680/SCD41
+ *                                           today, reed switches/relays/
+ *                                           etc. later) — reserved for
+ *                                           this, independent of the dial.
  *   SCD41  SDA/SCL                       → same I2C0 bus (if present)
  *   Dial   SDA/SCL                        → RP2040 GPIO 6 / GPIO 7 (i2c1 —
- *                                           NOT the I2C0 bus above, see
- *                                           this file's header) + same GND/
- *                                           5V rail as the sensors — see
- *                                           dial_node.ino's own wiring notes
- *                                           for its side of this same link
+ *                                           a DIFFERENT peripheral from the
+ *                                           I2C0 bus above, deliberately
+ *                                           never shared with it) + same
+ *                                           GND/5V rail as the sensors —
+ *                                           see dial_node.ino's own wiring
+ *                                           notes for its side of this same
+ *                                           link. If this node's SCD41 is
+ *                                           soldered to the SAME wire pair
+ *                                           as the dial (a real, supported
+ *                                           config — see this file's header,
+ *                                           "SCD41-on-the-dial-cable
+ *                                           relay"), set HAS_SCD41 to false
+ *                                           below: this board can no longer
+ *                                           reach it directly on I2C0.
  *   LM2596 OUT+ (5V)                     → RP2040 VSYS
  *   LM2596 OUT- / bus common             → RP2040 GND
  *
@@ -222,7 +253,17 @@
 // this entire feature out of every build regardless of this value. Learned
 // that the hard way — see git history. The library/object below now always
 // compile in; scd41 just never gets begin()'d or read when this is false.
-const bool HAS_SCD41 = true; // false for basement/attic monitor nodes
+// true if THIS node has a real SCD41 wired directly to I2C_SDA_PIN/
+// I2C_SCL_PIN (i2c0) — basement/attic monitor nodes, and any thermostat
+// zone with a local (non-dial-relay) SCD41. false if there's no local
+// SCD41 at all, INCLUDING a dial-equipped node whose SCD41 is soldered to
+// the dial's cable and relayed in over i2c1 instead — see this file's
+// header ("SCD41-on-the-dial-cable relay"). Wire/i2c0 itself is always
+// brought up regardless (see setup1()) — this board's general-purpose
+// I2C0 bus stays available for whatever else gets added later — this
+// flag just controls whether this specific chip gets probed on it. This
+// node: dial-relay design, no local SCD41.
+const bool HAS_SCD41 = false;
 const bool HAS_DIAL = true;  // false for zones with no wall dial attached
 
 const int RS485_DE_RE_PIN = 2;
@@ -239,8 +280,18 @@ const int I2C_SDA_PIN = 4;
 const int I2C_SCL_PIN = 5;
 
 // The dial link's OWN, separate I2C peripheral (i2c1/Wire1) — deliberately
-// NOT sharing I2C_SDA_PIN/I2C_SCL_PIN above. See this file's header ("I2C
-// dial bridge") for the real two-master collision this replaced.
+// DIFFERENT pins from I2C_SDA_PIN/I2C_SCL_PIN above, on purpose: GPIO 4/5
+// stay reserved as this board's general-purpose I2C0 bus (whatever gets
+// added later — reed switches, relays, etc.), completely independent of
+// the dial link, never shared or contended for.
+//
+// Real production evidence: an earlier CRC-mismatch storm was blamed on
+// these exact pins, but the real cause turned out to be unrelated to the
+// pin choice — the SCD41 was physically sharing the dial's own wire pair
+// while this board's firmware still (wrongly, at the time) tried to
+// master it locally too, over Wire/i2c0. See this file's header ("SCD41-
+// on-the-dial-cable relay") for the actual fix — the pins themselves were
+// never confirmed guilty.
 const int DIAL_I2C1_SDA_PIN = 6;
 const int DIAL_I2C1_SCL_PIN = 7;
 
@@ -295,7 +346,17 @@ const uint8_t CMD_LOG_LINE = 0x87;
 // constant exactly.
 const uint8_t DIAL_I2C_ADDR = 0x42;
 const uint8_t DIAL_PUSH_LEN = 27;  // must match rs485.js's POLL_DIAL payload size
-const uint8_t DIAL_REPLY_LEN = 8;  // must match rs485.js's DIAL_STATE payload size
+const uint8_t DIAL_REPLY_LEN = 8;  // must match rs485.js's DIAL_STATE payload size — the RS485-facing frame, NEVER grows
+
+// The i2c1 exchange carries more than the RS485 frame does — see this
+// file's header ("SCD41-on-the-dial-cable relay"). Bytes 0-7 are IDENTICAL
+// to the DIAL_REPLY_LEN layout above (so the first DIAL_REPLY_LEN bytes of
+// dialReplyBuf can still be sent to the server completely unchanged);
+// bytes 8-20 are new: sensorValid (1B: bit0 = SCD41 reading relayed this
+// cycle is real) + tempF/humidity/co2 (float32 each). Must match
+// dial_node.ino's own DIAL_I2C_REPLY_LEN and buildReply() byte layout
+// exactly.
+const uint8_t DIAL_I2C_REPLY_LEN = 21;
 
 const uint8_t SENSOR_TEMPERATURE = 0x01;
 const uint8_t SENSOR_HUMIDITY = 0x02;
@@ -351,7 +412,7 @@ struct SharedSensorState {
   // "serve latest known" tolerance as sensor readings, not a synchronous
   // round-trip).
   uint8_t dialPushBuf[DIAL_PUSH_LEN] = {0};
-  uint8_t dialReplyBuf[DIAL_REPLY_LEN] = {0};
+  uint8_t dialReplyBuf[DIAL_I2C_REPLY_LEN] = {0};
   unsigned long lastDialReceivedAtMs = 0;
   unsigned long dialPushesReceivedTotal = 0;
 
@@ -727,15 +788,38 @@ void readSensorsOnCore1() {
 // waiting on core 0 — core 0 just reads whatever's here whenever its own
 // RS485 cycle needs it, same tolerance as every other shared-state field.
 void onDialI2CReceive(int numBytes) {
-  if (numBytes < DIAL_REPLY_LEN) { while (Wire1.available()) Wire1.read(); return; }
-  uint8_t buf[DIAL_REPLY_LEN];
-  for (uint8_t i = 0; i < DIAL_REPLY_LEN; i++) buf[i] = Wire1.read();
+  if (numBytes < DIAL_I2C_REPLY_LEN) { while (Wire1.available()) Wire1.read(); return; }
+  uint8_t buf[DIAL_I2C_REPLY_LEN];
+  for (uint8_t i = 0; i < DIAL_I2C_REPLY_LEN; i++) buf[i] = Wire1.read();
   while (Wire1.available()) Wire1.read(); // drain anything past what we expected
 
+  // Bytes 8-20: the SCD41-on-the-dial-cable relay — see this file's header.
+  // sensorValid mirrors readSensorsOnCore1()'s existing "not ready yet is
+  // NOT a failure" tolerance: only overwrite tempF/humidity/co2 when the
+  // dial is actually relaying a fresh reading, otherwise leave whatever
+  // was last known (and its staleness clock) exactly alone.
+  bool sensorValid = buf[8] & 0x01;
+  float relayedTempF, relayedHumidity, relayedCo2;
+  memcpy(&relayedTempF, buf + 9, 4);
+  memcpy(&relayedHumidity, buf + 13, 4);
+  memcpy(&relayedCo2, buf + 17, 4);
+
+  unsigned long now = millis();
   critical_section_enter_blocking(&sharedLock);
-  memcpy(shared.dialReplyBuf, buf, DIAL_REPLY_LEN);
-  shared.lastDialReceivedAtMs = millis();
+  memcpy(shared.dialReplyBuf, buf, DIAL_I2C_REPLY_LEN);
+  shared.lastDialReceivedAtMs = now;
   shared.dialPushesReceivedTotal++;
+  if (sensorValid) {
+    shared.tempF = relayedTempF;
+    shared.tempOk = true;
+    shared.lastGoodTempAtMs = now;
+    shared.humidity = relayedHumidity;
+    shared.humidityOk = true;
+    shared.lastGoodHumidityAtMs = now;
+    shared.co2 = relayedCo2;
+    shared.co2Ok = true;
+    shared.lastGoodCo2AtMs = now;
+  }
   critical_section_exit(&sharedLock);
 }
 
@@ -749,13 +833,20 @@ void onDialI2CRequest() {
 
 // ── Core 1 entry points (arduino-pico multicore) ────────────────────
 void setup1() {
+  // Wire (i2c0, I2C_SDA_PIN/I2C_SCL_PIN = GPIO 4/5) is ALWAYS brought up,
+  // unconditionally — this board's general-purpose I2C0 bus, reserved for
+  // whatever gets added over this node's lifetime (BME680/SCD41 today,
+  // reed switches/relays/etc. later), independent of the dial entirely.
+  // The dial bridge lives on its OWN separate i2c1 peripheral
+  // (DIAL_I2C1_SDA_PIN/SCL_PIN, a genuinely different pair of GPIOs — see
+  // this file's header) specifically so it never has to share, or
+  // compete for, this bus.
   Wire.setSDA(I2C_SDA_PIN);
   Wire.setSCL(I2C_SCL_PIN);
   Wire.begin();
 
   // Dial bridge — its OWN separate i2c1 peripheral, this board as SLAVE.
-  // See this file's header for why this can't share Wire/i2c0 above with
-  // BME680/SCD41.
+  // See this file's header for why this can't share Wire/i2c0 above.
   if (HAS_DIAL) {
     Wire1.setSDA(DIAL_I2C1_SDA_PIN);
     Wire1.setSCL(DIAL_I2C1_SCL_PIN);
@@ -855,20 +946,26 @@ void buildAndSendReport() {
     appendReading(payload, offset, SENSOR_PRESSURE, s.pressureHpa);
     appendReading(payload, offset, SENSOR_VOC, s.voc);
   }
-  // Temperature and humidity are independent of bmeOk on purpose — both
-  // can come from either chip, see readSensorsOnCore1()/SharedSensorState's
-  // tempOk/humidityOk comments (BME680 wins when present; the SCD41 is the
-  // fallback for the many zones with no BME680 at all). Still capped at 5
-  // readings total either way: BME680 present -> pressure+voc (2) + temp
-  // (1) + humidity (1) + co2 (1) = 5; BME680 absent -> temp (1) + humidity
-  // (1) + co2 (1) = 3.
+  // Temperature, humidity, and CO2 are all independent of bmeOk/HAS_SCD41/
+  // scd41Ready on purpose — every one of them can now come from three
+  // places: this board's own BME680, this board's own SCD41 (HAS_SCD41
+  // true, wired to I2C0), or a SCD41 physically soldered to the dial's
+  // cable and relayed in over i2c1 by dial_node.ino (see this file's
+  // header, "SCD41-on-the-dial-cable relay" — onDialI2CReceive() sets
+  // these exact *Ok flags too). *Ok is the single source of truth for
+  // whether a reading is real, regardless of which of the three actually
+  // produced it — gating on HAS_SCD41/scd41Ready here would silently drop
+  // a perfectly good relayed CO2 reading on a node built the relay way.
+  // Still capped at 5 readings total either way: BME680 present ->
+  // pressure+voc (2) + temp (1) + humidity (1) + co2 (1) = 5; BME680
+  // absent -> temp (1) + humidity (1) + co2 (1) = 3.
   if (s.tempOk) {
     appendReading(payload, offset, SENSOR_TEMPERATURE, s.tempF);
   }
   if (s.humidityOk) {
     appendReading(payload, offset, SENSOR_HUMIDITY, s.humidity);
   }
-  if (HAS_SCD41 && s.scd41Ready && s.co2Ok) {
+  if (s.co2Ok) {
     appendReading(payload, offset, SENSOR_CO2, s.co2);
   }
 

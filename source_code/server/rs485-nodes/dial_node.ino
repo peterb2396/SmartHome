@@ -106,8 +106,10 @@
  *               section for those pins.
  *
  * ── I2C protocol (must match rs485_node.ino's DIAL_I2C_ADDR/
- *    DIAL_PUSH_LEN/DIAL_REPLY_LEN, and rs485.js's POLL_DIAL/DIAL_STATE —
- *    see that file's header for the authoritative spec) ────────────────
+ *    DIAL_PUSH_LEN/DIAL_I2C_REPLY_LEN, and rs485.js's POLL_DIAL/DIAL_STATE
+ *    — see that file's header for the authoritative spec, and its "SCD41-
+ *    on-the-dial-cable relay" section for what's appended after the
+ *    original 8-byte reply below) ─────────────────────────────────────
  * Push (RP2040 write, 27B): targetF, currentF, humidity, co2, outdoorF
  * (5x float32) + flags (1B: bit0 callingHeat, bit1 callingCool, bit2
  * safetyActive, bit3 weatherStale, bit4 spotifyEnabled) + hour, minute
@@ -144,6 +146,11 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <Update.h>
+// Only needed on a build where the SCD41 is soldered to this board's own
+// I2C bus (shares the wire pair with the RP2040 link) instead of being
+// wired to the RP2040's own I2C0 — see rs485_node.ino's header ("SCD41-
+// on-the-dial-cable relay") for the real hardware reason this exists.
+#include <SparkFun_SCD4x_Arduino_Library.h>
 
 // ── Remote firmware update (WiFi/HTTP, NOT the RS485 protocol the RP2040
 // nodes use) ─────────────────────────────────────────────────────────
@@ -195,7 +202,26 @@ const int ENCODER_PIN_B = 4;
 // for touch/PCF8574, not a second bus.
 const uint8_t DIAL_I2C_ADDR = 0x42; // MUST match rs485_node.ino's DIAL_I2C_ADDR
 const uint8_t DIAL_PUSH_LEN = 27;   // MUST match rs485.js's POLL_DIAL payload size
-const uint8_t DIAL_REPLY_LEN = 8;   // MUST match rs485.js's DIAL_STATE payload size
+
+// The i2c1 exchange with the RP2040 carries more than what goes out over
+// RS485 — see rs485_node.ino's header ("SCD41-on-the-dial-cable relay").
+// Bytes 0-7 are the original reply (mode/newTargetF/changed/tapEvent/
+// newVolumePercent, matching rs485.js's DIAL_STATE payload exactly — the
+// RP2040 forwards just this slice on unchanged); bytes 8-20 are new:
+// sensorValid (1B) + tempF/humidity/co2 (float32 each). Must match
+// rs485_node.ino's own DIAL_I2C_REPLY_LEN and onDialI2CReceive() byte
+// layout exactly.
+const uint8_t DIAL_I2C_REPLY_LEN = 21;
+
+// SCD41 — only actually read on a build where it's soldered to this
+// board's own bus (see the include above). Fixed I2C address, same chip
+// the RP2040 side would otherwise talk to directly.
+SCD4x scd41;
+const unsigned long SCD41_READ_INTERVAL_MS = 2000; // mirrors rs485_node.ino's own SENSOR_READ_INTERVAL_MS — the chip only produces a new reading every ~5s regardless of how often this asks
+unsigned long lastScd41ReadAttempt = 0;
+bool scd41Ready = false;      // found at setup() — never changes after
+bool scd41ValueOk = false;    // latest reading actually valid — see readScd41()
+float scd41TempF = 0, scd41Humidity = 0, scd41Co2 = 0;
 
 const unsigned long IDLE_TIMEOUT_MS = 20000; // no interaction -> back to IDLE (screen off)
 const unsigned long MENU_TIMEOUT_MS = 8000;  // no interaction on the menu -> back to IDLE
@@ -352,6 +378,26 @@ struct DialState {
 bool pendingChange = false;   // set when the encoder has moved something since the last push
 uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect,3=toggleSpotifyEnabled,4=returnToMenu,5=markMaintenanceDone
 
+// Real production evidence: after DIAL_SWEEP_GAP_MS (rs485.js) grew from
+// 20ms to 120ms, turning the encoder started "glitching, barely moving" —
+// a real regression, not a perception thing. applyPush() used to overwrite
+// state.targetF/volumePercent/spotifyEnabled unconditionally on every i2c1
+// exchange (every ~20ms, unrelated to the RS485 rate) with whatever the
+// server most recently pushed — fine when the full round trip (edit here
+// -> reported up to the server on the NEXT RS485 poll -> applied -> the
+// confirmed value pushed back down) took ~40ms, since a stale push could
+// barely ever land before the confirmed one did. At 120ms/hop that round
+// trip can take 200-300ms+, so a STILL-STALE push (reflecting the value
+// from before this edit) now reliably lands one or more times before the
+// real one does, stomping the just-turned value back — every ~20ms, for a
+// quarter-second, is exactly what "spins but barely moves" looks like.
+// lastLocalEditAtMs + the grace check in applyPush() below hold off
+// accepting a push's target/volume/spotifyEnabled for a window comfortably
+// longer than that round trip; a fresh edit resets it, so local input
+// keeps winning for as long as someone's actually turning the knob.
+const unsigned long PUSH_OVERRIDE_GRACE_MS = 400;
+unsigned long lastLocalEditAtMs = 0;
+
 // `state`/pendingChange/pendingTapEvent are written from BOTH the main
 // loop() (encoder/touch handling) and the I2C slave callbacks (which the
 // ESP32 Arduino core runs outside loop()'s own context) — this spinlock
@@ -397,7 +443,6 @@ void applyPush(const uint8_t* p, uint8_t len) {
   // memcpy, not a pointer cast — `p` isn't guaranteed 4-byte aligned, and
   // dereferencing an unaligned float* is undefined behavior even though
   // Xtensa usually tolerates it in practice.
-  memcpy(&state.targetF,  p + 0,  4);
   memcpy(&state.currentF, p + 4,  4);
   memcpy(&state.humidity, p + 8,  4);
   memcpy(&state.co2,      p + 12, 4);
@@ -407,21 +452,31 @@ void applyPush(const uint8_t* p, uint8_t len) {
   state.callingCool    = flags & 0x02;
   state.safetyActive   = flags & 0x04;
   state.weatherStale   = flags & 0x08;
-  state.spotifyEnabled = flags & 0x10; // authoritative — overwrites any optimistic tap-toggle
   state.humidityAvailable = flags & 0x20;
   state.hour   = p[21];
   state.minute = p[22];
-  state.volumePercent = p[23];
   state.activeSource = p[24];
   state.faultCount = p[25];
   state.maintenanceDueCount = p[26];
+
+  // targetF/volumePercent/spotifyEnabled are the fields a person can
+  // change locally (encoder turn, arc drag, the Zone On/Off button) — see
+  // PUSH_OVERRIDE_GRACE_MS's comment for why this guard exists and what it
+  // fixes. Authoritative once the grace window's passed (overwrites any
+  // optimistic tap-toggle/turn that the server's since confirmed or that
+  // genuinely got dropped), but never mid-edit or mid-round-trip.
+  if (millis() - lastLocalEditAtMs > PUSH_OVERRIDE_GRACE_MS) {
+    memcpy(&state.targetF, p + 0, 4);
+    state.volumePercent = p[23];
+    state.spotifyEnabled = flags & 0x10;
+  }
 }
 
 // Builds the reply from current state — called right after applyPush()
 // inside the same I2C callback, so it's always ready by the time the
 // RP2040 follows up with its read (see rs485_node.ino's bridgeDialPoll(),
 // which writes then immediately requests).
-uint8_t replyBuffer[DIAL_REPLY_LEN];
+uint8_t replyBuffer[DIAL_I2C_REPLY_LEN];
 void buildReply() {
   replyBuffer[0] = (currentScreen == SCREEN_SOUND) ? MODE_SOUND : MODE_THERMOSTAT;
   memcpy(replyBuffer + 1, &state.targetF, 4);
@@ -430,6 +485,36 @@ void buildReply() {
   replyBuffer[7] = state.volumePercent;
   pendingChange = false;
   pendingTapEvent = 0;
+
+  // SCD41-on-the-dial-cable relay — see this file's header and
+  // rs485_node.ino's. Whatever readScd41() last actually measured, not
+  // necessarily fresh THIS exact call — same "serve latest known value"
+  // tolerance every I2C exchange in this whole system already uses.
+  replyBuffer[8] = scd41ValueOk ? 0x01 : 0x00;
+  memcpy(replyBuffer + 9, &scd41TempF, 4);
+  memcpy(replyBuffer + 13, &scd41Humidity, 4);
+  memcpy(replyBuffer + 17, &scd41Co2, 4);
+}
+
+// Called from loop() on its own slow interval (not every pollRp2040()
+// tick) — see SCD41_READ_INTERVAL_MS. Mirrors readSensorsOnCore1()'s
+// original RP2040-side logic exactly: getDataReadyStatus() is a fast
+// status check with no data transfer, only call the real (slower)
+// readMeasurement() once it says yes, so "not ready yet" never gets
+// miscounted as a failure — see that file's own comment on this same
+// pattern for the real incident that motivated it.
+void readScd41() {
+  if (!scd41Ready) return;
+  if (millis() - lastScd41ReadAttempt < SCD41_READ_INTERVAL_MS) return;
+  lastScd41ReadAttempt = millis();
+
+  if (!scd41.getDataReadyStatus()) return; // not a failure, just not yet — leave scd41ValueOk/the last good reading alone
+  if (!scd41.readMeasurement()) { scd41ValueOk = false; return; }
+
+  scd41Co2 = (float)scd41.getCO2();
+  scd41Humidity = scd41.getHumidity();
+  scd41TempF = scd41.getTemperature() * 9.0 / 5.0 + 32.0;
+  scd41ValueOk = true;
 }
 
 // Called from loop() every RP2040_POLL_INTERVAL_MS — this board is now
@@ -447,14 +532,14 @@ void pollRp2040() {
   if (millis() - lastRp2040PollAt < RP2040_POLL_INTERVAL_MS) return;
   lastRp2040PollAt = millis();
 
-  uint8_t replyPayload[DIAL_REPLY_LEN];
+  uint8_t replyPayload[DIAL_I2C_REPLY_LEN];
   portENTER_CRITICAL(&stateMux);
   buildReply();
-  memcpy(replyPayload, replyBuffer, DIAL_REPLY_LEN);
+  memcpy(replyPayload, replyBuffer, DIAL_I2C_REPLY_LEN);
   portEXIT_CRITICAL(&stateMux);
 
   Wire.beginTransmission(DIAL_I2C_ADDR);
-  Wire.write(replyPayload, DIAL_REPLY_LEN);
+  Wire.write(replyPayload, DIAL_I2C_REPLY_LEN);
   if (Wire.endTransmission() != 0) return; // RP2040 not reachable this cycle — try again next tick, same tolerance a dropped exchange always had
 
   uint8_t got = Wire.requestFrom(DIAL_I2C_ADDR, DIAL_PUSH_LEN);
@@ -540,12 +625,14 @@ void processEncoder() {
       float next = state.targetF + delta * TARGET_STEP_F;
       state.targetF = constrain(next, TARGET_MIN_F, TARGET_MAX_F);
       pendingChange = true;
+      lastLocalEditAtMs = millis();
       break;
     }
     case SCREEN_SOUND: {
       int next = state.volumePercent + delta * VOLUME_STEP;
       state.volumePercent = constrain(next, 0, 100);
       pendingChange = true;
+      lastLocalEditAtMs = millis();
       break;
     }
     default: break; // STATUS screen is read-only, rotating there does nothing
@@ -585,7 +672,11 @@ void onTap() {
     currentScreen = SCREEN_CLOCK;
     pendingTapEvent = 1; // wake
   } else if (currentScreen == SCREEN_CLOCK) {
-    currentScreen = SCREEN_MENU;
+    // Straight to Thermostat, not the menu — that's the screen actually
+    // used day to day; Menu is still one press/tap away FROM there (see
+    // the branch below), or reachable by rotating from Clock instead of
+    // tapping, per explicit ask.
+    currentScreen = SCREEN_THERMOSTAT;
   } else if (currentScreen == SCREEN_MENU) {
     pendingTapEvent = 2; // menuSelect
     currentScreen = screenForMenuIndex(menuSelection);
@@ -638,6 +729,7 @@ void thermostatArcEventCb(lv_event_t* e) {
   portENTER_CRITICAL(&stateMux);
   state.targetF = constrain(newTarget, TARGET_MIN_F, TARGET_MAX_F);
   pendingChange = true;
+  lastLocalEditAtMs = millis();
   portEXIT_CRITICAL(&stateMux);
   lastInteractionAt = millis();
 
@@ -652,6 +744,7 @@ void soundArcEventCb(lv_event_t* e) {
   portENTER_CRITICAL(&stateMux);
   state.volumePercent = constrain(newVolume, 0, 100);
   pendingChange = true;
+  lastLocalEditAtMs = millis();
   portEXIT_CRITICAL(&stateMux);
   lastInteractionAt = millis();
 
@@ -670,6 +763,7 @@ void soundEnabledBtnEventCb(lv_event_t* e) {
   portENTER_CRITICAL(&stateMux);
   state.spotifyEnabled = !state.spotifyEnabled;
   pendingTapEvent = 3; // toggleSpotifyEnabled
+  lastLocalEditAtMs = millis();
   portEXIT_CRITICAL(&stateMux);
 
   char enabledStr[16];
@@ -788,8 +882,12 @@ void showClockScreen() {
   lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
 
-  char timeStr[6];
-  snprintf(timeStr, sizeof(timeStr), "%02d:%02d", state.hour, state.minute);
+  // 12-hour, not military — state.hour arrives as 0-23 from the server.
+  int hour12 = state.hour % 12;
+  if (hour12 == 0) hour12 = 12; // 0 (midnight) and 12 (noon) both display as 12, per normal 12-hour convention
+  const char* ampm = state.hour < 12 ? "AM" : "PM";
+  char timeStr[12];
+  snprintf(timeStr, sizeof(timeStr), "%d:%02d %s", hour12, state.minute, ampm);
   lv_obj_t* time = lv_label_create(screenClock);
   lv_label_set_text(time, timeStr);
   lv_obj_set_style_text_color(time, COLOR_TEXT, 0);
@@ -1131,6 +1229,14 @@ void showStatusScreen() {
 
   // No on-screen back button — the knob press is always "back to menu"
   // (see onTap()).
+
+  char versionStr[20];
+  snprintf(versionStr, sizeof(versionStr), "v%s", FIRMWARE_VERSION);
+  lv_obj_t* version = lv_label_create(screenStatus);
+  lv_label_set_text(version, versionStr);
+  lv_obj_set_style_text_font(version, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(version, COLOR_MUTED, 0);
+  lv_obj_align(version, LV_ALIGN_TOP_MID, 0, 40);
 
   bool allClear = state.faultCount == 0 && state.maintenanceDueCount == 0;
 
@@ -1604,6 +1710,15 @@ void setup() {
   // touch/PCF8574 use, with this board as master (see pollRp2040(),
   // called from loop()). See this file's header for why.
 
+  // SCD41-on-the-dial-cable relay — only found/read on a build where the
+  // sensor is soldered to this bus (see the #include above); begin()
+  // failing here is completely normal and expected on a build without
+  // one, same "not found" tolerance every optional sensor in this whole
+  // codebase already has.
+  scd41Ready = scd41.begin(Wire);
+  Serial.printf("[Dial] scd41.begin() = %d\n", scd41Ready);
+  if (scd41Ready) scd41.startPeriodicMeasurement(); // begin() alone doesn't start sampling — readMeasurement() always returns "not ready" without this
+
   lastInteractionAt = millis();
   Serial.println("[Dial] Boot complete.");
 }
@@ -1621,6 +1736,7 @@ void loop() {
   processEncoder();
   checkEncoderButton();
   checkIdleTimeout();
+  readScd41(); // own slow interval internally — see SCD41_READ_INTERVAL_MS
   pollRp2040();
 
   if (needsRedraw) {

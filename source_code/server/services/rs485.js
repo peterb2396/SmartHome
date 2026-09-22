@@ -292,16 +292,21 @@ const RECONNECT_INTERVAL_MS = 10000; // how often to retry opening the port afte
 // read) and a small gap between full sweeps of all dial nodes so an empty
 // or single-dial bus doesn't spin a tight synchronous loop.
 const DIAL_POLL_RESPONSE_TIMEOUT_MS = 200;
-// Was 20ms — real production evidence once a dial started actually
-// completing full round trips (rather than failing near-instantly at the
-// I2C layer, which barely touched RS485 at all): continuous back-to-back
-// exchanges at that rate produced a USB-to-RS485 adapter EIO write error
-// and a CRC-mismatch storm affecting every node on the bus, not just the
-// dial's own address — the adapter genuinely couldn't sustain that duty
-// cycle. 120ms still feels instant to a hand turning a physical knob (no
-// human notices sub-200ms), while meaningfully cutting how much of the
-// bus's time is spent on dial traffic.
-const DIAL_SWEEP_GAP_MS = 120;
+// Briefly raised to 120ms after a CRC-mismatch storm + a USB adapter EIO
+// error showed up once a dial started completing real round trips — but
+// the real cause turned out to be unrelated to this rate at all: the
+// node's SCD41 was physically sharing the dial's own wire pair, and every
+// "dial vs. no dial" test that session was an unnoticed "SCD41 attached
+// vs. not" test too (see rs485_node.ino's header, "SCD41-on-the-dial-
+// cable relay," for the real fix). Restored to 20ms now that that's
+// actually resolved — the slower rate was never fixing what it looked
+// like it was fixing, and it has a real cost: the dial-to-server round
+// trip that confirms an encoder turn or volume change scales directly
+// with this number, and at 120ms it became slow enough to visibly stomp
+// a just-turned value with a still-stale push (see dial_node.ino's
+// PUSH_OVERRIDE_GRACE_MS, which independently guards against that same
+// race regardless of what this is set to).
+const DIAL_SWEEP_GAP_MS = 20;
 const DIAL_MODE = { thermostat: 0, sound: 1 };
 const DIAL_TAP_EVENT = { none: 0, wake: 1, menuSelect: 2, toggleSpotifyEnabled: 3, returnToMenu: 4, markMaintenanceDone: 5 };
 // tapEvent values other than toggleSpotifyEnabled/markMaintenanceDone are
