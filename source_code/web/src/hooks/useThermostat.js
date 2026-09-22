@@ -25,7 +25,7 @@ const FALLBACK_PRIORITY = ["gas", "air", "electric"];
 
 function defaultState() {
   return {
-    mode: "auto", activeSource: "gas", activeSystem: "4zone", lastDecision: null,
+    mode: "auto", activeSource: "gas", activeSystem: "air-handler", lastDecision: null,
     rates: { gasPricePerTherm: 1.5, elecPricePerKwh: 0.15, gasAfue: 0.85 },
     available: { gas: true, electric: true, air: true },
     safetyRange: { min: 60, max: 75 },

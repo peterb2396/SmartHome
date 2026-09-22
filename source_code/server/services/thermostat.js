@@ -399,19 +399,33 @@ function updateSafetyState(zone, rt, currentTemp, settings) {
 // ── Active plant selection (air handler vs. boiler) ─────────────────────
 // The boiler and air handler now serve the exact same 4 zones (Primary
 // Suite, Upstairs, Downstairs, Office — see boiler.js's header for why),
-// so which one is "in charge" is a straight, immediate read of `mode` —
-// no outdoor-temp prediction, no lookahead, no handoff step. Gas mode means
-// the boiler is the house's sole heat source, full stop; anything else
-// means the air handler is. Each plant keeps its own independent zone
-// settings (target/schedule/on), so switching modes does not copy or
-// overwrite either side's values — whichever plant becomes active simply
-// resumes using whatever it was last set to. (The '3zone'/'4zone' string
-// values below are historical internal labels, kept as-is rather than
-// renamed — both plants are 4-zone now, but these tokens are never
-// displayed to a user directly, only compared against internally and by
-// the frontend's activeSystem check.)
+// so which one is "in charge" tracks whichever SOURCE is actually driving
+// heat right now — see resolveActiveSource() just below, which already
+// handles both pinned modes (settings.mode itself, e.g. 'gas'/'electric'/
+// 'air') and 'auto' (the live nightly-cost comparison). Real production
+// bug this replaced: this used to check `settings.mode === 'gas'`
+// directly, completely ignoring resolveActiveSource()'s decision — so in
+// 'auto' mode, even on a night the cost comparison correctly picked gas as
+// cheapest, the boiler never actually got `systemActive` (this function
+// still said '4zone'), while the air handler's own damper opened anyway
+// (driveDamper() only looks at rt.calling, not which source is supposed
+// to deliver it) with neither its compressor nor electric coil allowed to
+// fire (both gated on activeSource being 'air'/'electric' specifically,
+// and it was 'gas'). Net effect: the damper opened, calling for heat, and
+// NO plant actually delivered any — confirmed live (a real "auto" house,
+// mid-heat-call, with the air handler damper open and the boiler relay
+// reading `systemActive=false`). Each plant still keeps its own
+// independent zone settings (target/schedule/on), so switching which
+// source resolveActiveSource() picks does not copy or overwrite either
+// side's values — whichever plant becomes active simply resumes using
+// whatever it was last set to. Returns 'boiler' | 'air-handler' — renamed
+// from the historical '3zone'/'4zone' internal labels (both plants are
+// 4-zone now, so those never meant anything descriptive; see git history
+// if you're hunting for where those tokens used to appear) — updated
+// together with the matching frontend checks (Thermostat.jsx, Lights.jsx,
+// useThermostat.js) in the same pass.
 function getActiveSystem(settings) {
-  return settings.mode === 'gas' ? '3zone' : '4zone';
+  return resolveActiveSource(settings) === 'gas' ? 'boiler' : 'air-handler';
 }
 
 // ── Control loop ─────────────────────────────────────────────────────────────
@@ -420,7 +434,7 @@ async function tick() {
   const now = moment();
 
   const activeSystem = getActiveSystem(settings);
-  boiler.setSystemActive(activeSystem === '3zone');
+  boiler.setSystemActive(activeSystem === 'boiler');
 
   // Pass 1: per-zone desired heat/cool calls. Comfort control (target ±
   // deadband, heat below / cool above) only runs while the zone is on; off
@@ -441,7 +455,7 @@ async function tick() {
   // still track their own temps/safety state (so nothing looks broken/dead
   // in the UI) but never actually call for heat via air/electric — gas mode
   // means the boiler is the exclusive heat source for the house right now.
-  const airHandlerIsHeatSource = activeSystem === '4zone';
+  const airHandlerIsHeatSource = activeSystem === 'air-handler';
 
   for (const zone of ZONES) {
     const zs = settings.zones[zone.id];
@@ -894,7 +908,7 @@ function getState() {
   return {
     mode: settings.mode,
     activeSource: resolveActiveSource(settings),
-    activeSystem, // '4zone' | '3zone' — which plant is actually live right now
+    activeSystem, // 'air-handler' | 'boiler' — which plant is actually live right now
     lastDecision: settings.lastDecision,
     rates: settings.rates,
     available: settings.available,
@@ -934,8 +948,14 @@ function getState() {
         // Unified across both plants — whichever one is actually serving this
         // zone right now — so the web app and every dial read a single truth
         // and never show a stale/contradictory calling state during a handoff.
-        calling: activeSystem === '4zone' ? rt.calling : (boilerZone?.calling ?? false),
-        heatSource: activeSystem === '4zone' ? 'air-handler' : 'boiler',
+        calling: activeSystem === 'air-handler' ? rt.calling : (boilerZone?.calling ?? false),
+        // Now identical in value to activeSystem itself, now that both use
+        // the same 'air-handler'/'boiler' labels — kept as its own field
+        // since it's a per-zone concept (a future asymmetric handoff mid-
+        // transition could plausibly need it to diverge again), not
+        // collapsed into a single shared field just because they happen to
+        // match today.
+        heatSource: activeSystem,
         coolCalling: rt.coolCalling,
         safety: rt.safety,
         environment: readEnvironment(zone),
@@ -1015,7 +1035,7 @@ async function init() {
     await runCostDecision();
   }
 
-  boiler.setSystemActive(getActiveSystem(getSettings()) === '3zone');
+  boiler.setSystemActive(getActiveSystem(getSettings()) === 'boiler');
 
   setInterval(() => { tick().catch(err => console.error('[Thermostat] Tick error:', err.message)); }, TICK_MS);
 

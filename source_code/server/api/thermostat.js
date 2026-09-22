@@ -23,15 +23,18 @@
  * POST /thermostat/boiler/zone/:id — { target?, on? }
  * POST /thermostat/boiler/zone/:id/schedule — { schedule }
  *
- * `activeSystem` on GET /thermostat ('4zone' | '3zone') tells the frontend
- * which of the two PLANTS is actually live right now — an immediate,
- * unconditional read of `mode`: gas mode means the boiler, full stop, no
- * seasonal prediction or lookahead. Both endpoints' data is always
- * available regardless of which is active, so the frontend can render
- * whichever card set applies without a separate "is this system on" check.
- * ('3zone'/'4zone' are historical internal token names, kept as-is now that
- * both plants serve 4 zones — see thermostat.js's own header/
- * getActiveSystem() comment for why.)
+ * `activeSystem` on GET /thermostat ('air-handler' | 'boiler') tells the
+ * frontend which of the two PLANTS is actually live right now — tracks
+ * resolveActiveSource()'s live decision (the pinned mode itself, or the
+ * nightly cost comparison's pick in 'auto' mode): gas means the boiler is
+ * in charge, anything else means the air handler is. Both endpoints' data
+ * is always available regardless of which is active, so the frontend can
+ * render whichever card set applies without a separate "is this system on"
+ * check. (Renamed from the historical '3zone'/'4zone' internal token
+ * names — both plants serve 4 zones, so those never meant anything
+ * descriptive — see thermostat.js's own getActiveSystem() comment for the
+ * real bug that motivated actually reading resolveActiveSource() here
+ * instead of just checking `mode === 'gas'` directly.)
  *
  * Every mutation responds with the same `state` shape as its GET route
  * (not the raw settings blob) so the frontend can apply it directly as the

@@ -58,8 +58,8 @@ function HouseOverview({ lightsOn, lightsTotal }) {
   const { state: thermo } = useThermostat();
   const { state: boilerState } = useBoiler();
 
-  const is3Zone = thermo?.activeSystem === "3zone";
-  const climateZones = is3Zone ? (boilerState?.zones ?? []) : (thermo?.zones ?? []);
+  const isBoilerActive = thermo?.activeSystem === "boiler";
+  const climateZones = isBoilerActive ? (boilerState?.zones ?? []) : (thermo?.zones ?? []);
   const readingZones = climateZones.filter(z => z.sensorOk && typeof z.currentTemp === "number");
   const avgIndoor = readingZones.length
     ? Math.round(readingZones.reduce((sum, z) => sum + z.currentTemp, 0) / readingZones.length)

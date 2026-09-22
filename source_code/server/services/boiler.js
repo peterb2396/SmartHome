@@ -109,7 +109,7 @@ function clampToSafetyRange(target) {
 const runtime = Object.fromEntries(
   ZONES.map(z => [z.id, { calling: false, safety: 'normal', envStatus: {} }])
 );
-let systemActive = false; // true only while thermostat.js's getActiveSystem() says '3zone'
+let systemActive = false; // true only while thermostat.js's getActiveSystem() says 'boiler'
 
 const { resolveTarget, isOverridden, nextBoundary } = scheduleUtil;
 
@@ -200,6 +200,11 @@ async function tick() {
 
   for (const zone of ZONES) {
     const on = systemActive && runtime[zone.id].calling;
+    // TEMPORARY DEBUG — relay hardware/channel mapping are confirmed fine
+    // (direct i2cRelay test), so this is pinning down whether the
+    // decision logic itself is ever actually attempting the write, and
+    // with what values, on every real 30s tick. DELETE once resolved.
+    console.log(`[DEBUG boiler] zone=${zone.id} ch=${zone.ch} systemActive=${systemActive} calling=${runtime[zone.id].calling} safety=${runtime[zone.id].safety} on=${on} currentBit=${i2cRelay.getChannel(BOILER_BOARD, zone.ch)}`);
     i2cRelay.setChannel(BOILER_BOARD, zone.ch, on);
   }
 }

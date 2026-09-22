@@ -21,9 +21,9 @@ export default function Thermostat() {
   } = useThermostat();
   const boiler = useBoiler();
   const { zones: monitorZones } = useMonitorZones();
-  // { system: '4zone' | '3zone', id } | null — tracks which system a given
-  // schedule-modal zone id belongs to, since the two systems' zone ids can
-  // otherwise collide (both have a "downstairs").
+  // { system: 'air-handler' | 'boiler', id } | null — tracks which system a
+  // given schedule-modal zone id belongs to, since the two systems' zone ids
+  // can otherwise collide (both have a "downstairs").
   const [scheduleTarget, setScheduleTarget] = useState(null);
   const [showRates, setShowRates] = useState(false);
   const modeToggleRef = useRef(null);
@@ -78,10 +78,10 @@ export default function Thermostat() {
   // the boiler; otherwise the air handler is shown. Both plants serve the
   // same 4 zones (Primary Suite / Upstairs / Downstairs / Office), so this
   // just picks which one's cards to render, not which zones exist.
-  const is3Zone = state.activeSystem === "3zone";
-  const zonesToShow = is3Zone ? (boiler.state?.zones ?? []) : state.zones;
-  const zoneStep = is3Zone ? boiler.setTarget : setTarget;
-  const zoneToggle = is3Zone ? boiler.toggleZone : toggleZone;
+  const isBoilerActive = state.activeSystem === "boiler";
+  const zonesToShow = isBoilerActive ? (boiler.state?.zones ?? []) : state.zones;
+  const zoneStep = isBoilerActive ? boiler.setTarget : setTarget;
+  const zoneToggle = isBoilerActive ? boiler.toggleZone : toggleZone;
 
   // Air-handler zones with no boiler equivalent would go fully idle while
   // the boiler is active (the boiler can't serve or cool them at all) —
@@ -91,10 +91,10 @@ export default function Thermostat() {
   // always empty in practice; kept id-driven rather than removed so it
   // still does the right thing if the two ever diverge again.
   const boilerZoneIds = new Set((boiler.state?.zones ?? []).map(z => z.id));
-  const orphanedZones = is3Zone ? state.zones.filter(z => !boilerZoneIds.has(z.id)) : [];
+  const orphanedZones = isBoilerActive ? state.zones.filter(z => !boilerZoneIds.has(z.id)) : [];
 
   const scheduleZone = scheduleTarget && (
-    scheduleTarget.system === "3zone"
+    scheduleTarget.system === "boiler"
       ? (boiler.state?.zones ?? []).find(z => z.id === scheduleTarget.id)
       : state.zones.find(z => z.id === scheduleTarget.id)
   );
@@ -129,7 +129,7 @@ export default function Thermostat() {
         }
       />
 
-      {is3Zone && (
+      {isBoilerActive && (
         <div style={{
           display: "flex", alignItems: "center", gap: 8, marginBottom: "1.25rem",
           background: "var(--tint-warning)", border: "1px solid #fed7aa", borderRadius: 10,
@@ -153,8 +153,8 @@ export default function Thermostat() {
             zone={zone}
             onStep={zoneStep}
             onToggle={zoneToggle}
-            onOpenSchedule={id => setScheduleTarget({ system: is3Zone ? "3zone" : "4zone", id })}
-            onBalanceChange={is3Zone ? undefined : setBalance}
+            onOpenSchedule={id => setScheduleTarget({ system: isBoilerActive ? "boiler" : "air-handler", id })}
+            onBalanceChange={isBoilerActive ? undefined : setBalance}
           />
         ))}
         {orphanedZones.map(zone => (
@@ -163,7 +163,7 @@ export default function Thermostat() {
             zone={zone}
             onStep={setTarget}
             onToggle={toggleZone}
-            onOpenSchedule={id => setScheduleTarget({ system: "4zone", id })}
+            onOpenSchedule={id => setScheduleTarget({ system: "air-handler", id })}
             onBalanceChange={setBalance}
             idleReason="Gas heat active elsewhere in the house — this zone has no gas equivalent and can't heat or cool until that clears."
             onIdleAction={{ label: "Switch heat source", onClick: scrollToModeToggle }}
@@ -221,7 +221,7 @@ export default function Thermostat() {
         <ScheduleModal
           zone={scheduleZone}
           onClose={() => setScheduleTarget(null)}
-          onSave={scheduleTarget?.system === "3zone" ? boiler.saveSchedule : saveSchedule}
+          onSave={scheduleTarget?.system === "boiler" ? boiler.saveSchedule : saveSchedule}
         />
       )}
 

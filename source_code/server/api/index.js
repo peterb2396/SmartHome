@@ -44,28 +44,6 @@ logStream.install();
   gpio.init();
   await thermostat.init();
 
-  // ── TEMPORARY DEBUG — boiler relay board (0x22) channel test ──────────
-  // Cycles CH5-CH8 (indices 4-7: Office, Primary Suite, Upstairs,
-  // Downstairs) one at a time, 3s each, straight through i2cRelay —
-  // bypasses thermostat/boiler decision logic entirely, so whatever
-  // clicks (or doesn't) is purely about this board/channel mapping/wiring.
-  // DELETE THIS BLOCK once the boiler relay question is settled.
-  (function debugCycleBoilerChannels() {
-    const i2cRelay = require('../services/i2cRelay');
-    const channels = [4, 5, 6, 7]; // Office, Primary Suite, Upstairs, Downstairs
-    let i = 0;
-    function next() {
-      if (i > 0) i2cRelay.setChannel(0x22, channels[i - 1], false);
-      if (i >= channels.length) { console.log('[DEBUG] Boiler channel cycle done.'); return; }
-      console.log(`[DEBUG] Boiler CH${channels[i] + 1} (index ${channels[i]}) ON for 3s...`);
-      i2cRelay.setChannel(0x22, channels[i], true);
-      i++;
-      setTimeout(next, 3000);
-    }
-    setTimeout(next, 2000); // let the bus/other init settle first
-  })();
-  // ── end TEMPORARY DEBUG ─────────────────────────────────────────────
-
   maintenance.init();
   await sound.init();
   // Direct-I2C zone audio driver — see that file's header for why this
