@@ -292,21 +292,23 @@ const RECONNECT_INTERVAL_MS = 10000; // how often to retry opening the port afte
 // read) and a small gap between full sweeps of all dial nodes so an empty
 // or single-dial bus doesn't spin a tight synchronous loop.
 const DIAL_POLL_RESPONSE_TIMEOUT_MS = 200;
-// Briefly raised to 120ms after a CRC-mismatch storm + a USB adapter EIO
-// error showed up once a dial started completing real round trips — but
-// the real cause turned out to be unrelated to this rate at all: the
-// node's SCD41 was physically sharing the dial's own wire pair, and every
-// "dial vs. no dial" test that session was an unnoticed "SCD41 attached
-// vs. not" test too (see rs485_node.ino's header, "SCD41-on-the-dial-
-// cable relay," for the real fix). Restored to 20ms now that that's
-// actually resolved — the slower rate was never fixing what it looked
-// like it was fixing, and it has a real cost: the dial-to-server round
-// trip that confirms an encoder turn or volume change scales directly
-// with this number, and at 120ms it became slow enough to visibly stomp
-// a just-turned value with a still-stale push (see dial_node.ino's
-// PUSH_OVERRIDE_GRACE_MS, which independently guards against that same
-// race regardless of what this is set to).
-const DIAL_SWEEP_GAP_MS = 20;
+// Real production evidence, a genuine A/B comparison on the SAME hardware
+// with the SCD41-on-the-dial-cable relay fix already in place both times
+// (see rs485_node.ino's header): at 120ms, RS485 corruption was mild and
+// self-healing (a miss or two, recovered within a poll); reverted to 20ms
+// once, and the very next boot produced a continuous storm (100+
+// consecutive misses, not self-healing) on the SAME Pi. The SCD41 bus-
+// sharing bug was real and worth fixing on its own, but it wasn't the
+// whole story — this adapter/Pi combination (which has also shown at
+// least one thermal-throttle event via `vcgencmd get_throttled`) genuinely
+// can't sustain 20ms back-to-back RS485 round trips reliably, on top of
+// everything else this Pi runs concurrently (camera recording, Spotify,
+// I2C relays). Back to 120ms. Still feels instant to a hand on a physical
+// knob — the real cost of this number is the dial-to-server confirmation
+// round trip for an encoder turn/volume change, which dial_node.ino's
+// PUSH_OVERRIDE_GRACE_MS already guards against regardless of the exact
+// value here, so there's no correctness reason to want this lower.
+const DIAL_SWEEP_GAP_MS = 120;
 const DIAL_MODE = { thermostat: 0, sound: 1 };
 const DIAL_TAP_EVENT = { none: 0, wake: 1, menuSelect: 2, toggleSpotifyEnabled: 3, returnToMenu: 4, markMaintenanceDone: 5 };
 // tapEvent values other than toggleSpotifyEnabled/markMaintenanceDone are
