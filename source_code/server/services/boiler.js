@@ -198,13 +198,21 @@ async function tick() {
     rt.calling = heatCall;
   }
 
+  // ── TEMPORARY: only Upstairs has a real sensor node built so far — the
+  // other 3 zones' `calling` is permanently false (see the currentTemp ===
+  // null fail-safe above), so driving each zone off its OWN calling state
+  // would only ever heat Upstairs, leaving the rest of the house cold.
+  // Until Primary Suite/Downstairs/Office have real sensors of their own,
+  // join all 4 relays to Upstairs's single call instead, so the whole
+  // house heats together off the one zone that can actually see its own
+  // temperature. DELETE this block (revert to each zone's own
+  // `runtime[zone.id].calling`, i.e. `const on = systemActive &&
+  // runtime[zone.id].calling;` inside the loop below) once the other 3
+  // zones are wired up for real — this is explicitly a stopgap, not the
+  // intended long-term per-zone behavior.
+  const upstairsCalling = runtime.upstairs?.calling ?? false;
   for (const zone of ZONES) {
-    const on = systemActive && runtime[zone.id].calling;
-    // TEMPORARY DEBUG — relay hardware/channel mapping are confirmed fine
-    // (direct i2cRelay test), so this is pinning down whether the
-    // decision logic itself is ever actually attempting the write, and
-    // with what values, on every real 30s tick. DELETE once resolved.
-    console.log(`[DEBUG boiler] zone=${zone.id} ch=${zone.ch} systemActive=${systemActive} calling=${runtime[zone.id].calling} safety=${runtime[zone.id].safety} on=${on} currentBit=${i2cRelay.getChannel(BOILER_BOARD, zone.ch)}`);
+    const on = systemActive && upstairsCalling;
     i2cRelay.setChannel(BOILER_BOARD, zone.ch, on);
   }
 }
