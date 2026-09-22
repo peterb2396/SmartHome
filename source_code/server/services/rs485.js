@@ -507,16 +507,50 @@ function resetUsbAdapter() {
 // — see attemptUsbResetRecovery() — since that's an expected side effect,
 // not a surprise outage; the console lines still print either way, so it's
 // still visible in the Console terminal history.
-function setBusDown(down) {
-  if (down === busDown) return;
+//
+// Real production incident: a genuine adapter-vanished outage ran for
+// hours overnight — one push at the start is easy to miss while asleep
+// (silenced phone, etc.), and this alone used to be the only notification
+// for the entire outage. checkBusDownReminder() below now re-pushes on a
+// slow interval for as long as the bus stays down, so a long outage can't
+// go completely unnoticed just because the first push was missed.
+let busDownSince = 0;
+let busDownWasVanished = false; // sticky for the duration of THIS outage — see the reminder message
+function setBusDown(down, vanished = false) {
+  if (down === busDown) {
+    if (down && vanished) busDownWasVanished = true; // a later open attempt can upgrade "wedged" to "vanished" mid-outage
+    return;
+  }
   busDown = down;
   if (down) {
+    busDownSince = Date.now();
+    busDownWasVanished = vanished;
     console.warn('[RS485] Bus is down.');
     if (!intentionalUsbReset) sendPush('The RS485 sensor bus is unreachable — zone sensors will stop updating until this recovers.', 'RS485: Bus Down');
   } else {
+    busDownSince = 0;
     console.log('[RS485] Bus back online.');
     if (!intentionalUsbReset) sendPush('The RS485 sensor bus is back online.', 'RS485: Resolved');
   }
+}
+
+// Slow-interval "still down" nag — see setBusDown()'s comment on the real
+// incident this responds to. Deliberately not edge-triggered like
+// setBusDown() itself: the whole point is to re-alert periodically for as
+// long as the outage continues, not just once.
+const BUS_DOWN_REMINDER_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+let lastBusDownReminderAt = 0;
+function checkBusDownReminder() {
+  if (!busDown || !busDownSince || intentionalUsbReset) return;
+  const now = Date.now();
+  if (now - busDownSince < BUS_DOWN_REMINDER_INTERVAL_MS) return; // not worth nagging for a short outage
+  if (lastBusDownReminderAt && now - lastBusDownReminderAt < BUS_DOWN_REMINDER_INTERVAL_MS) return;
+  lastBusDownReminderAt = now;
+  const hours = Math.round((now - busDownSince) / 3600000);
+  const guidance = busDownWasVanished
+    ? 'The adapter appears to have disappeared from the USB bus entirely — a physical unplug/replug is likely needed, this can\'t self-recover in software.'
+    : 'The auto-reset has been retrying without success — worth checking on physically.';
+  sendPush(`The RS485 sensor bus has been down for ~${hours}h straight. ${guidance}`, 'RS485: Still Down');
 }
 
 function scheduleReconnect() {
@@ -550,8 +584,26 @@ function openTransport() {
   const candidate = new SerialPort({ path: RS485_PORT_PATH, baudRate: BAUD_RATE, autoOpen: false });
   candidate.open((err) => {
     if (err) {
-      console.warn(`[RS485] Couldn't open ${RS485_PORT_PATH} (${err.message}) — using mock transport. This is expected off the Pi.`);
-      if (process.platform === 'linux') setBusDown(true);
+      // Real production incident: ENOENT specifically means the device
+      // NODE ITSELF is gone (the kernel removed it), which only happens
+      // when the adapter has actually dropped off the USB bus — unplugged,
+      // or died — not a normal transient open failure. That's a
+      // meaningfully different, worse situation than a wedged-but-present
+      // adapter (see resetUsbAdapter()'s header): the unbind/rebind reset
+      // operates on a sysfs path keyed to the device's bus id, which
+      // doesn't exist anymore either once the device is truly gone, so
+      // that mitigation can't help here — only a physical unplug/replug
+      // (or the device re-enumerating on its own) recovers this. The old
+      // "This is expected off the Pi" wording was written for a dev
+      // machine with no adapter at all and is actively misleading on the
+      // Pi itself with a real adapter that's vanished — only claim that
+      // now when this genuinely isn't Linux.
+      const vanished = err.code === 'ENOENT';
+      const context = process.platform === 'linux'
+        ? (vanished ? 'the adapter appears to have disappeared from the USB bus entirely — likely needs a physical unplug/replug' : 'retrying')
+        : 'this is expected off the Pi';
+      console.warn(`[RS485] Couldn't open ${RS485_PORT_PATH} (${err.message}) — using mock transport (${context}).`);
+      if (process.platform === 'linux') setBusDown(true, vanished);
       scheduleReconnect();
       return;
     }
@@ -990,6 +1042,7 @@ async function pollNodeLog(getConfiguredNodes) {
 
 async function pollAll(configuredNodes) {
   checkFrameStall();
+  checkBusDownReminder(); // runs every cycle regardless of bus state — see its own comment
   for (const node of configuredNodes) {
     if (node.busAddress == null) continue;
     if (node.kind === 'zoneAudio') {
