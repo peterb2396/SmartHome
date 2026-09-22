@@ -107,9 +107,20 @@ function clampToSafetyRange(target) {
 }
 
 const runtime = Object.fromEntries(
-  ZONES.map(z => [z.id, { calling: false, safety: 'normal', envStatus: {} }])
+  ZONES.map(z => [z.id, { calling: false, safety: 'normal', envStatus: {}, callingSinceMs: 0, maxCallAlerted: false }])
 );
 let systemActive = false; // true only while thermostat.js's getActiveSystem() says 'boiler'
+
+// Explicit backstop, independent of the stale-reading fix above — direct
+// response to a real overnight incident where heat ran unbounded for
+// hours. Catches ANY reason a zone might stay stuck calling that isn't
+// "no fresh sensor data" specifically (a relay physically stuck on
+// despite software saying it's off, a sensor reporting fresh-looking but
+// wrong numbers, etc.) — a real home shouldn't need a single unbroken
+// call this long even in genuinely cold weather with a properly sized
+// system, so this is a deliberately generous threshold meant to catch
+// "something is actually wrong," not to interrupt normal operation.
+const MAX_CONTINUOUS_CALL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 const { resolveTarget, isOverridden, nextBoundary } = scheduleUtil;
 
@@ -177,13 +188,29 @@ async function tick() {
     const rt = runtime[zone.id];
 
     const reading = sensors.get(zone.tempSensor);
-    const currentTemp = typeof reading?.value === 'number' ? reading.value : null;
+    // Real production incident: RS485 went down overnight; sensorStore kept
+    // returning the LAST real reading it ever got (stale=true, but still a
+    // number), and this check only ever treated a reading as "missing" if
+    // it was literally absent — never if it was just old. That meant the
+    // existing "no data, don't call for heat" fail-safe below never
+    // engaged: every zone kept using its last-known-good temperature
+    // forever, the boiler kept calling because that stale number still
+    // read "too cold," and every relay stayed on all night with zero real
+    // sensor data backing any of it. `stale` (sensorStore.js's own
+    // freshness flag, 3 minutes) now counts as untrusted here too — once
+    // the bus has been down long enough for a reading to go stale, this
+    // zone falls into the currentTemp === null branch just like it always
+    // should have, and heat cuts within one tick (worst case ~3.5 minutes
+    // of total bus downtime, not all night).
+    const currentTemp = typeof reading?.value === 'number' && !reading.stale ? reading.value : null;
 
     updateSafetyState(zone, rt, currentTemp);
     updateEnvironmentAlerts(zone.label, rt, readEnvironment(zone.id));
 
     if (currentTemp === null) {
       rt.calling = false;
+      rt.callingSinceMs = 0;
+      rt.maxCallAlerted = false;
       continue;
     }
 
@@ -194,6 +221,29 @@ async function tick() {
       else if (rt.calling && currentTemp >= target + DEADBAND_F) heatCall = false;
     }
     if (rt.safety === 'below-min') heatCall = true; // freeze protection wins outright, on or off
+
+    // Hard safety cutoff — see MAX_CONTINUOUS_CALL_MS's comment. Tracks
+    // when THIS call started (a fresh false->true transition), and forces
+    // the call off (with a one-time alert, reset once a fresh call starts
+    // again later) if it's been running continuously for too long without
+    // ever satisfying — independent of, and a backstop beyond, the stale-
+    // reading fix above.
+    if (heatCall && !rt.calling) {
+      rt.callingSinceMs = now.valueOf();
+    } else if (!heatCall) {
+      rt.callingSinceMs = 0;
+      rt.maxCallAlerted = false;
+    }
+    if (heatCall && rt.callingSinceMs && now.valueOf() - rt.callingSinceMs > MAX_CONTINUOUS_CALL_MS) {
+      heatCall = false;
+      if (!rt.maxCallAlerted) {
+        rt.maxCallAlerted = true;
+        sendPush(
+          `${zone.label} (boiler zone) has been calling for heat continuously for over ${MAX_CONTINUOUS_CALL_MS / 3600000}h without ever satisfying — this usually means stale/bad sensor data or a stuck relay, not genuine demand. Forcing heat off as a safety cutoff; check this zone directly.`,
+          'CRITICAL: Heat Call Safety Cutoff'
+        );
+      }
+    }
 
     rt.calling = heatCall;
   }

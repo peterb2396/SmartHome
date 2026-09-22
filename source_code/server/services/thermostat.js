@@ -302,9 +302,18 @@ function clampToSafetyRange(target) {
 const runtime = Object.fromEntries(
   ZONES.map(z => [z.id, {
     calling: false, coolCalling: false, safety: 'normal', envStatus: {},
-    damperPercent: 0, damperMoving: null,
+    damperPercent: 0, damperMoving: null, callingSinceMs: 0, maxCallAlerted: false,
   }])
 );
+
+// Explicit backstop against a zone getting stuck calling for heat far
+// longer than any real home should ever need in one unbroken call, even
+// in genuinely cold weather with a properly sized system — see the real
+// overnight incident documented at this file's tick() (the stale-reading
+// fix right next to it). Independent of that fix: this catches ANY reason
+// a zone stays stuck calling, not just "sensor data went stale" — a relay
+// physically stuck on despite software saying off, for instance.
+const MAX_CONTINUOUS_CALL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 // Compressor short-cycle + reversing-valve sequencing state. lastOffAt
 // starts at process-boot time (see init()) — a restart counts as "just
@@ -462,7 +471,19 @@ async function tick() {
     const rt = runtime[zone.id];
 
     const reading = sensors.get(zone.tempSensor);
-    const currentTemp = typeof reading?.value === 'number' ? reading.value : null;
+    // Real production incident: RS485 went down overnight; sensorStore kept
+    // returning the LAST real reading it ever got (stale=true, but still a
+    // number), and this check only ever treated a reading as "missing" if
+    // it was literally absent — never if it was just old. That meant the
+    // fail-safe below never engaged: every zone kept using its last-known-
+    // good temperature forever, and heat stayed on for hours with zero
+    // real sensor data backing any of it. `stale` (sensorStore.js's own
+    // freshness flag, 3 minutes) now counts as untrusted here too — once
+    // the bus has been down long enough for a reading to go stale, this
+    // zone falls into the currentTemp === null branch just like it always
+    // should have, and heat cuts within one tick (worst case ~3.5 minutes
+    // of total bus downtime, not all night).
+    const currentTemp = typeof reading?.value === 'number' && !reading.stale ? reading.value : null;
 
     updateSafetyState(zone, rt, currentTemp, settings);
     updateEnvironmentAlerts(zone, rt, readEnvironment(zone));
@@ -471,6 +492,8 @@ async function tick() {
       // No sensor data — fail safe, don't call for anything.
       rt.calling = false;
       rt.coolCalling = false;
+      rt.callingSinceMs = 0;
+      rt.maxCallAlerted = false;
       continue;
     }
 
@@ -495,6 +518,32 @@ async function tick() {
     else if (rt.safety === 'above-max') { coolCall = true; heatCall = false; }
 
     if (!airHandlerIsHeatSource) heatCall = false; // boiler has the house's heat right now — cooling can still run
+
+    // Hard safety cutoff — see MAX_CONTINUOUS_CALL_MS's comment. Tracks
+    // when THIS call started (a fresh false->true transition on either
+    // heat or cool), and forces it off (with a one-time alert, reset once
+    // a fresh call starts again later) if it's run continuously for too
+    // long without ever satisfying.
+    const callingNow = heatCall || coolCall;
+    const callingBefore = rt.calling || rt.coolCalling;
+    if (callingNow && !callingBefore) {
+      rt.callingSinceMs = Date.now();
+    } else if (!callingNow) {
+      rt.callingSinceMs = 0;
+      rt.maxCallAlerted = false;
+    }
+    if (callingNow && rt.callingSinceMs && Date.now() - rt.callingSinceMs > MAX_CONTINUOUS_CALL_MS) {
+      const kind = heatCall ? 'heat' : 'cooling'; // captured before zeroing below
+      heatCall = false;
+      coolCall = false;
+      if (!rt.maxCallAlerted) {
+        rt.maxCallAlerted = true;
+        sendPush(
+          `${zone.label} has been calling for ${kind} continuously for over ${MAX_CONTINUOUS_CALL_MS / 3600000}h without ever satisfying — this usually means stale/bad sensor data or a stuck relay, not genuine demand. Forcing it off as a safety cutoff; check this zone directly.`,
+          'CRITICAL: Comfort Call Safety Cutoff'
+        );
+      }
+    }
 
     rt.calling = heatCall;
     rt.coolCalling = coolCall;
