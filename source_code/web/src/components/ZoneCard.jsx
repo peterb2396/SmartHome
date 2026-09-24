@@ -166,7 +166,17 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBal
               Force heat
             </span>
             <button
-              onClick={() => onForceHeat(id, !manualHeatActive)}
+              onClick={() => {
+                // Only the "turn it on" direction is destructive enough to
+                // guard — it overrides target/schedule and fires real
+                // equipment, so a stray tap shouldn't be able to do that
+                // silently. Turning it back off is always the safe
+                // direction and needs no confirmation.
+                if (!manualHeatActive && !window.confirm(
+                  `Force heat ON for ${label}?\n\nThis ignores its target and schedule and runs continuously for up to 4 hours, then automatically turns back off.`
+                )) return;
+                onForceHeat(id, !manualHeatActive);
+              }}
               disabled={!isRestrictedUser()}
               aria-label={`${label} force heat ${manualHeatActive ? "off" : "on"}`}
               title={isRestrictedUser() ? undefined : "Only pete.buo@gmail.com can force heat"}
