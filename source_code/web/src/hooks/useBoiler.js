@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { getBoiler, setBoilerZone, setBoilerZoneSchedule } from "../api";
+import { getBoiler, setBoilerZone, setBoilerZoneSchedule, setBoilerZoneManualHeat } from "../api";
 
 const POLL_MS = 15000;
 const PAUSE_MS = 2000;
@@ -60,5 +60,14 @@ export function useBoiler() {
     () => setBoilerZoneSchedule(zoneId, schedule)
   ), [runMutation]);
 
-  return { state, loading, setTarget, toggleZone, saveSchedule, refetch: fetchState };
+  // Manual "force heat on now" override — see boiler.js's setManualHeat().
+  // Only the boolean is applied optimistically; the real manualHeatUntil
+  // expiry comes back from the server a moment later, same as every other
+  // mutation here.
+  const setManualHeat = useCallback((zoneId, on) => runMutation(
+    prev => ({ ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, manualHeatActive: on, manualHeatUntil: on ? z.manualHeatUntil : null } : z) }),
+    () => setBoilerZoneManualHeat(zoneId, on)
+  ), [runMutation]);
+
+  return { state, loading, setTarget, toggleZone, saveSchedule, setManualHeat, refetch: fetchState };
 }

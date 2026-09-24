@@ -47,6 +47,9 @@ export const setZoneSchedule   = (id, schedule) => api.post(`/thermostat/zone/${
 // Restricted server-side to pete.buo@gmail.com — needs the logged-in
 // user's token so the backend can tell who's asking, see thermostat.js.
 export const setZoneBalance    = (id, balancePercent) => api.post(`/thermostat/zone/${id}/balance`, { balancePercent, password: token() });
+// Same pete.buo@gmail.com-only restriction — forces heat on regardless of
+// target/temperature, auto-clears after 4h server-side either way.
+export const setZoneManualHeat = (id, on) => api.post(`/thermostat/zone/${id}/manual-heat`, { on, password: token() });
 export const setThermostatMode = (mode) => api.post("/thermostat/mode", { mode });
 export const setThermostatRates = (rates) => api.post("/thermostat/rates", rates);
 export const setThermostatAvailability = (source, available) => api.post("/thermostat/availability", { source, available });
@@ -55,6 +58,7 @@ export const setThermostatAvailability = (source, available) => api.post("/therm
 export const getBoiler         = () => api.get("/thermostat/boiler");
 export const setBoilerZone     = (id, body) => api.post(`/thermostat/boiler/zone/${id}`, body);
 export const setBoilerZoneSchedule = (id, schedule) => api.post(`/thermostat/boiler/zone/${id}/schedule`, { schedule });
+export const setBoilerZoneManualHeat = (id, on) => api.post(`/thermostat/boiler/zone/${id}/manual-heat`, { on, password: token() });
 
 // ── Maintenance ──────────────────────────────────────────────────────────────
 export const getMaintenance        = () => api.get("/maintenance");

@@ -99,7 +99,13 @@ const ZONES = [
 ];
 
 const DEFAULT_SETTINGS = {
-  zones: Object.fromEntries(ZONES.map(z => [z.id, { on: true, target: 68, schedule: [], override: null }])),
+  // manualHeatUntil: epoch-ms expiry of a manual "force heat on now"
+  // override, or null — see setManualHeat()/tick(). The main reason this
+  // exists on the boiler side specifically: most zones here have no real
+  // sensor yet (see this file's header), so the normal currentTemp === null
+  // fail-safe means they can NEVER call for heat on their own — this is the
+  // one way to actually heat one of those rooms until it gets real hardware.
+  zones: Object.fromEntries(ZONES.map(z => [z.id, { on: true, target: 68, schedule: [], override: null, manualHeatUntil: null }])),
 };
 
 function clampToSafetyRange(target) {
@@ -121,6 +127,12 @@ let systemActive = false; // true only while thermostat.js's getActiveSystem() s
 // system, so this is a deliberately generous threshold meant to catch
 // "something is actually wrong," not to interrupt normal operation.
 const MAX_CONTINUOUS_CALL_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+// Same strict auto-off duration as MAX_CONTINUOUS_CALL_MS above, shared by
+// explicit request — a manual "force heat on now" override (setManualHeat())
+// carries the same "don't let equipment run unattended indefinitely" risk,
+// just operator-initiated instead of a stuck sensor/relay.
+const MANUAL_HEAT_MS = MAX_CONTINUOUS_CALL_MS;
 
 const { resolveTarget, isOverridden, nextBoundary } = scheduleUtil;
 
@@ -207,7 +219,17 @@ async function tick() {
     updateSafetyState(zone, rt, currentTemp);
     updateEnvironmentAlerts(zone.label, rt, readEnvironment(zone.id));
 
-    if (currentTemp === null) {
+    // Manual "force heat on now" override (see setManualHeat()) — restricted
+    // to one person server-side (server/api/thermostat.js). Self-expiring
+    // after MANUAL_HEAT_MS, and still yields to a CONFIRMED over-temperature
+    // reading (a zone actually known to be too hot never gets more heat
+    // forced into it). A zone with no sensor at all (currentTemp still null
+    // below) has no such reading to yield to — that's the actual point of
+    // this override, see this file's header on most zones having no real
+    // sensor yet.
+    const manualHeatActive = !!zs.manualHeatUntil && Date.now() < zs.manualHeatUntil && rt.safety !== 'above-max';
+
+    if (currentTemp === null && !manualHeatActive) {
       rt.calling = false;
       rt.callingSinceMs = 0;
       rt.maxCallAlerted = false;
@@ -215,11 +237,12 @@ async function tick() {
     }
 
     let heatCall = zs.on ? rt.calling : false;
-    if (zs.on) {
+    if (currentTemp !== null && zs.on) {
       const target = resolveTarget(zs, now);
       if (!rt.calling && currentTemp < target - DEADBAND_F) heatCall = true;
       else if (rt.calling && currentTemp >= target + DEADBAND_F) heatCall = false;
     }
+    if (manualHeatActive) heatCall = true;
     if (rt.safety === 'below-min') heatCall = true; // freeze protection wins outright, on or off
 
     // Hard safety cutoff — see MAX_CONTINUOUS_CALL_MS's comment. Tracks
@@ -249,20 +272,23 @@ async function tick() {
   }
 
   // ── TEMPORARY: only Upstairs has a real sensor node built so far — the
-  // other 3 zones' `calling` is permanently false (see the currentTemp ===
-  // null fail-safe above), so driving each zone off its OWN calling state
-  // would only ever heat Upstairs, leaving the rest of the house cold.
-  // Until Primary Suite/Downstairs/Office have real sensors of their own,
-  // join all 4 relays to Upstairs's single call instead, so the whole
-  // house heats together off the one zone that can actually see its own
-  // temperature. DELETE this block (revert to each zone's own
-  // `runtime[zone.id].calling`, i.e. `const on = systemActive &&
-  // runtime[zone.id].calling;` inside the loop below) once the other 3
-  // zones are wired up for real — this is explicitly a stopgap, not the
-  // intended long-term per-zone behavior.
-  const upstairsCalling = runtime.upstairs?.calling ?? false;
+  // other 3 zones' `calling` is permanently false absent a manual override
+  // (see the currentTemp === null fail-safe above), so driving each zone
+  // off its OWN calling state would only ever heat Upstairs, leaving the
+  // rest of the house cold. Until Primary Suite/Downstairs/Office have real
+  // sensors of their own, join all 4 relays to whichever zone is currently
+  // calling instead, so the whole house heats together off the one zone
+  // that can actually see its own temperature (or off a manually-forced
+  // zone — see setManualHeat() — which needed this to check ANY zone rather
+  // than Upstairs specifically, since a manual override on, say, Office
+  // otherwise had no relay to actually join). DELETE this block (revert to
+  // each zone's own `runtime[zone.id].calling`, i.e. `const on =
+  // systemActive && runtime[zone.id].calling;` inside the loop below) once
+  // the other 3 zones are wired up for real — this is explicitly a
+  // stopgap, not the intended long-term per-zone behavior.
+  const anyZoneCalling = ZONES.some(z => runtime[z.id].calling);
   for (const zone of ZONES) {
-    const on = systemActive && upstairsCalling;
+    const on = systemActive && anyZoneCalling;
     i2cRelay.setChannel(BOILER_BOARD, zone.ch, on);
   }
 }
@@ -288,6 +314,22 @@ async function setZoneSchedule(zoneId, schedule) {
   if (!settings.zones[zoneId]) throw new Error(`Unknown boiler zone ${zoneId}`);
   const clamped = schedule.map(b => ({ ...b, target: clampToSafetyRange(b.target) }));
   const zs = { ...settings.zones[zoneId], schedule: clamped, override: null };
+  const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
+  await saveSettings(next);
+  await tick();
+  return next;
+}
+
+// Manual "force heat on now" override — restricted server-side to one
+// person (server/api/thermostat.js's isAuthorizedUser()). Turning it off
+// just clears the expiry early; letting it run lets it clear itself once
+// MANUAL_HEAT_MS elapses (see tick()) — tick()/getState() both just compare
+// against the stored timestamp, no separate persisted "off" write needed
+// for the auto-expiry case.
+async function setManualHeat(zoneId, on) {
+  const settings = getSettings();
+  if (!settings.zones[zoneId]) throw new Error(`Unknown boiler zone ${zoneId}`);
+  const zs = { ...settings.zones[zoneId], manualHeatUntil: on ? Date.now() + MANUAL_HEAT_MS : null };
   const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
   await saveSettings(next);
   await tick();
@@ -320,6 +362,11 @@ function getState() {
         calling: rt.calling && systemActive,
         safety: rt.safety,
         environment: readEnvironment(zone.id),
+        // Manual "force heat on now" override state — see setManualHeat()/
+        // tick(). manualHeatActive is already expiry-checked; manualHeatUntil
+        // is only for rendering an "auto-off in Xh Ym" countdown.
+        manualHeatActive: !!zs.manualHeatUntil && Date.now() < zs.manualHeatUntil,
+        manualHeatUntil: zs.manualHeatUntil ?? null,
       };
     }),
   };
@@ -344,6 +391,7 @@ module.exports = {
   getState,
   setZone,
   setZoneSchedule,
+  setManualHeat,
   setSystemActive,
   getSettings,
   saveSettings,

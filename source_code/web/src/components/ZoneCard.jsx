@@ -1,4 +1,4 @@
-import { FaCog, FaExclamationTriangle, FaInfoCircle, FaTint, FaSmog, FaWind, FaLock } from "react-icons/fa";
+import { FaCog, FaExclamationTriangle, FaInfoCircle, FaTint, FaSmog, FaWind, FaLock, FaFire } from "react-icons/fa";
 import ThermoDial from "./ThermoDial";
 import EnvironmentRow from "./EnvironmentRow";
 
@@ -7,12 +7,13 @@ const SAFETY_MIN = 60;
 const SAFETY_MAX = 75;
 
 // Mirrors the server-side restriction in server/api/thermostat.js
-// (isAuthorizedForDamperBalance) — this is just UX (disable + explain
-// instead of a control that silently 403s), the backend check is what
-// actually enforces it, not this.
-const DAMPER_BALANCE_ALLOWED_EMAIL = "pete.buo@gmail.com";
-function canEditDamperBalance() {
-  return (localStorage.getItem("email") || "").toLowerCase() === DAMPER_BALANCE_ALLOWED_EMAIL;
+// (isAuthorizedUser) — this is just UX (disable + explain instead of a
+// control that silently 403s), the backend check is what actually enforces
+// it, not this. Shared by both the damper balance slider and the manual
+// force-heat toggle below — same one-person restriction, same reasoning.
+const RESTRICTED_ALLOWED_EMAIL = "pete.buo@gmail.com";
+function isRestrictedUser() {
+  return (localStorage.getItem("email") || "").toLowerCase() === RESTRICTED_ALLOWED_EMAIL;
 }
 
 // "2h 15m" / "45m" — omits the hours segment entirely under an hour rather
@@ -32,11 +33,11 @@ function formatCountdown(untilIso) {
 // adds a visible explanation. onIdleAction, if given, renders a small
 // button in that banner (e.g. a shortcut to the mode switch that would
 // clear the idle state).
-export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBalanceChange, idleReason, onIdleAction }) {
+export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBalanceChange, onForceHeat, idleReason, onIdleAction }) {
   const {
     id, label, on, target, currentTemp: current, calling, coolCalling,
     safety = "normal", overridden, overrideUntil, environment,
-    damperPercent, damperMoving, balancePercent,
+    damperPercent, damperMoving, balancePercent, manualHeatActive, manualHeatUntil,
   } = zone;
   const inSafetyOverride = safety !== "normal";
   const hasDamper = damperPercent != null; // boiler zones (simple on/off valves) don't have this
@@ -136,23 +137,58 @@ export default function ZoneCard({ zone, onStep, onToggle, onOpenSchedule, onBal
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text-muted)" }}>
             <span>Damper {damperMoving ? `${damperMoving}…` : `${damperPercent}% open`}</span>
             <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              {!canEditDamperBalance() && <FaLock size={9} title="Only pete.buo@gmail.com can change this" />}
+              {!isRestrictedUser() && <FaLock size={9} title="Only pete.buo@gmail.com can change this" />}
               Balance {balancePercent ?? 100}%
             </span>
           </div>
           <input
             type="range" min={0} max={100} step={5}
             value={balancePercent ?? 100}
-            disabled={!canEditDamperBalance()}
+            disabled={!isRestrictedUser()}
             onChange={e => onBalanceChange(id, Number(e.target.value))}
             aria-label={`${label} damper balance`}
-            title={canEditDamperBalance() ? undefined : "Only pete.buo@gmail.com can change this"}
+            title={isRestrictedUser() ? undefined : "Only pete.buo@gmail.com can change this"}
             style={{
               width: "100%", accentColor: "var(--accent)",
-              opacity: canEditDamperBalance() ? 1 : 0.5,
-              cursor: canEditDamperBalance() ? "pointer" : "not-allowed",
+              opacity: isRestrictedUser() ? 1 : 0.5,
+              cursor: isRestrictedUser() ? "pointer" : "not-allowed",
             }}
           />
+        </div>
+      )}
+
+      {onForceHeat && (
+        <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.72rem", color: "var(--text-muted)" }}>
+              {!isRestrictedUser() && <FaLock size={9} title="Only pete.buo@gmail.com can force heat" />}
+              <FaFire size={10} style={{ color: manualHeatActive ? "#dc2626" : undefined }} />
+              Force heat
+            </span>
+            <button
+              onClick={() => onForceHeat(id, !manualHeatActive)}
+              disabled={!isRestrictedUser()}
+              aria-label={`${label} force heat ${manualHeatActive ? "off" : "on"}`}
+              title={isRestrictedUser() ? undefined : "Only pete.buo@gmail.com can force heat"}
+              style={{
+                padding: "0.3rem 0.75rem", borderRadius: 999, border: "none",
+                fontWeight: 600, fontSize: "0.78rem",
+                cursor: isRestrictedUser() ? "pointer" : "not-allowed",
+                opacity: isRestrictedUser() ? 1 : 0.5,
+                background: manualHeatActive ? "#dc2626" : "var(--border)",
+                color: manualHeatActive ? "white" : "var(--text-secondary)",
+                boxShadow: manualHeatActive ? "0 4px 12px rgba(220,38,38,0.35)" : "none",
+                transition: "all 0.2s",
+              }}
+            >
+              {manualHeatActive ? "Forcing On" : "Force On"}
+            </button>
+          </div>
+          {manualHeatActive && manualHeatUntil && (
+            <div style={{ fontSize: "0.72rem", color: "#b91c1c", fontWeight: 600 }}>
+              Ignores target/schedule — auto-off in {formatCountdown(manualHeatUntil)}
+            </div>
+          )}
         </div>
       )}
 

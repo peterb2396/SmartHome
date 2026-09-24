@@ -17,7 +17,7 @@ const SHOW_MONITOR_ZONES_KEY = "thermostat.showMonitorZones";
 export default function Thermostat() {
   const {
     state, loading, error, offline,
-    setTarget, toggleZone, saveSchedule, setBalance, setMode, setAvailability, setRates, refetch,
+    setTarget, toggleZone, saveSchedule, setBalance, setManualHeat, setMode, setAvailability, setRates, refetch,
   } = useThermostat();
   const boiler = useBoiler();
   const { zones: monitorZones } = useMonitorZones();
@@ -82,6 +82,7 @@ export default function Thermostat() {
   const zonesToShow = isBoilerActive ? (boiler.state?.zones ?? []) : state.zones;
   const zoneStep = isBoilerActive ? boiler.setTarget : setTarget;
   const zoneToggle = isBoilerActive ? boiler.toggleZone : toggleZone;
+  const zoneForceHeat = isBoilerActive ? boiler.setManualHeat : setManualHeat;
 
   // Air-handler zones with no boiler equivalent would go fully idle while
   // the boiler is active (the boiler can't serve or cool them at all) —
@@ -155,6 +156,7 @@ export default function Thermostat() {
             onToggle={zoneToggle}
             onOpenSchedule={id => setScheduleTarget({ system: isBoilerActive ? "boiler" : "air-handler", id })}
             onBalanceChange={isBoilerActive ? undefined : setBalance}
+            onForceHeat={zoneForceHeat}
           />
         ))}
         {orphanedZones.map(zone => (
@@ -165,6 +167,7 @@ export default function Thermostat() {
             onToggle={toggleZone}
             onOpenSchedule={id => setScheduleTarget({ system: "air-handler", id })}
             onBalanceChange={setBalance}
+            onForceHeat={setManualHeat}
             idleReason="Gas heat active elsewhere in the house — this zone has no gas equivalent and can't heat or cool until that clears."
             onIdleAction={{ label: "Switch heat source", onClick: scrollToModeToggle }}
           />

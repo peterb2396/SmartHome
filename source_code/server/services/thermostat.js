@@ -229,8 +229,9 @@ const DEFAULT_SETTINGS = {
   // balancePercent: how far open this zone's damper drives while actively
   // calling — default fully open (100), tune down per zone for airflow
   // balancing (see setZoneBalance()). Ending a call always drives to 0
-  // regardless of this value.
-  zones: Object.fromEntries(ZONES.map(z => [z.id, { on: true, target: 68, schedule: [], override: null, balancePercent: 100 }])),
+  // regardless of this value. manualHeatUntil: epoch-ms expiry of a manual
+  // "force heat on now" override, or null — see setManualHeat()/tick().
+  zones: Object.fromEntries(ZONES.map(z => [z.id, { on: true, target: 68, schedule: [], override: null, balancePercent: 100, manualHeatUntil: null }])),
 };
 
 // ── Heat pump COP curve (efficiency drops as it gets colder outside) ────────
@@ -314,6 +315,14 @@ const runtime = Object.fromEntries(
 // a zone stays stuck calling, not just "sensor data went stale" — a relay
 // physically stuck on despite software saying off, for instance.
 const MAX_CONTINUOUS_CALL_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+// A manual "force heat on now" override (see setManualHeat()) follows this
+// exact same strict auto-off duration by explicit request — it's the same
+// underlying risk (equipment running unattended for a long time on a signal
+// that isn't real comfort/safety demand), just operator-initiated instead of
+// a stuck sensor/relay. Sharing the constant keeps the two policies from
+// ever silently drifting apart.
+const MANUAL_HEAT_MS = MAX_CONTINUOUS_CALL_MS;
 
 // Compressor short-cycle + reversing-valve sequencing state. lastOffAt
 // starts at process-boot time (see init()) — a restart counts as "just
@@ -488,8 +497,21 @@ async function tick() {
     updateSafetyState(zone, rt, currentTemp, settings);
     updateEnvironmentAlerts(zone, rt, readEnvironment(zone));
 
-    if (currentTemp === null) {
-      // No sensor data — fail safe, don't call for anything.
+    // Manual "force heat on now" override (see setManualHeat()) — restricted
+    // to one person server-side (server/api/thermostat.js). Self-expiring:
+    // MANUAL_HEAT_MS after it was switched on, this just goes back to false
+    // on its own, no separate "turn it back off" write required. Still
+    // yields to a CONFIRMED over-temperature reading — a zone actually
+    // known to be above the safety ceiling never gets more heat forced into
+    // it, override or not. A zone with no sensor at all (currentTemp still
+    // null below) has no such reading to yield to, which is the actual
+    // point of this override: it's the one way to heat a zone that can't
+    // yet report its own temperature (see boiler.js's header — most zones
+    // don't have real sensors wired up yet).
+    const manualHeatActive = !!zs.manualHeatUntil && Date.now() < zs.manualHeatUntil && rt.safety !== 'above-max';
+
+    if (currentTemp === null && !manualHeatActive) {
+      // No sensor data and no manual override — fail safe, don't call for anything.
       rt.calling = false;
       rt.coolCalling = false;
       rt.callingSinceMs = 0;
@@ -500,7 +522,7 @@ async function tick() {
     let heatCall = false;
     let coolCall = false;
 
-    if (zs.on) {
+    if (currentTemp !== null && zs.on) {
       const target = resolveTarget(zs, now);
       heatCall = rt.calling;
       if (!rt.calling && currentTemp < target - DEADBAND_F) heatCall = true;
@@ -513,7 +535,10 @@ async function tick() {
     // zs.on === false -> no comfort call; let it drift. The safety check
     // below is still live regardless.
 
-    // Safety wins outright over the comfort band above.
+    if (manualHeatActive) heatCall = true;
+
+    // Safety wins outright over the comfort band above (and over the manual
+    // override — see manualHeatActive's own above-max guard above).
     if (rt.safety === 'below-min') { heatCall = true; coolCall = false; }
     else if (rt.safety === 'above-max') { coolCall = true; heatCall = false; }
 
@@ -902,6 +927,25 @@ async function setZoneBalance(zoneId, balancePercent) {
   return next;
 }
 
+// Manual "force heat on now" override — restricted server-side to one
+// person (server/api/thermostat.js's isAuthorizedUser()), same reasoning as
+// setZoneBalance() above: this actively forces equipment on regardless of
+// target/temperature, so it's easy to forget about and annoying for
+// everyone else to live with if left running. Turning it off just clears
+// the expiry early; letting it run lets it clear itself once MANUAL_HEAT_MS
+// elapses (see tick()) — no separate persisted "off" write needed for the
+// auto-expiry case, tick()/getState() both just compare against the stored
+// timestamp.
+async function setManualHeat(zoneId, on) {
+  const settings = getSettings();
+  if (!settings.zones[zoneId]) throw new Error(`Unknown zone ${zoneId}`);
+  const zs = { ...settings.zones[zoneId], manualHeatUntil: on ? Date.now() + MANUAL_HEAT_MS : null };
+  const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
+  await saveSettings(next);
+  await tick();
+  return next;
+}
+
 async function setMode(mode) {
   const settings = getSettings();
   if (!['auto', 'gas', 'electric', 'air'].includes(mode)) {
@@ -1011,6 +1055,12 @@ function getState() {
         balancePercent: zs.balancePercent ?? 100,
         damperPercent: rt.damperPercent,
         damperMoving: rt.damperMoving,
+        // Manual "force heat on now" override state — see setManualHeat()/
+        // tick(). manualHeatActive is the live, already-expiry-checked
+        // boolean the UI should key its toggle off of; manualHeatUntil is
+        // only for rendering the "auto-off in Xh Ym" countdown once active.
+        manualHeatActive: !!zs.manualHeatUntil && Date.now() < zs.manualHeatUntil,
+        manualHeatUntil: zs.manualHeatUntil ?? null,
       };
     }),
   };
@@ -1105,6 +1155,7 @@ module.exports = {
   setZone,
   setZoneSchedule,
   setZoneBalance,
+  setManualHeat,
   setMode,
   setRates,
   setAvailability,

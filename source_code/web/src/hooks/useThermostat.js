@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getThermostat, setThermostatZone, setZoneSchedule as apiSetZoneSchedule, setZoneBalance as apiSetZoneBalance,
-  setThermostatMode, setThermostatRates, setThermostatAvailability,
+  setZoneManualHeat as apiSetZoneManualHeat, setThermostatMode, setThermostatRates, setThermostatAvailability,
 } from "../api";
 
 const POLL_MS = 15000;
@@ -35,6 +35,7 @@ function defaultState() {
       id, label, on: true, target: 68, schedule: [], overridden: false, overrideUntil: null,
       currentTemp: null, updatedAt: null, sensorOk: false,
       calling: false, coolCalling: false, safety: "normal",
+      manualHeatActive: false, manualHeatUntil: null,
       environment: {
         humidity: { value: null, status: null }, pressure: { value: null, status: null },
         voc: { value: null, status: null }, co2: { value: null, status: null },
@@ -166,6 +167,16 @@ export function useThermostat() {
     () => apiSetZoneBalance(zoneId, balancePercent)
   ), [runMutation]);
 
+  // Manual "force heat on now" override — see setManualHeat() in
+  // thermostat.js. The optimistic update only flips manualHeatActive; the
+  // real manualHeatUntil timestamp comes back from the server a moment
+  // later via runMutation's confirmed-state adoption, same as every other
+  // mutation here.
+  const setManualHeat = useCallback((zoneId, on) => runMutation(
+    prev => prev && { ...prev, zones: prev.zones.map(z => z.id === zoneId ? { ...z, manualHeatActive: on, manualHeatUntil: on ? z.manualHeatUntil : null } : z) },
+    () => apiSetZoneManualHeat(zoneId, on)
+  ), [runMutation]);
+
   const setMode = useCallback((mode) => runMutation(
     prev => {
       if (!prev) return prev;
@@ -206,7 +217,7 @@ export function useThermostat() {
 
   return {
     state, loading, error, offline,
-    setTarget, toggleZone, saveSchedule, setBalance, setMode, setRates, setAvailability,
+    setTarget, toggleZone, saveSchedule, setBalance, setManualHeat, setMode, setRates, setAvailability,
     refetch: fetchState,
   };
 }

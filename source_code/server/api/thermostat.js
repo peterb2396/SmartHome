@@ -8,7 +8,12 @@
  * POST /thermostat/zone/:id/schedule — { schedule } weekly grid for one zone
  * POST /thermostat/zone/:id/balance  — { balancePercent, password } damper balancing
  *                                     (0-100) — restricted to pete.buo@gmail.com only,
- *                                     see isAuthorizedForDamperBalance() below
+ *                                     see isAuthorizedUser() below
+ * POST /thermostat/zone/:id/manual-heat — { on, password } manual "force heat
+ *                                     on now" override, max 4h (MANUAL_HEAT_MS
+ *                                     in thermostat.js) before it auto-clears —
+ *                                     restricted to pete.buo@gmail.com only,
+ *                                     see isAuthorizedUser() below
  * POST /thermostat/mode            — { mode: 'auto'|'gas'|'electric'|'air' }
  * POST /thermostat/rates           — { gasPricePerTherm?, elecPricePerKwh?, gasAfue? }
  * POST /thermostat/availability    — { source: 'gas'|'electric'|'air', available: boolean }
@@ -22,6 +27,9 @@
  *                                     see boiler.js)
  * POST /thermostat/boiler/zone/:id — { target?, on? }
  * POST /thermostat/boiler/zone/:id/schedule — { schedule }
+ * POST /thermostat/boiler/zone/:id/manual-heat — { on, password } same manual
+ *                                     override as above, boiler side — see
+ *                                     boiler.js's setManualHeat()
  *
  * `activeSystem` on GET /thermostat ('air-handler' | 'boiler') tells the
  * frontend which of the two PLANTS is actually live right now — tracks
@@ -48,21 +56,23 @@ const thermostatSvc = require('../services/thermostat');
 const boilerSvc = require('../services/boiler');
 const User = require('../db/userModel');
 
-// The damper balance slider physically retunes airflow between zones —
-// worth locking to one person rather than the household-wide PASSWORD
-// secret every other privileged route accepts (see lightsSvc.validatePassword),
-// since a mis-set balance is easy to not notice and annoying for everyone
-// else to live with. `password` here is the same value the frontend
-// already stores as "token" post-login (see web/src/api/index.js) — it's
-// actually the user's Mongo _id, not a real password; same convention as
-// every other auth check in this codebase, just resolved one step further
-// to the account's email instead of stopping at "any valid user."
-const DAMPER_BALANCE_ALLOWED_EMAIL = 'pete.buo@gmail.com';
-async function isAuthorizedForDamperBalance(password) {
+// A couple of controls here are risky/annoying enough (a mis-set airflow
+// balance, a manual "force heat on" override that ignores target/temperature
+// entirely) that they're worth locking to one person rather than the
+// household-wide PASSWORD secret every other privileged route accepts (see
+// lightsSvc.validatePassword) — a mistake on either is easy to not notice
+// and annoying for everyone else to live with in the meantime. `password`
+// here is the same value the frontend already stores as "token" post-login
+// (see web/src/api/index.js) — it's actually the user's Mongo _id, not a
+// real password; same convention as every other auth check in this
+// codebase, just resolved one step further to the account's email instead
+// of stopping at "any valid user."
+const RESTRICTED_ALLOWED_EMAIL = 'pete.buo@gmail.com';
+async function isAuthorizedUser(password) {
   if (!password) return false;
   try {
     const user = await User.findById(password);
-    return user?.email?.toLowerCase() === DAMPER_BALANCE_ALLOWED_EMAIL;
+    return user?.email?.toLowerCase() === RESTRICTED_ALLOWED_EMAIL;
   } catch {
     return false; // password wasn't a valid ObjectId, or lookup failed
   }
@@ -96,11 +106,26 @@ router.post('/thermostat/zone/:id/schedule', async (req, res) => {
 });
 
 router.post('/thermostat/zone/:id/balance', async (req, res) => {
-  if (!await isAuthorizedForDamperBalance(req.body.password)) {
+  if (!await isAuthorizedUser(req.body.password)) {
     return res.status(403).json({ ok: false, error: 'Only pete.buo@gmail.com can change damper balance.' });
   }
   try {
     await thermostatSvc.setZoneBalance(req.params.id, req.body.balancePercent);
+    res.json({ ok: true, state: thermostatSvc.getState() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+router.post('/thermostat/zone/:id/manual-heat', async (req, res) => {
+  if (!await isAuthorizedUser(req.body.password)) {
+    return res.status(403).json({ ok: false, error: 'Only pete.buo@gmail.com can force heat manually.' });
+  }
+  if (typeof req.body.on !== 'boolean') {
+    return res.status(400).json({ ok: false, error: 'on must be a boolean' });
+  }
+  try {
+    await thermostatSvc.setManualHeat(req.params.id, req.body.on);
     res.json({ ok: true, state: thermostatSvc.getState() });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
@@ -160,6 +185,21 @@ router.post('/thermostat/boiler/zone/:id/schedule', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'schedule must be an array' });
     }
     await boilerSvc.setZoneSchedule(req.params.id, schedule);
+    res.json({ ok: true, state: boilerSvc.getState() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+router.post('/thermostat/boiler/zone/:id/manual-heat', async (req, res) => {
+  if (!await isAuthorizedUser(req.body.password)) {
+    return res.status(403).json({ ok: false, error: 'Only pete.buo@gmail.com can force heat manually.' });
+  }
+  if (typeof req.body.on !== 'boolean') {
+    return res.status(400).json({ ok: false, error: 'on must be a boolean' });
+  }
+  try {
+    await boilerSvc.setManualHeat(req.params.id, req.body.on);
     res.json({ ok: true, state: boilerSvc.getState() });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
