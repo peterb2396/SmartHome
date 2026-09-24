@@ -271,24 +271,17 @@ async function tick() {
     rt.calling = heatCall;
   }
 
-  // ── TEMPORARY: only Upstairs has a real sensor node built so far — the
-  // other 3 zones' `calling` is permanently false absent a manual override
-  // (see the currentTemp === null fail-safe above), so driving each zone
-  // off its OWN calling state would only ever heat Upstairs, leaving the
-  // rest of the house cold. Until Primary Suite/Downstairs/Office have real
-  // sensors of their own, join all 4 relays to whichever zone is currently
-  // calling instead, so the whole house heats together off the one zone
-  // that can actually see its own temperature (or off a manually-forced
-  // zone — see setManualHeat() — which needed this to check ANY zone rather
-  // than Upstairs specifically, since a manual override on, say, Office
-  // otherwise had no relay to actually join). DELETE this block (revert to
-  // each zone's own `runtime[zone.id].calling`, i.e. `const on =
-  // systemActive && runtime[zone.id].calling;` inside the loop below) once
-  // the other 3 zones are wired up for real — this is explicitly a
-  // stopgap, not the intended long-term per-zone behavior.
-  const anyZoneCalling = ZONES.some(z => runtime[z.id].calling);
+  // Each zone drives its own valve off its own `calling` state. Primary
+  // Suite/Downstairs/Office have no real sensor yet, so their `calling`
+  // stays permanently false (see the currentTemp === null fail-safe above)
+  // UNLESS manually forced via setManualHeat() — which is exactly the point
+  // of that override now: it lets you heat one specific room on its own
+  // valve without opening the other three, rather than the old "join
+  // everything to whichever zone can call" stopgap this replaced. Revisit
+  // once those 3 zones get real sensors — nothing here needs to change when
+  // they do, this is already the intended long-term per-zone behavior.
   for (const zone of ZONES) {
-    const on = systemActive && anyZoneCalling;
+    const on = systemActive && runtime[zone.id].calling;
     i2cRelay.setChannel(BOILER_BOARD, zone.ch, on);
   }
 }
