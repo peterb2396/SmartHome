@@ -99,7 +99,7 @@
  *
  * POLL_DIAL payload (master→dial, pushes what the dial should display for
  * every screen every cycle, since the dial can switch screens locally
- * without waiting for a new poll — 27B): [targetF f32][currentF f32]
+ * without waiting for a new poll — 48B): [targetF f32][currentF f32]
  * [humidity f32][co2 f32][outdoorF f32][flags 1B: bit0 callingHeat, bit1
  * callingCool, bit2 safetyActive, bit3 weatherStale, bit4
  * spotifyEnabled, bit5 humidityAvailable — most zones only carry an SCD41
@@ -119,6 +119,22 @@
  * TEXT (no room on a round face, and it'd duplicate the web app's detail
  * view); it just flags "go check the app" when either is nonzero. Same
  * for every dial in a sweep, not per-zone.
+ *
+ * Bytes 27-47, appended for the Clock/weather screen redesign (kept after
+ * the original 27B so none of those offsets ever had to move): [weekday
+ * 1B: 0=Sunday..6=Saturday][month 1B: 1-12][day 1B: 1-31][weatherCategory
+ * 1B: astro.js's own small icon enum — 0=clear,1=partlyCloudy,2=cloudy,
+ * 3=fog,4=drizzle,5=rain,6=snow,7=thunderstorm, see its weatherCategory()
+ * for the WMO-code mapping this simplifies — the dial only ever needs to
+ * know how to DRAW each of these 8 values, never the raw WMO table][
+ * rainHour 1B: hour-of-day (0-23) rain is first expected TODAY, or 255 if
+ * none is — see astro.js's refreshOutdoorCacheOnce()][forecastValidMask
+ * 1B: bit0=+3h point present, bit1=+6h, bit2=+9h — astro.js only returns
+ * as many forecast points as it actually has, and 0°F is a real possible
+ * reading, so "no data for this slot" needs its own bit rather than a
+ * magic temperature][3x forecast point, 5B each, +3h/+6h/+9h in order:
+ * tempF f32 + weatherCategory 1B — ignore both if this point's
+ * forecastValidMask bit is unset].
  *
  * DIAL_STATE payload (dial→master reply, 8B): [mode 1B: 0=thermostat,
  * 1=sound][newTargetF f32][changed 1B][tapEvent 1B][newVolumePercent 1B].
@@ -358,10 +374,11 @@ function crc32(buf) {
 }
 
 // onData()'s resync safety net — see its own comment for the failure mode
-// this guards against. Largest real payload today is POLL_DIAL's 27B;
-// generous headroom over that so a legitimate future protocol addition
-// doesn't false-positive against this.
-const MAX_PAYLOAD_LEN = 40;
+// this guards against. Largest real payload today is POLL_DIAL's 48B (see
+// buildDialPushPayload() — grew from 27B for the Clock/weather screen
+// redesign); generous headroom over that so a legitimate future protocol
+// addition doesn't false-positive against this.
+const MAX_PAYLOAD_LEN = 60;
 // NOT just wire-transmission time (9600 baud is ~1ms/byte, which alone
 // would suggest well under 50ms) — real USB-to-RS485 adapters/OS serial
 // drivers can legitimately deliver one genuine frame's bytes split across
@@ -1076,7 +1093,7 @@ async function pollAll(configuredNodes) {
 const SOUND_SOURCE_BYTE = { off: 0, spotify: 1, override1: 2, override2: 3 };
 
 function buildDialPushPayload(zone, outdoor, soundZone, now, faultCount, maintenanceDueCount) {
-  const buf = Buffer.alloc(27);
+  const buf = Buffer.alloc(48);
   buf.writeFloatLE(zone?.target ?? 68, 0);
   buf.writeFloatLE(zone?.currentTemp ?? 0, 4);
   buf.writeFloatLE(zone?.environment?.humidity?.value ?? 0, 8);
@@ -1105,6 +1122,37 @@ function buildDialPushPayload(zone, outdoor, soundZone, now, faultCount, mainten
   // this just tells the dial whether it should say so.
   buf.writeUInt8(Math.min(faultCount ?? 0, 255), 25);
   buf.writeUInt8(Math.min(maintenanceDueCount ?? 0, 255), 26);
+
+  // ── Clock/weather screen redesign (see this file's header for the full
+  // layout) — appended after the original 27 bytes so none of the above
+  // offsets ever had to move. weekday/month/day let the dial print
+  // "Saturday, 9/26" without carrying any calendar-math logic of its own.
+  // weatherCategory is astro.js's own small icon enum (see its
+  // weatherCategory() comment) — the dial only ever needs to know how to
+  // DRAW each of the 8 values, never what WMO code produced it.
+  buf.writeUInt8(now.getDay(), 27);   // 0=Sunday..6=Saturday
+  buf.writeUInt8(now.getMonth() + 1, 28);
+  buf.writeUInt8(now.getDate(), 29);
+  buf.writeUInt8(outdoor?.weatherCategory ?? 2, 30);
+  // 255 = no rain expected today — see astro.js's refreshOutdoorCacheOnce()
+  // for how "today" and the probability threshold are decided.
+  buf.writeUInt8(outdoor?.rainHour ?? 255, 31);
+  // 3 forecast points (+3h/+6h/+9h). astro.js only ever returns as many
+  // entries as it actually has (e.g. right at a refresh boundary) — a
+  // missing point still needs to send SOME bytes to keep every later
+  // offset fixed, but 0°F is a real possible reading, so "missing" is its
+  // own explicit bit here rather than a magic temperature value that could
+  // collide with a genuine cold-weather forecast.
+  const forecast = outdoor?.forecast ?? [];
+  let forecastValidMask = 0;
+  [3, 6, 9].forEach((hoursAhead, i) => {
+    const point = forecast.find(f => f.hoursAhead === hoursAhead);
+    if (point) forecastValidMask |= (1 << i);
+    const offset = 33 + i * 5;
+    buf.writeFloatLE(point?.tempF ?? 0, offset);
+    buf.writeUInt8(point?.weatherCategory ?? 2, offset + 4);
+  });
+  buf.writeUInt8(forecastValidMask, 32); // bit0=+3h, bit1=+6h, bit2=+9h
   return buf;
 }
 

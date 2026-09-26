@@ -52,27 +52,60 @@ function isAfterSunset() {
 
 // ── Weather helper ──────────────────────────────────────────────────────────────
 /**
- * Fetch the full day's hourly forecast.
+ * Fetch the hourly forecast starting the given date.
  * @param {Date} date
- * @returns {Promise<{times:string[], temps:number[]}>}
+ * @param {number} days How many calendar days to pull, starting at `date`
+ *   (default 1). The dial's outdoor-conditions cache needs 2 — a +9h
+ *   forecast point requested late in the evening can fall after midnight,
+ *   into the next calendar day's rows.
+ * @returns {Promise<{times:string[], temps:number[], codes:number[], precipProbs:number[]}>}
+ *   codes are Open-Meteo's WMO weather codes (see weatherCategory() below
+ *   for how those get simplified for the dial); precipProbs are 0-100%.
  */
-async function getHourlyForecast(date) {
+async function getHourlyForecast(date, days = 1) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
+  const endDate = new Date(date);
+  endDate.setDate(endDate.getDate() + (days - 1));
+  const ey = endDate.getFullYear();
+  const em = String(endDate.getMonth() + 1).padStart(2, '0');
+  const ed = String(endDate.getDate()).padStart(2, '0');
   const url =
     `https://api.open-meteo.com/v1/forecast` +
     `?latitude=${LAT}&longitude=${LNG}` +
-    `&hourly=temperature_2m&temperature_unit=fahrenheit` +
+    `&hourly=temperature_2m,weathercode,precipitation_probability&temperature_unit=fahrenheit` +
     `&timezone=${encodeURIComponent(TZ)}` +
-    `&start_date=${y}-${m}-${d}&end_date=${y}-${m}-${d}`;
+    `&start_date=${y}-${m}-${d}&end_date=${ey}-${em}-${ed}`;
 
   // Hard 10s timeout — this is a background job, never let it hang
   const { data } = await axios.get(url, { timeout: 10000 });
   return {
     times: data?.hourly?.time || [],
     temps: data?.hourly?.temperature_2m || [],
+    codes: data?.hourly?.weathercode || [],
+    precipProbs: data?.hourly?.precipitation_probability || [],
   };
+}
+
+// Simplifies Open-Meteo's ~30-value WMO weather code table down to the
+// small set of icon categories dial_node.ino actually knows how to draw
+// (0=clear, 1=partlyCloudy, 2=cloudy, 3=fog, 4=drizzle, 5=rain, 6=snow,
+// 7=thunderstorm) — done here, once, server-side, so the embedded dial
+// only ever carries this one small enum over the wire and never needs its
+// own copy of the full WMO table. Unrecognized codes fall back to "cloudy"
+// (a safe, unremarkable default) rather than guessing something more
+// specific that might be wrong.
+function weatherCategory(code) {
+  if (code === 0 || code === 1) return 0;  // clear sky / mainly clear
+  if (code === 2) return 1;                // partly cloudy
+  if (code === 3) return 2;                // overcast
+  if (code === 45 || code === 48) return 3; // fog / rime fog
+  if ([51, 53, 55, 56, 57].includes(code)) return 4;         // drizzle (incl. freezing)
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return 5; // rain + rain showers (incl. freezing)
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return 6;     // snow + snow showers
+  if ([95, 96, 99].includes(code)) return 7;                 // thunderstorm (+ hail)
+  return 2;
 }
 
 async function getTempFAt7am(date) {
@@ -93,17 +126,45 @@ async function getTempFAt7am(date) {
 // weather display working while the Pi itself is offline (there's no such
 // thing as offline weather, but "last known reading" degrades gracefully
 // instead of the dial hanging on a fetch or showing nothing).
-let cachedOutdoor = { tempF: null, fetchedAt: 0 };
+// weatherCategory: see getHourlyForecast()'s own comment above.
+// rainHour: hour-of-day (0-23) the FIRST hour still remaining TODAY crosses
+// RAIN_PROBABILITY_THRESHOLD, or null if nothing today does — deliberately
+// never looks into tomorrow, matching what "will it rain today" actually
+// means asked at any hour, including late evening.
+// forecast: up to 3 entries, [{ hoursAhead: 3|6|9, tempF, weatherCategory }],
+// computed relative to whenever this last refreshed — a few hours stale
+// during a real Pi/internet outage the same way tempF already tolerates.
+let cachedOutdoor = { tempF: null, weatherCategory: 2, fetchedAt: 0, rainHour: null, forecast: [] };
 const OUTDOOR_CACHE_MAX_AGE_MS = 2 * 60 * 60 * 1000; // stale past this, but still shown (flagged stale)
+const RAIN_PROBABILITY_THRESHOLD = 40; // % — below this, today doesn't get flagged as a rain day
+
+function hourKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}:00`;
+}
 
 async function refreshOutdoorCacheOnce() {
   const now = new Date();
-  const { times, temps } = await getHourlyForecast(now);
-  const target = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T${String(now.getHours()).padStart(2, '0')}:00`;
-  const idx = times.indexOf(target);
-  if (idx !== -1) {
-    cachedOutdoor = { tempF: temps[idx], fetchedAt: Date.now() };
+  // 2 days, not 1 — see getHourlyForecast()'s param comment: a +9h point
+  // requested in the evening can land after midnight.
+  const { times, temps, codes, precipProbs } = await getHourlyForecast(now, 2);
+  const nowIdx = times.indexOf(hourKey(now));
+  if (nowIdx === -1) return; // API didn't have this exact hour — leave the last known cache alone rather than clobber it with nothing
+
+  const forecast = [3, 6, 9].map(hoursAhead => {
+    const idx = times.indexOf(hourKey(new Date(now.getTime() + hoursAhead * 60 * 60 * 1000)));
+    return idx === -1 ? null : { hoursAhead, tempF: temps[idx], weatherCategory: weatherCategory(codes[idx]) };
+  }).filter(Boolean);
+
+  let rainHour = null;
+  const todayStr = hourKey(now).slice(0, 10);
+  for (let i = nowIdx; i < times.length && times[i].startsWith(todayStr); i++) {
+    if ((precipProbs[i] ?? 0) >= RAIN_PROBABILITY_THRESHOLD) {
+      rainHour = new Date(times[i]).getHours();
+      break;
+    }
   }
+
+  cachedOutdoor = { tempF: temps[nowIdx], weatherCategory: weatherCategory(codes[nowIdx]), fetchedAt: Date.now(), rainHour, forecast };
 }
 
 // Real-world evidence: this reliably failed with 503s every single hour,
@@ -130,11 +191,17 @@ async function refreshOutdoorCache() {
   }
 }
 
-// { tempF, stale } — tempF is null only if we've never once successfully
-// fetched since boot; stale means "still the last real reading, just old."
+// tempF is null only if we've never once successfully fetched since boot;
+// stale means "still the last real reading, just old." weatherCategory/
+// rainHour/forecast — see cachedOutdoor's own comment above for what each
+// means; they share tempF's same staleness rather than getting their own,
+// since they all come from the same refresh.
 function getCachedOutdoorConditions() {
   return {
     tempF: cachedOutdoor.tempF,
+    weatherCategory: cachedOutdoor.weatherCategory,
+    rainHour: cachedOutdoor.rainHour,
+    forecast: cachedOutdoor.forecast,
     stale: cachedOutdoor.tempF === null || (Date.now() - cachedOutdoor.fetchedAt) > OUTDOOR_CACHE_MAX_AGE_MS,
   };
 }

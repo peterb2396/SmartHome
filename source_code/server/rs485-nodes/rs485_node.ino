@@ -345,7 +345,7 @@ const uint8_t CMD_LOG_LINE = 0x87;
 // regardless of value. Must still match dial_node.ino's own DIAL_I2C_ADDR
 // constant exactly.
 const uint8_t DIAL_I2C_ADDR = 0x42;
-const uint8_t DIAL_PUSH_LEN = 27;  // must match rs485.js's POLL_DIAL payload size
+const uint8_t DIAL_PUSH_LEN = 48;  // must match rs485.js's POLL_DIAL payload size
 const uint8_t DIAL_REPLY_LEN = 8;  // must match rs485.js's DIAL_STATE payload size — the RS485-facing frame, NEVER grows
 
 // The i2c1 exchange carries more than the RS485 frame does — see this

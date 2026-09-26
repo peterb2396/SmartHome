@@ -110,7 +110,7 @@
  *    — see that file's header for the authoritative spec, and its "SCD41-
  *    on-the-dial-cable relay" section for what's appended after the
  *    original 8-byte reply below) ─────────────────────────────────────
- * Push (RP2040 write, 27B): targetF, currentF, humidity, co2, outdoorF
+ * Push (RP2040 write, 48B): targetF, currentF, humidity, co2, outdoorF
  * (5x float32) + flags (1B: bit0 callingHeat, bit1 callingCool, bit2
  * safetyActive, bit3 weatherStale, bit4 spotifyEnabled) + hour, minute
  * (1B each) + volumePercent, activeSource (1B each: 0=off,1=spotify,
@@ -120,6 +120,14 @@
  * here; this dial has no say in which input wins. faultCount/
  * maintenanceDueCount are plain counts for an ambient badge — this dial
  * never renders fault/maintenance TEXT, just flags "go check the app."
+ * Bytes 27-47 (Clock/weather screen): weekday/month/day (1B each),
+ * weatherCategory (1B: 0=clear,1=partlyCloudy,2=cloudy,3=fog,4=drizzle,
+ * 5=rain,6=snow,7=thunderstorm — see rs485.js's astro.js weatherCategory()
+ * for the WMO-code mapping this simplifies), rainHour (1B: hour-of-day
+ * rain first expected TODAY, 255=none), forecastValidMask (1B: bit0=+3h
+ * point present, bit1=+6h, bit2=+9h), then 3x 5B forecast points
+ * (+3h/+6h/+9h in order: tempF float32 + weatherCategory 1B) — see
+ * rs485.js's POLL_DIAL header for the authoritative byte-by-byte spec.
  *
  * Reply (RP2040 read, 8B): mode (1B: 0=thermostat, 1=sound) + newTargetF
  * (float32) + changed (1B) + tapEvent (1B) + newVolumePercent (1B).
@@ -174,7 +182,7 @@ const char* OTA_SERVER_HOST = "server.153home.online"; // same host the rest of 
 // the Console's firmware panel — see server/services/firmwareUpdate.js's
 // getLatestDialFirmware() for the exact naming convention this is
 // compared against.
-const char* FIRMWARE_VERSION = "1.0.3";
+const char* FIRMWARE_VERSION = "1.0.5";
 const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60 * 60 * 1000; // every 6 hours
 const unsigned long OTA_FIRST_CHECK_DELAY_MS = 30000; // wait until well after boot — see checkForOTA()'s comment on why this blocks loop()
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000; // don't hang indefinitely if WiFi's unavailable
@@ -201,7 +209,7 @@ const int ENCODER_PIN_B = 4;
 // link, over the SAME Wire (I2C_SDA_PIN/I2C_SCL_PIN above) already used
 // for touch/PCF8574, not a second bus.
 const uint8_t DIAL_I2C_ADDR = 0x42; // MUST match rs485_node.ino's DIAL_I2C_ADDR
-const uint8_t DIAL_PUSH_LEN = 27;   // MUST match rs485.js's POLL_DIAL payload size
+const uint8_t DIAL_PUSH_LEN = 48;   // MUST match rs485.js's POLL_DIAL payload size
 
 // The i2c1 exchange with the RP2040 carries more than what goes out over
 // RS485 — see rs485_node.ino's header ("SCD41-on-the-dial-cable relay").
@@ -373,6 +381,15 @@ struct DialState {
   bool spotifyEnabled = false; // this dial's own optimistic copy — see onTap()'s SCREEN_SOUND case
   uint8_t faultCount = 0;
   uint8_t maintenanceDueCount = 0;
+  // ── Clock/weather screen — see rs485.js's POLL_DIAL header for the exact
+  // byte layout this all comes from (bytes 27-47).
+  uint8_t weekday = 0; // 0=Sunday..6=Saturday
+  uint8_t month = 1, day = 1;
+  uint8_t weatherCategory = 2; // see WEATHER_ICON_* constants below
+  uint8_t rainHour = 255;      // 255 = no rain expected today
+  uint8_t forecastValidMask = 0;
+  float forecastTempF[3] = { 0, 0, 0 };       // index 0=+3h, 1=+6h, 2=+9h
+  uint8_t forecastCategory[3] = { 2, 2, 2 };
 } state;
 
 bool pendingChange = false;   // set when the encoder has moved something since the last push
@@ -448,7 +465,8 @@ Screen screenForMenuIndex(int index) {
 // ── Dial bridge: push in, reply out (this board now MASTERS this link —
 // see this file's header) ───────────────────────────────────────────────
 // Parses a push straight into `state` — no protocol translation, this is
-// the exact same 27B layout that used to arrive over RS485 directly.
+// the exact same 48B layout that used to arrive over RS485 directly (see
+// this file's header for the full byte-by-byte spec).
 void applyPush(const uint8_t* p, uint8_t len) {
   if (len < DIAL_PUSH_LEN) return;
   // memcpy, not a pointer cast — `p` isn't guaranteed 4-byte aligned, and
@@ -470,6 +488,49 @@ void applyPush(const uint8_t* p, uint8_t len) {
   state.faultCount = p[25];
   state.maintenanceDueCount = p[26];
 
+  // Clock/weather screen — see rs485.js's POLL_DIAL header for the byte
+  // layout (bytes 27-47). Unconditional, same as everything else above —
+  // only targetF/volumePercent/spotifyEnabled below are grace-gated.
+  state.weekday = p[27];
+  state.month = p[28];
+  state.day = p[29];
+  state.weatherCategory = p[30];
+  state.rainHour = p[31];
+  state.forecastValidMask = p[32];
+  for (uint8_t i = 0; i < 3; i++) {
+    memcpy(&state.forecastTempF[i], p + 33 + i * 5, 4);
+    state.forecastCategory[i] = p[33 + i * 5 + 4];
+  }
+
+  // Real production evidence (2026-09-26): once DIAL_SWEEP_GAP_MS grew to
+  // match the 10s sensor cadence, dial edits stopped reaching the server
+  // at all — turning the knob did nothing on the web app or the relay.
+  // Root cause: pendingChange/pendingTapEvent used to be cleared
+  // unconditionally in buildReply(), every RP2040_POLL_INTERVAL_MS (20ms,
+  // unaffected by the RS485 slowdown — see that constant's own comment).
+  // That was harmless when the Pi's own poll ran just as often (~every
+  // 20-120ms, it would almost always catch a `changed=1` reply before the
+  // next i2c1 exchange cleared it back to 0). At a 10s Pi-side cadence,
+  // that one 20ms-wide pulse has roughly a 0.2% chance of still being set
+  // whenever the Pi actually asks — meaning it was cleared and gone
+  // before the Pi could ever see it, virtually every time. Fixed below:
+  // pendingChange/pendingTapEvent are no longer cleared in buildReply() at
+  // all — see there — only here, once there's actually been time (or,
+  // for the one truly non-idempotent case, real proof) that the Pi has
+  // had a chance to see it.
+  if (pendingTapEvent == 3 && (bool)(flags & 0x10) == state.spotifyEnabled) {
+    // toggleSpotifyEnabled specifically can't just wait out the grace
+    // window like everything else below — the server TOGGLES on every
+    // sighting of this tapEvent, so leaving it set for the whole window
+    // (which the Pi's 10s poll could catch more than once inside of) would
+    // flip it, then flip it back, on its own, moments after a real tap.
+    // The push already carries spotifyEnabled — once it echoes back the
+    // same value this dial itself is showing, that's direct proof the
+    // server has already applied the toggle, so it's safe to clear here
+    // immediately rather than waiting on the timer.
+    pendingTapEvent = 0;
+  }
+
   // targetF/volumePercent/spotifyEnabled are the fields a person can
   // change locally (encoder turn, arc drag, the Zone On/Off button) — see
   // PUSH_OVERRIDE_GRACE_MS's comment for why this guard exists and what it
@@ -480,6 +541,18 @@ void applyPush(const uint8_t* p, uint8_t len) {
     memcpy(&state.targetF, p + 0, 4);
     state.volumePercent = p[23];
     state.spotifyEnabled = flags & 0x10;
+    // Same window that allows a push to start overwriting local edits
+    // again is also comfortably past due for pendingChange/any other
+    // pendingTapEvent to have been relayed to the Pi at least once (its
+    // poll cadence, rs485.js's DIAL_SWEEP_GAP_MS, is well under this
+    // window) — safe to drop here. Every other tapEvent value is either
+    // never acted on server-side at all (wake/menuSelect/returnToMenu —
+    // purely local navigation) or idempotent if it somehow gets seen more
+    // than once (markMaintenanceDone just re-completes already-done
+    // tasks, a no-op) — toggleSpotifyEnabled is the only one that needed
+    // the special ack-based handling above instead of this.
+    pendingChange = false;
+    pendingTapEvent = 0;
   }
 }
 
@@ -494,8 +567,10 @@ void buildReply() {
   replyBuffer[5] = pendingChange ? 1 : 0;
   replyBuffer[6] = pendingTapEvent;
   replyBuffer[7] = state.volumePercent;
-  pendingChange = false;
-  pendingTapEvent = 0;
+  // NOT cleared here anymore — see applyPush()'s comment. Clearing on
+  // every 20ms reply made this pulse invisible to the Pi's now much
+  // slower (10s) poll; both are cleared there instead, once the Pi's
+  // actually had a real chance to see them.
 
   // SCD41-on-the-dial-cable relay — see this file's header and
   // rs485_node.ino's. Whatever readScd41() last actually measured, not
@@ -887,43 +962,238 @@ void showIdleScreen() {
   lv_scr_load(screenIdle);
 }
 
+// ── Weather icons ────────────────────────────────────────────────────────
+// Simple flat glyphs built entirely from basic shapes (circles/rounded
+// rects) — no image assets or custom fonts needed, matching this dial's
+// existing "pure programmatic LVGL widgets" build (same approach as every
+// other screen here). category is astro.js's own small icon enum (0-7 —
+// see rs485.js's POLL_DIAL header for the full list); this is the ONE
+// place that needs to know how to actually DRAW each of those 8 values.
+// Draws into a size x size invisible box aligned relative to `parent`'s
+// center — layout untested against the real panel yet, tune spacing
+// during bring-up like every other pixel value in this file.
+lv_obj_t* drawWeatherIcon(lv_obj_t* parent, uint8_t category, int size, int xOfs, int yOfs) {
+  lv_obj_t* box = lv_obj_create(parent);
+  lv_obj_set_size(box, size, size);
+  lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(box, 0, 0);
+  lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_align(box, LV_ALIGN_CENTER, xOfs, yOfs);
+
+  lv_color_t sunColor = lv_color_hex(0xF2B84B);
+  lv_color_t lightCloud = lv_color_hex(0xD9D0BE);  // category 1 (partly cloudy) — closer to the sun, kept lighter
+  lv_color_t darkCloud  = lv_color_hex(0xA69C89);  // every other cloud-bearing category — overcast/precip/storm
+  bool hasSun = (category == 0 || category == 1);
+  bool hasCloud = (category != 0);
+  lv_color_t cloudColor = (category == 1) ? lightCloud : darkCloud;
+
+  if (hasSun) {
+    int sunSize = hasCloud ? (int)(size * 0.42f) : (int)(size * 0.62f);
+    lv_obj_t* sun = lv_obj_create(box);
+    lv_obj_set_size(sun, sunSize, sunSize);
+    lv_obj_set_style_radius(sun, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(sun, sunColor, 0);
+    lv_obj_set_style_border_width(sun, 0, 0);
+    lv_obj_clear_flag(sun, LV_OBJ_FLAG_SCROLLABLE);
+    int sunOfs = hasCloud ? (int)(size * -0.18f) : 0;
+    lv_obj_align(sun, LV_ALIGN_CENTER, sunOfs, sunOfs);
+  }
+
+  if (hasCloud) {
+    int bodyW = (int)(size * 0.7f), bodyH = (int)(size * 0.38f);
+    int yBase = (int)(size * 0.08f);
+    lv_obj_t* body = lv_obj_create(box);
+    lv_obj_set_size(body, bodyW, bodyH);
+    lv_obj_set_style_radius(body, bodyH / 2, 0);
+    lv_obj_set_style_bg_color(body, cloudColor, 0);
+    lv_obj_set_style_border_width(body, 0, 0);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(body, LV_ALIGN_CENTER, 0, yBase);
+
+    // Two overlapping circles as the cloud's "bumps" — a common simplified
+    // cloud-silhouette trick, no custom path drawing needed.
+    int bumpL = (int)(size * 0.34f), bumpR = (int)(size * 0.29f);
+    lv_obj_t* leftBump = lv_obj_create(box);
+    lv_obj_set_size(leftBump, bumpL, bumpL);
+    lv_obj_set_style_radius(leftBump, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(leftBump, cloudColor, 0);
+    lv_obj_set_style_border_width(leftBump, 0, 0);
+    lv_obj_clear_flag(leftBump, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(leftBump, LV_ALIGN_CENTER, (int)(-bodyW * 0.22f), yBase - (int)(bodyH * 0.45f));
+
+    lv_obj_t* rightBump = lv_obj_create(box);
+    lv_obj_set_size(rightBump, bumpR, bumpR);
+    lv_obj_set_style_radius(rightBump, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(rightBump, cloudColor, 0);
+    lv_obj_set_style_border_width(rightBump, 0, 0);
+    lv_obj_clear_flag(rightBump, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(rightBump, LV_ALIGN_CENTER, (int)(bodyW * 0.2f), yBase - (int)(bodyH * 0.5f));
+  }
+
+  if (category == 3) { // fog — 3 thin horizontal bars, no cloud shape at all
+    for (int i = 0; i < 3; i++) {
+      lv_obj_t* bar = lv_obj_create(box);
+      lv_obj_set_size(bar, (int)(size * (0.75f - i * 0.12f)), (int)(size * 0.09f));
+      lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_color(bar, darkCloud, 0);
+      lv_obj_set_style_border_width(bar, 0, 0);
+      lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_align(bar, LV_ALIGN_CENTER, 0, (int)(size * (0.12f * i - 0.1f)));
+    }
+  } else if (category == 4 || category == 5) { // drizzle (2 short drops) / rain (3 longer drops)
+    int count = (category == 5) ? 3 : 2;
+    int dropH = (category == 5) ? (int)(size * 0.22f) : (int)(size * 0.14f);
+    for (int i = 0; i < count; i++) {
+      lv_obj_t* drop = lv_obj_create(box);
+      lv_obj_set_size(drop, (int)(size * 0.07f), dropH);
+      lv_obj_set_style_radius(drop, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_color(drop, COLOR_ACCENT, 0);
+      lv_obj_set_style_border_width(drop, 0, 0);
+      lv_obj_clear_flag(drop, LV_OBJ_FLAG_SCROLLABLE);
+      int spread = (int)(size * 0.28f);
+      int x = (count == 3) ? (i - 1) * spread : (i == 0 ? -1 : 1) * (int)(spread * 0.6f);
+      lv_obj_align(drop, LV_ALIGN_CENTER, x, (int)(size * 0.36f));
+    }
+  } else if (category == 6) { // snow — dots instead of drops
+    for (int i = 0; i < 3; i++) {
+      int fs = (int)(size * 0.09f);
+      lv_obj_t* flake = lv_obj_create(box);
+      lv_obj_set_size(flake, fs, fs);
+      lv_obj_set_style_radius(flake, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_color(flake, lv_color_white(), 0);
+      lv_obj_set_style_border_width(flake, 0, 0);
+      lv_obj_clear_flag(flake, LV_OBJ_FLAG_SCROLLABLE);
+      int spread = (int)(size * 0.28f);
+      lv_obj_align(flake, LV_ALIGN_CENTER, (i - 1) * spread, (int)(size * (0.34f + (i % 2) * 0.12f)));
+    }
+  } else if (category == 7) { // thunderstorm — a single bolt-colored bar under a dark cloud
+    lv_obj_t* bolt = lv_obj_create(box);
+    lv_obj_set_size(bolt, (int)(size * 0.1f), (int)(size * 0.28f));
+    lv_obj_set_style_radius(bolt, (int)(size * 0.03f), 0);
+    lv_obj_set_style_bg_color(bolt, COLOR_WARNING, 0);
+    lv_obj_set_style_border_width(bolt, 0, 0);
+    lv_obj_clear_flag(bolt, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(bolt, LV_ALIGN_CENTER, 0, (int)(size * 0.36f));
+  }
+
+  return box;
+}
+
+// 12-hour, not military — hour arrives as 0-23 from the server. Shared by
+// the clock time and the forecast strip's hour labels below.
+int hour12Of(uint8_t h) { int h12 = h % 12; return h12 == 0 ? 12 : h12; }
+const char* ampmOf(uint8_t h) { return h < 12 ? "AM" : "PM"; }
+
+// Redesigned per explicit ask: date on its own line, current conditions
+// with an icon + short description, whether/when rain's expected TODAY,
+// and a 3-point (+3h/+6h/+9h) forecast strip so a glance answers "what
+// should I wear." All positions below are a best-effort layout against
+// this panel's known 480x480 round geometry (chord width shrinks the
+// farther a row sits from vertical center) — unverified against the real
+// screen yet, tune during bring-up like every other pixel value in this
+// file.
 void showClockScreen() {
   lv_obj_clean(screenClock);
   lv_obj_set_style_bg_color(screenClock, COLOR_BG, 0);
 
-  lv_obj_t* card = lv_obj_create(screenClock);
-  lv_obj_set_size(card, 340, 340);
-  lv_obj_set_style_radius(card, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(card, COLOR_CARD, 0);
-  lv_obj_set_style_border_width(card, 0, 0);
-  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
+  static const char* WEEKDAYS[7] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+  static const char* CONDITIONS[8] = { "Clear", "Partly Cloudy", "Cloudy", "Foggy", "Drizzle", "Rain", "Snow", "Thunderstorms" };
 
-  // 12-hour, not military — state.hour arrives as 0-23 from the server.
-  int hour12 = state.hour % 12;
-  if (hour12 == 0) hour12 = 12; // 0 (midnight) and 12 (noon) both display as 12, per normal 12-hour convention
-  const char* ampm = state.hour < 12 ? "AM" : "PM";
+  char dateStr[24];
+  snprintf(dateStr, sizeof(dateStr), "%s, %d/%d", WEEKDAYS[state.weekday % 7], state.month, state.day);
+  lv_obj_t* dateLabel = lv_label_create(screenClock);
+  lv_label_set_text(dateLabel, dateStr);
+  lv_obj_set_style_text_color(dateLabel, COLOR_MUTED, 0);
+  lv_obj_set_style_text_font(dateLabel, &lv_font_montserrat_14, 0);
+  lv_obj_align(dateLabel, LV_ALIGN_CENTER, 0, -195);
+
   char timeStr[12];
-  snprintf(timeStr, sizeof(timeStr), "%d:%02d %s", hour12, state.minute, ampm);
+  snprintf(timeStr, sizeof(timeStr), "%d:%02d %s", hour12Of(state.hour), state.minute, ampmOf(state.hour));
   lv_obj_t* time = lv_label_create(screenClock);
   lv_label_set_text(time, timeStr);
   lv_obj_set_style_text_color(time, COLOR_TEXT, 0);
   lv_obj_set_style_text_font(time, &lv_font_montserrat_48, 0);
-  lv_obj_align(time, LV_ALIGN_CENTER, 0, -30);
+  lv_obj_align(time, LV_ALIGN_CENTER, 0, -145);
 
   // "Stale/no data" only ever means one thing on a bench-tested dial with
   // no RP2040 companion node wired up yet: it's never received a real
-  // POLL_DIAL push, so outdoorF/weatherStale are still at their power-on
-  // defaults — not a bug, just nothing to show yet. Worded plainly rather
-  // than a bare "-- (stale)", which read as an unexplained error.
-  char weatherStr[28];
-  if (state.weatherStale) snprintf(weatherStr, sizeof(weatherStr), "Weather: no data yet");
-  else snprintf(weatherStr, sizeof(weatherStr), "%.0f\xC2\xB0 outside", state.outdoorF);
-  lv_obj_t* weather = lv_label_create(screenClock);
-  lv_label_set_text(weather, weatherStr);
-  lv_obj_set_style_text_color(weather, COLOR_MUTED, 0);
-  lv_obj_set_style_text_font(weather, &lv_font_montserrat_28, 0);
-  lv_obj_align(weather, LV_ALIGN_CENTER, 0, 30);
+  // POLL_DIAL push, so every weather field is still at its power-on
+  // default — not a bug, just nothing real to show yet. Rather than
+  // render a full row of fake 0°s, fall back to one plain line, same
+  // spirit as the original screen's own stale handling.
+  if (state.weatherStale) {
+    lv_obj_t* weather = lv_label_create(screenClock);
+    lv_label_set_text(weather, "Weather: no data yet");
+    lv_obj_set_style_text_color(weather, COLOR_MUTED, 0);
+    lv_obj_set_style_text_font(weather, &lv_font_montserrat_28, 0);
+    lv_obj_align(weather, LV_ALIGN_CENTER, 0, -30);
+    drawStatusBadge(screenClock);
+    lv_scr_load(screenClock);
+    return;
+  }
+
+  // Current conditions — icon on the left, big temp + short description
+  // stacked to its right, as one visual group.
+  drawWeatherIcon(screenClock, state.weatherCategory, 64, -80, -55);
+  char nowTempStr[8];
+  snprintf(nowTempStr, sizeof(nowTempStr), "%.0f\xC2\xB0", state.outdoorF);
+  lv_obj_t* nowTemp = lv_label_create(screenClock);
+  lv_label_set_text(nowTemp, nowTempStr);
+  lv_obj_set_style_text_color(nowTemp, COLOR_TEXT, 0);
+  lv_obj_set_style_text_font(nowTemp, &lv_font_montserrat_48, 0);
+  lv_obj_align(nowTemp, LV_ALIGN_CENTER, 5, -70);
+
+  lv_obj_t* nowCondition = lv_label_create(screenClock);
+  lv_label_set_text(nowCondition, CONDITIONS[state.weatherCategory % 8]);
+  lv_obj_set_style_text_color(nowCondition, COLOR_MUTED, 0);
+  lv_obj_set_style_text_font(nowCondition, &lv_font_montserrat_14, 0);
+  lv_obj_align(nowCondition, LV_ALIGN_CENTER, 5, -35);
+
+  // Rain today — the one thing worth a full sentence rather than an icon,
+  // since "when" is the actual useful part and an icon alone can't say that.
+  char rainStr[32];
+  if (state.rainHour == 255) {
+    snprintf(rainStr, sizeof(rainStr), "No rain expected today");
+  } else {
+    snprintf(rainStr, sizeof(rainStr), "Rain expected ~%d %s", hour12Of(state.rainHour), ampmOf(state.rainHour));
+  }
+  lv_obj_t* rainLabel = lv_label_create(screenClock);
+  lv_label_set_text(rainLabel, rainStr);
+  lv_obj_set_style_text_color(rainLabel, state.rainHour == 255 ? COLOR_MUTED : COLOR_ACCENT, 0);
+  lv_obj_set_style_text_font(rainLabel, &lv_font_montserrat_14, 0);
+  lv_obj_align(rainLabel, LV_ALIGN_CENTER, 0, 10);
+
+  // 3-point forecast strip (+3h/+6h/+9h) — hour label on top, icon in the
+  // middle, temp on the bottom, one column per point. Column x-spread
+  // (±130px) chosen to stay well inside this row's chord width at y~150
+  // (~366px per the panel's 480px round geometry), not just centered
+  // blindly.
+  for (int i = 0; i < 3; i++) {
+    int hoursAhead = (i + 1) * 3; // 3, 6, 9
+    int colX = (i - 1) * 130;
+    bool valid = state.forecastValidMask & (1 << i);
+
+    uint8_t futureHour = (state.hour + hoursAhead) % 24;
+    char hourLabel[8];
+    snprintf(hourLabel, sizeof(hourLabel), "%d %s", hour12Of(futureHour), ampmOf(futureHour));
+    lv_obj_t* hourLbl = lv_label_create(screenClock);
+    lv_label_set_text(hourLbl, hourLabel);
+    lv_obj_set_style_text_color(hourLbl, COLOR_MUTED, 0);
+    lv_obj_set_style_text_font(hourLbl, &lv_font_montserrat_14, 0);
+    lv_obj_align(hourLbl, LV_ALIGN_CENTER, colX, 72);
+
+    drawWeatherIcon(screenClock, valid ? state.forecastCategory[i] : 2, 44, colX, 112);
+
+    char tempLbl[8];
+    if (valid) snprintf(tempLbl, sizeof(tempLbl), "%.0f\xC2\xB0", state.forecastTempF[i]);
+    else snprintf(tempLbl, sizeof(tempLbl), "--");
+    lv_obj_t* temp = lv_label_create(screenClock);
+    lv_label_set_text(temp, tempLbl);
+    lv_obj_set_style_text_color(temp, COLOR_TEXT, 0);
+    lv_obj_set_style_text_font(temp, &lv_font_montserrat_14, 0);
+    lv_obj_align(temp, LV_ALIGN_CENTER, colX, 155);
+  }
 
   drawStatusBadge(screenClock);
   lv_scr_load(screenClock);
