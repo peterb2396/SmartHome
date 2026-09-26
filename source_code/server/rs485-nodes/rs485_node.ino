@@ -1001,7 +1001,7 @@ uint8_t rxLen = 0;
 // master, even though it's still receiving them electrically. Two checks:
 // an implausible len drops the sync byte immediately, a plausible-but-
 // never-completing one times out.
-const uint8_t MAX_PAYLOAD_LEN = 40; // largest real payload today is FW_CHUNK's 34B (2B seq + 32B data) — matches rs485.js's MAX_PAYLOAD_LEN
+const uint8_t MAX_PAYLOAD_LEN = 60; // largest real payload today is POLL_DIAL's 48B (grew from 27B for the Clock/weather screen redesign) — matches rs485.js's MAX_PAYLOAD_LEN
 const unsigned long FRAME_STALL_MS = 500; // a full 30B frame takes ~30ms at 9600 baud — generous margin
 bool awaitingFrame = false;
 unsigned long awaitingFrameSince = 0;

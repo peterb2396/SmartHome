@@ -829,6 +829,11 @@ function handleFrame(addr, cmd, payload) {
 // stopped answering, and when — instead of just observing "it stopped
 // working" with no record of where.
 let consecutiveMisses = new Map(); // busAddress -> count, reset to 0 on any response
+// Separate from consecutiveMisses above on purpose — see pollAllDials()'s
+// own comment on why sharing one counter between the sensor poll and the
+// dial poll would let one's routine successes mask the other's sustained
+// failures.
+let dialConsecutiveMisses = new Map();
 
 // A single node going silent while the bus/port itself is fine (dongle
 // still connected, other nodes still answering) is a DIFFERENT failure
@@ -1261,17 +1266,39 @@ async function pollAllDials(getConfiguredNodes) {
     const release = await acquireBusLock();
     writeFrame(buildFrame(node.busAddress, CMD.POLL_DIAL, buildDialPushPayload(zone, outdoor, soundZone, new Date(), faultCount, maintenanceDueCount)));
 
+    // Real production evidence (2026-09-26): this exchange used to fail
+    // completely SILENTLY on timeout — no warning, no miss count, nothing —
+    // unlike pollNode()'s explicit "NO RESPONSE" tracking below. A real bug
+    // (the RP2040's own MAX_PAYLOAD_LEN not raised alongside the 48B
+    // payload — see rs485_node.ino) broke every single POLL_DIAL exchange
+    // for days with the Console showing a spotless log the whole time,
+    // because there was nowhere for a failure here to ever show up. Tracked
+    // in its own map, not pollNode()'s shared `consecutiveMisses` — this is
+    // a DIFFERENT exchange to the same address, and folding the two
+    // together would have the sensor poll's own routine successes
+    // constantly resetting a genuine, sustained dial-poll failure back to
+    // "1 in a row," masking exactly the kind of silent, persistent break
+    // this is here to catch.
+    const label = `addr=${node.busAddress}${node.zoneId ? ` zone=${node.zoneId}` : ''} (dial)`;
     const reply = await new Promise((resolve) => {
       const timeout = setTimeout(() => {
         pendingDialResolvers.delete(node.busAddress);
         pollingAddresses.delete(node.busAddress);
         release();
+        const misses = (dialConsecutiveMisses.get(node.busAddress) || 0) + 1;
+        dialConsecutiveMisses.set(node.busAddress, misses);
+        if (shouldLogMiss(misses)) {
+          console.warn(`[RS485] Dial poll ${label} — NO RESPONSE (timed out after ${DIAL_POLL_RESPONSE_TIMEOUT_MS}ms, ${misses} in a row)`);
+        }
         resolve(null);
       }, DIAL_POLL_RESPONSE_TIMEOUT_MS);
       pendingDialResolvers.set(node.busAddress, (state) => {
         clearTimeout(timeout);
         pollingAddresses.delete(node.busAddress);
         release();
+        const priorMisses = dialConsecutiveMisses.get(node.busAddress) || 0;
+        if (priorMisses > 0) console.log(`[RS485] Dial poll ${label} — RECOVERED after ${priorMisses} consecutive misses`);
+        dialConsecutiveMisses.set(node.busAddress, 0);
         resolve(state);
       });
     });
