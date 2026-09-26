@@ -410,12 +410,44 @@ let pendingFwResolvers = new Map(); // address -> resolve fn, for the current in
 let pendingLogResolvers = new Map(); // address -> resolve fn, for the current in-flight GET_LOG
 
 // A combined sensor+dial node (nodeRegistry.js's `hasDial`) answers both
-// pollAll()'s 10s sensor sweep and pollAllDials()'s ~20ms dial sweep on the
-// SAME bus address — since RS485 only allows one outstanding request at a
-// time, both sweeps check this set before writing to an address and skip
-// it for this pass (not wait) if it's already mid-exchange with the other
-// sweep. See this file's header ("Dial nodes") for the full reasoning.
+// pollAll()'s 10s sensor sweep and pollAllDials()'s dial sweep on the SAME
+// bus address — since RS485 only allows one outstanding request at a time,
+// both sweeps check this set before writing to an address and skip it for
+// this pass (not wait) if it's already mid-exchange with the other sweep.
+// See this file's header ("Dial nodes") for the full reasoning. This is a
+// fast, cheap SKIP heuristic only — see acquireBusLock() just below for
+// the actual hard guarantee this alone was never enough to provide.
 const pollingAddresses = new Set();
+
+// ── Global bus mutex ─────────────────────────────────────────────────────
+// RS485 is one shared half-duplex wire — only one exchange (one write, one
+// awaited reply) may ever be in flight at a time, full stop, regardless of
+// which node it's with. pollingAddresses above only ever prevented two
+// exchanges to the SAME address from overlapping. It did nothing to stop
+// pollAll()'s sensor sweep, pollAllDials()'s dial sweep, pollNodeLog()'s
+// debug-log sweep, and flashFirmware() — four independent, self-scheduling
+// async chains — from each writing a frame to a DIFFERENT address while
+// one of the others was still waiting on a reply. Two transmissions (or a
+// transmission stepping on an in-flight reply) sharing one physical wire
+// at once looks exactly like noise on the receiving end — indistinguishable
+// from the CRC-mismatch/no-response symptoms this whole system has fought,
+// via a mechanism nothing about grounding, termination, or adapter
+// isolation could ever have fixed, since it never was a signal-integrity
+// problem to begin with.
+//
+// This is a small FIFO async mutex, the standard "chain of promises"
+// pattern: acquireBusLock() resolves once it's this caller's turn
+// (immediately, if the bus is free) with a `release` function the caller
+// MUST call exactly once — on every resolution path (success, timeout,
+// mock mode) — or every later queued caller waits forever.
+let busLockTail = Promise.resolve();
+function acquireBusLock() {
+  let release;
+  const lockPromise = new Promise((resolve) => { release = resolve; });
+  const acquired = busLockTail.then(() => release);
+  busLockTail = busLockTail.then(() => lockPromise);
+  return acquired;
+}
 
 // ── CRC8 (poly 0x07, matches common Arduino Crc8 implementations) ──────────
 function crc8(bytes) {
@@ -867,20 +899,23 @@ function shouldLogMiss(misses) {
   return misses % 500 === 0;
 }
 
-function pollNode(address, zoneId) {
+async function pollNode(address, zoneId) {
+  if (usingMock) return []; // nothing to poll without real hardware
+  // A hasDial node's address might already be mid-exchange with
+  // pollAllDials()'s dial sweep — skip this node for THIS 10s cycle rather
+  // than queue behind it needlessly. Cheap: it just tries again next
+  // cycle. acquireBusLock() below is what actually guarantees no overlap
+  // with any OTHER address's exchange too, not just this one.
+  if (pollingAddresses.has(address)) return [];
+  pollingAddresses.add(address);
+  const release = await acquireBusLock();
   return new Promise((resolve) => {
-    if (usingMock) return resolve([]); // nothing to poll without real hardware
-    // A hasDial node's address might already be mid-exchange with
-    // pollAllDials()'s dial sweep — skip this node for THIS 10s cycle
-    // rather than risk two outstanding requests on the same half-duplex
-    // bus at once. Cheap: it just tries again next cycle.
-    if (pollingAddresses.has(address)) return resolve([]);
-    pollingAddresses.add(address);
     const label = `addr=${address}${zoneId ? ` zone=${zoneId}` : ''}`;
     const frame = buildFrame(address, CMD.POLL);
     const timeout = setTimeout(() => {
       pendingReportResolvers.delete(address);
       pollingAddresses.delete(address);
+      release();
       const misses = (consecutiveMisses.get(address) || 0) + 1;
       consecutiveMisses.set(address, misses);
       if (shouldLogMiss(misses)) {
@@ -899,6 +934,7 @@ function pollNode(address, zoneId) {
     pendingReportResolvers.set(address, (readings) => {
       clearTimeout(timeout);
       pollingAddresses.delete(address);
+      release();
       // The single most useful line in a long outage: exactly when it
       // ended and how long it ran, logged unconditionally (unlike the
       // routine per-poll success case, which stays silent either way).
@@ -916,10 +952,11 @@ function pollNode(address, zoneId) {
 
 // zoneAudio nodes required lazily, same load-order reasoning as
 // pollAllDials()'s thermostat/astro/sound requires below.
-function pollZoneAudioNode(address, zoneId) {
+async function pollZoneAudioNode(address, zoneId) {
   const soundSvc = require('./sound');
+  if (usingMock) return;
+  const release = await acquireBusLock();
   return new Promise((resolve) => {
-    if (usingMock) return resolve();
     const label = `addr=${address} soundZone=${zoneId}`;
     const { spotifyEnabled, announcementActive, volumePercent } = soundSvc.getZoneAudioPush(zoneId);
     const flags = (spotifyEnabled ? 1 : 0) | (announcementActive ? 2 : 0);
@@ -927,6 +964,7 @@ function pollZoneAudioNode(address, zoneId) {
     const frame = buildFrame(address, CMD.POLL_ZONE_AUDIO, push);
     const timeout = setTimeout(() => {
       pendingZoneAudioResolvers.delete(address);
+      release();
       const misses = (consecutiveMisses.get(address) || 0) + 1;
       consecutiveMisses.set(address, misses);
       if (shouldLogMiss(misses)) {
@@ -937,6 +975,7 @@ function pollZoneAudioNode(address, zoneId) {
     }, ZONE_AUDIO_POLL_RESPONSE_TIMEOUT_MS);
     pendingZoneAudioResolvers.set(address, ({ activeSource }) => {
       clearTimeout(timeout);
+      release();
       const priorMisses = consecutiveMisses.get(address) || 0;
       if (priorMisses > 0) {
         const sourceName = ACTIVE_SOURCE_NAME[activeSource] || 'off';
@@ -956,14 +995,17 @@ function pollZoneAudioNode(address, zoneId) {
 // shape (promise + timeout + pendingFwResolvers) but generic over which
 // frame gets sent, since FW_BEGIN/FW_CHUNK/FW_END are all "send one frame,
 // await one FW_ACK" with different timeouts.
-function fwExchange(address, frame, timeoutMs) {
+async function fwExchange(address, frame, timeoutMs) {
+  const release = await acquireBusLock();
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       pendingFwResolvers.delete(address);
+      release();
       resolve(null);
     }, timeoutMs);
     pendingFwResolvers.set(address, (ack) => {
       clearTimeout(timeout);
+      release();
       resolve(ack);
     });
     writeFrame(frame, true); // OTA traffic is rare and important enough to always log
@@ -1040,13 +1082,16 @@ async function pollNodeLog(getConfiguredNodes) {
 
   if (!pollingAddresses.has(node.busAddress)) {
     pollingAddresses.add(node.busAddress);
+    const release = await acquireBusLock();
     const line = await new Promise((resolve) => {
       const timeout = setTimeout(() => {
         pendingLogResolvers.delete(node.busAddress);
+        release();
         resolve(null);
       }, LOG_POLL_RESPONSE_TIMEOUT_MS);
       pendingLogResolvers.set(node.busAddress, (text) => {
         clearTimeout(timeout);
+        release();
         resolve(text);
       });
       writeFrame(buildFrame(node.busAddress, CMD.GET_LOG));
@@ -1206,26 +1251,27 @@ async function pollAllDials(getConfiguredNodes) {
     // the same half-duplex bus. At matched 10s cadences this just means
     // that node's dial-push waits for the next tick, ~10s later — a rare,
     // harmless one-cycle delay, not a retry loop.
+    if (usingMock) continue;
     if (pollingAddresses.has(node.busAddress)) continue;
 
     const zone = thermostatSvc.getState().zones.find(z => z.id === node.zoneId);
     const outdoor = astroSvc.getCachedOutdoorConditions();
     const soundZone = soundSvc.getState().zones.find(z => z.id === node.soundZoneId);
-    if (!usingMock) {
-      pollingAddresses.add(node.busAddress);
-      writeFrame(buildFrame(node.busAddress, CMD.POLL_DIAL, buildDialPushPayload(zone, outdoor, soundZone, new Date(), faultCount, maintenanceDueCount)));
-    }
+    pollingAddresses.add(node.busAddress);
+    const release = await acquireBusLock();
+    writeFrame(buildFrame(node.busAddress, CMD.POLL_DIAL, buildDialPushPayload(zone, outdoor, soundZone, new Date(), faultCount, maintenanceDueCount)));
 
     const reply = await new Promise((resolve) => {
-      if (usingMock) return resolve(null);
       const timeout = setTimeout(() => {
         pendingDialResolvers.delete(node.busAddress);
         pollingAddresses.delete(node.busAddress);
+        release();
         resolve(null);
       }, DIAL_POLL_RESPONSE_TIMEOUT_MS);
       pendingDialResolvers.set(node.busAddress, (state) => {
         clearTimeout(timeout);
         pollingAddresses.delete(node.busAddress);
+        release();
         resolve(state);
       });
     });
