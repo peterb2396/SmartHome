@@ -93,6 +93,15 @@ export default function ThermoDial({
 
   const toAngle = v => START_ANGLE + (Math.max(min, Math.min(max, v)) - min) / (max - min) * SWEEP;
 
+  // Anchored to the arc's own start/end points (userSpaceOnUse), not the
+  // default bounding-box gradient — a flat rectangular gradient smeared
+  // across a curved 270° arc picks up near-arbitrary colors at each point
+  // along the curve (a "rainbow" look), since the box's corners don't line
+  // up with the arc's actual path. Running the gradient along the chord
+  // between the two real endpoints instead makes it track the visual sweep
+  // cleanly, cool-to-hot, the way it was actually meant to read.
+  const gradStart = polarToXY(cx, cy, r, START_ANGLE);
+  const gradEnd = polarToXY(cx, cy, r, START_ANGLE + SWEEP);
   const trackPath = arcPath(cx, cy, r, START_ANGLE, START_ANGLE + SWEEP);
   const currentAngle = current != null ? toAngle(current) : START_ANGLE;
   const fillPath = arcPath(cx, cy, r, START_ANGLE, currentAngle);
@@ -124,7 +133,7 @@ export default function ThermoDial({
           style={{ touchAction: "none", cursor: dragValue != null ? "grabbing" : "grab" }}
         >
           <defs>
-            <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="0%">
+            <linearGradient id={gradId} gradientUnits="userSpaceOnUse" x1={gradStart.x} y1={gradStart.y} x2={gradEnd.x} y2={gradEnd.y}>
               <stop offset="0%" stopColor="var(--accent)" />
               <stop offset="55%" stopColor="#f59e0b" />
               <stop offset="100%" stopColor="var(--danger)" />

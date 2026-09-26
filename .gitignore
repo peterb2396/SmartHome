@@ -36,3 +36,11 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# uploaded node firmware images (server/services/firmwareUpdate.js) — build
+# artifacts pushed via the Console, not source
+source_code/server/firmware/*.bin
+
+# real WiFi credentials for the dial (server/rs485-nodes/dial_node.ino) —
+# secrets.h.example is the committed template, this exact file is not
+source_code/server/rs485-nodes/secrets.h

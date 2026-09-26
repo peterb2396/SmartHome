@@ -84,17 +84,18 @@
  * even needs to know the protocol exists; the RP2040 handles all of that
  * and just gives the dial a small I2C register interface to read/write.
  *
- * Dial polling still runs on its own much faster loop (pollAllDials(), no
- * fixed sleep beyond each node's own round-trip) than the ordinary 10s
- * sensor pollAll() loop, so turning the physical dial feels instant, not
- * laggy — but since a `hasDial` node's SAME bus address can now be visited
- * by EITHER loop, and RS485 is a shared half-duplex bus where only one
- * request can be outstanding at a time, both loops check a shared
- * per-address busy set (see pollingAddresses below) before writing to an
- * address and simply skip that node for this pass if it's already
- * mid-exchange with the other loop — cheap for the fast dial loop (tries
- * again in DIAL_SWEEP_GAP_MS), and pollAll() only ever needs this once per
- * 10s so a skipped cycle there is a non-issue.
+ * Dial polling runs on its OWN loop (pollAllDials()), separate from the
+ * ordinary sensor pollAll() loop, but at the SAME cadence (DIAL_SWEEP_GAP_MS
+ * == POLL_INTERVAL_MS, both 10s) by explicit choice — see DIAL_SWEEP_GAP_MS's
+ * own comment for why this doesn't cost the physical dial any responsiveness
+ * despite being nowhere near "fast." Since a `hasDial` node's SAME bus
+ * address can now be visited by EITHER loop, and RS485 is a shared
+ * half-duplex bus where only one request can be outstanding at a time, both
+ * loops check a shared per-address busy set (see pollingAddresses below)
+ * before writing to an address and simply skip that node for this pass if
+ * it's already mid-exchange with the other loop — at matched 10s cadences a
+ * skip just means that node's dial-push waits for the next tick, a rare and
+ * harmless one-cycle delay, not the many-times-a-second retry this used to be.
  *
  * POLL_DIAL payload (master→dial, pushes what the dial should display for
  * every screen every cycle, since the dial can switch screens locally
@@ -295,20 +296,23 @@ const DIAL_POLL_RESPONSE_TIMEOUT_MS = 200;
 // Real production evidence, a genuine A/B comparison on the SAME hardware
 // with the SCD41-on-the-dial-cable relay fix already in place both times
 // (see rs485_node.ino's header): at 120ms, RS485 corruption was mild and
-// self-healing (a miss or two, recovered within a poll); reverted to 20ms
-// once, and the very next boot produced a continuous storm (100+
-// consecutive misses, not self-healing) on the SAME Pi. The SCD41 bus-
-// sharing bug was real and worth fixing on its own, but it wasn't the
-// whole story — this adapter/Pi combination (which has also shown at
-// least one thermal-throttle event via `vcgencmd get_throttled`) genuinely
-// can't sustain 20ms back-to-back RS485 round trips reliably, on top of
-// everything else this Pi runs concurrently (camera recording, Spotify,
-// I2C relays). Back to 120ms. Still feels instant to a hand on a physical
-// knob — the real cost of this number is the dial-to-server confirmation
-// round trip for an encoder turn/volume change, which dial_node.ino's
-// PUSH_OVERRIDE_GRACE_MS already guards against regardless of the exact
-// value here, so there's no correctness reason to want this lower.
-const DIAL_SWEEP_GAP_MS = 120;
+// self-healing (a miss or two, recovered within a poll); at 20ms it produced
+// a continuous storm (100+ consecutive misses, not self-healing) on the same
+// Pi/adapter. That whole tuning exercise assumed this loop NEEDED to be fast
+// for the physical dial to feel responsive — it doesn't. The dial applies an
+// encoder turn to its own screen immediately, locally, over its own private
+// i2c1 link to the RP2040 (see dial_node.ino's RP2040_POLL_INTERVAL_MS,
+// which stays fast on purpose) — that link never touches this shared,
+// multi-node RS485 bus at all. This loop's only job is keeping the PI in
+// sync (so setZone()/the relay/the web app see a change), and there's no
+// reason that needs to be fast: matched to the ordinary 10s sensor cadence
+// by explicit request, since every dial-poll exchange here is one more
+// chance for collision/corruption on a bus that's already proven marginal —
+// cutting this from ~500 exchanges/10s down to 1 is a direct, meaningful
+// reduction in bus load for zero loss of felt responsiveness on the dial
+// itself. dial_node.ino's PUSH_OVERRIDE_GRACE_MS is sized off this value
+// (see its own comment) — raise both together if this ever changes again.
+const DIAL_SWEEP_GAP_MS = POLL_INTERVAL_MS;
 const DIAL_MODE = { thermostat: 0, sound: 1 };
 const DIAL_TAP_EVENT = { none: 0, wake: 1, menuSelect: 2, toggleSpotifyEnabled: 3, returnToMenu: 4, markMaintenanceDone: 5 };
 // tapEvent values other than toggleSpotifyEnabled/markMaintenanceDone are
@@ -1107,9 +1111,9 @@ function buildDialPushPayload(zone, outdoor, soundZone, now, faultCount, mainten
 // One full sweep of every configured dial node, applying any change it
 // reports directly via thermostat.js's setZone() — the same function the
 // web app's own zone-target route calls, so a dial's input and the web
-// UI's input go through one identical code path. Runs back-to-back with a
-// small gap (DIAL_SWEEP_GAP_MS), not on a fixed interval timer, so it
-// can't overlap itself if a sweep ever runs long.
+// UI's input go through one identical code path. Reschedules itself after
+// each sweep completes (DIAL_SWEEP_GAP_MS gap), not on a fixed interval
+// timer, so it can't overlap itself if a sweep ever runs long.
 // Takes the same getConfiguredNodes callback init() does (not a resolved
 // array) and re-calls it fresh every sweep — same reasoning as pollAll()
 // above, so a dial added/removed via the Console mid-run is picked up on
@@ -1125,17 +1129,14 @@ async function pollAllDials(getConfiguredNodes) {
   // node pollAll() visits on its own 10s cycle, same bus address.
   const dialNodes = getConfiguredNodes().filter(n => n.hasDial && n.busAddress != null && (n.zoneId || n.soundZoneId));
 
-  // This function reschedules itself every DIAL_SWEEP_GAP_MS (20ms)
-  // forever, regardless of dial count — with zero dials that's 50
-  // no-op ticks/sec, which was already true before fault/maintenance
-  // counts existed. Bail out BEFORE doing any real work (the requires
-  // below, and especially faultsSvc.getFaults()/maintenanceSvc.getState(),
-  // which each walk thermostat/gpio/lutron/bus state) — running those 50
-  // times a second with nothing to send them to is real, continuous
-  // Node event-loop load on a Pi, easily enough to starve the RS485
-  // serial port's own data callback and make sensor polls start timing
-  // out even though bytes are arriving fine at the OS level. Learned this
-  // the hard way — see git history for the incident.
+  // This function reschedules itself every DIAL_SWEEP_GAP_MS forever,
+  // regardless of dial count — with zero dials that's just an occasional
+  // no-op tick now that the gap matches the ordinary 10s cadence (this used
+  // to matter a lot more back when the gap was ~20ms and this ran 50x/sec —
+  // see git history for the "starved the RS485 serial port's own data
+  // callback" incident that came from doing real work that often with
+  // nothing to send it to). Still bail out before any real work below on an
+  // empty list, just cheaper insurance now than a hard requirement.
   if (dialNodes.length === 0) {
     dialSweepTimer = setTimeout(() => pollAllDials(getConfiguredNodes), DIAL_SWEEP_GAP_MS);
     return;
@@ -1154,9 +1155,9 @@ async function pollAllDials(getConfiguredNodes) {
     // This address might currently be mid-exchange with pollAll()'s
     // sensor sweep (only possible for a combined sensor+dial node) —
     // skip it for this pass rather than risk two outstanding requests on
-    // the same half-duplex bus. Costs nothing here: tries again in
-    // DIAL_SWEEP_GAP_MS (~20ms), and a real sensor exchange is at most a
-    // couple hundred ms, so this only ever costs a handful of sweeps.
+    // the same half-duplex bus. At matched 10s cadences this just means
+    // that node's dial-push waits for the next tick, ~10s later — a rare,
+    // harmless one-cycle delay, not a retry loop.
     if (pollingAddresses.has(node.busAddress)) continue;
 
     const zone = thermostatSvc.getState().zones.find(z => z.id === node.zoneId);

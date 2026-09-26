@@ -387,15 +387,26 @@ uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect,3=toggleSpotifyEnabl
 // -> reported up to the server on the NEXT RS485 poll -> applied -> the
 // confirmed value pushed back down) took ~40ms, since a stale push could
 // barely ever land before the confirmed one did. At 120ms/hop that round
-// trip can take 200-300ms+, so a STILL-STALE push (reflecting the value
-// from before this edit) now reliably lands one or more times before the
-// real one does, stomping the just-turned value back — every ~20ms, for a
-// quarter-second, is exactly what "spins but barely moves" looks like.
-// lastLocalEditAtMs + the grace check in applyPush() below hold off
-// accepting a push's target/volume/spotifyEnabled for a window comfortably
-// longer than that round trip; a fresh edit resets it, so local input
-// keeps winning for as long as someone's actually turning the knob.
-const unsigned long PUSH_OVERRIDE_GRACE_MS = 400;
+// trip could take 200-300ms+, so a STILL-STALE push (reflecting the value
+// from before this edit) reliably landed one or more times before the real
+// one did, stomping the just-turned value back — that's what "spins but
+// barely moves" looks like. lastLocalEditAtMs + the grace check in
+// applyPush() below hold off accepting a push's target/volume/spotifyEnabled
+// for a window comfortably longer than that round trip; a fresh edit resets
+// it, so local input keeps winning for as long as someone's actually
+// turning the knob.
+//
+// DIAL_SWEEP_GAP_MS was later deliberately slowed way down to match the
+// ordinary 10s sensor cadence (rs485.js's own comment on it explains why —
+// short version: this i2c1 link already gives the dial instant LOCAL
+// responsiveness regardless of the RS485 rate, so there was no reason to
+// keep hammering the shared, noise-prone bus 80x/sec just for that). Worst-
+// case round trip at a 10s-per-hop cadence is close to 2x that (~20s: wait
+// almost a full cycle to report the edit up, then almost another full cycle
+// for the confirmed value to come back down) — this constant is sized
+// comfortably past that, same "comfortably longer than the round trip"
+// principle as before, just rescaled for the new, much slower cadence.
+const unsigned long PUSH_OVERRIDE_GRACE_MS = 22000;
 unsigned long lastLocalEditAtMs = 0;
 
 // `state`/pendingChange/pendingTapEvent are written from BOTH the main
@@ -525,7 +536,13 @@ void readScd41() {
 // writes first and reads second in this library regardless of which side
 // logically "pushes."
 volatile bool needsRedraw = false;
-const unsigned long RP2040_POLL_INTERVAL_MS = 20; // mirrors the old fast-dial-poll cadence (rs485.js's DIAL_SWEEP_GAP_MS)
+// Deliberately kept fast and INDEPENDENT of rs485.js's DIAL_SWEEP_GAP_MS
+// (now 10s) — this is a private i2c1 link to just the RP2040 in this same
+// wall unit, not the shared RS485 bus, so there's no noise/collision cost to
+// polling it quickly. This is what actually gives the encoder its instant
+// local feel; slowing down the RS485 side didn't need to (and didn't) slow
+// this down too.
+const unsigned long RP2040_POLL_INTERVAL_MS = 20;
 unsigned long lastRp2040PollAt = 0;
 
 void pollRp2040() {
