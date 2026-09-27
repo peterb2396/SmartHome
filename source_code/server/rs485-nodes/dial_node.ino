@@ -187,7 +187,7 @@ const char* OTA_SERVER_HOST = "server.153home.online"; // same host the rest of 
 // the Console's firmware panel — see server/services/firmwareUpdate.js's
 // getLatestDialFirmware() for the exact naming convention this is
 // compared against.
-const char* FIRMWARE_VERSION = "1.0.6";
+const char* FIRMWARE_VERSION = "1.0.8";
 const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60 * 60 * 1000; // every 6 hours
 const unsigned long OTA_FIRST_CHECK_DELAY_MS = 30000; // wait until well after boot — see checkForOTA()'s comment on why this blocks loop()
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000; // don't hang indefinitely if WiFi's unavailable
@@ -428,17 +428,18 @@ uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect,3=toggleSpotifyEnabl
 // it, so local input keeps winning for as long as someone's actually
 // turning the knob.
 //
-// DIAL_SWEEP_GAP_MS was later deliberately slowed way down to match the
-// ordinary 10s sensor cadence (rs485.js's own comment on it explains why —
-// short version: this i2c1 link already gives the dial instant LOCAL
-// responsiveness regardless of the RS485 rate, so there was no reason to
-// keep hammering the shared, noise-prone bus 80x/sec just for that). Worst-
-// case round trip at a 10s-per-hop cadence is close to 2x that (~20s: wait
-// almost a full cycle to report the edit up, then almost another full cycle
-// for the confirmed value to come back down) — this constant is sized
-// comfortably past that, same "comfortably longer than the round trip"
-// principle as before, just rescaled for the new, much slower cadence.
-const unsigned long PUSH_OVERRIDE_GRACE_MS = 22000;
+// DIAL_SWEEP_GAP_MS (rs485.js) tracks POLL_INTERVAL_MS directly — see that
+// constant's own comment for the full history: slowed to 10s while
+// collisions were a real risk, then dropped back down to 1s once
+// acquireBusLock() made collisions structurally impossible regardless of
+// cadence. Worst-case round trip is close to 2x whatever that value is
+// (wait almost a full cycle to report the edit up, then almost another
+// full cycle for the confirmed value to come back down) — this constant
+// stays sized comfortably past that, same "comfortably longer than the
+// round trip" principle throughout this comment's whole history, just
+// rescaled again for the current cadence. Keep these two in step by hand;
+// nothing enforces it automatically across two separate .ino files.
+const unsigned long PUSH_OVERRIDE_GRACE_MS = 3000;
 unsigned long lastLocalEditAtMs = 0;
 
 // `state`/pendingChange/pendingTapEvent are written from BOTH the main
@@ -665,6 +666,14 @@ void pollRp2040() {
   if (pirWake && currentScreen == SCREEN_IDLE) {
     currentScreen = SCREEN_CLOCK;
     pendingTapEvent = 1; // wake — identical to a real tap from idle
+    // Real bug caught in testing: every OTHER wake path (onTap(),
+    // processEncoder(), the arc callbacks) sets this — missing it here
+    // meant checkIdleTimeout() saw a stale lastInteractionAt on the very
+    // next loop() iteration, concluded it had "been idle forever," and
+    // snapped straight back to SCREEN_IDLE milliseconds later. Looked
+    // like a one-frame "flash" instead of a real 20s wake — this is what
+    // actually keeps it awake.
+    lastInteractionAt = millis();
   }
   portEXIT_CRITICAL(&stateMux);
   needsRedraw = true;

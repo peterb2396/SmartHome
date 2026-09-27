@@ -299,7 +299,15 @@ const SENSOR_KEY_PREFIX = { temperature: 'temp', humidity: 'humidity', pressure:
 
 const RS485_PORT_PATH = process.env.RS485_PORT || '/dev/ttyUSB0'; // USB-to-RS485 adapter
 const BAUD_RATE = 9600;
-const POLL_INTERVAL_MS = 10000;
+// Was 10000 — dropped back down now that acquireBusLock() (see its own
+// comment) actually guarantees no two exchanges ever overlap on the wire,
+// which is the real problem the earlier slowdown was working around. With
+// collisions structurally impossible regardless of cadence, the only real
+// constraint left is bus throughput/latency (e.g. how quickly a PIR-
+// reported SENSOR_MOTION reading reaches the foyer light), not corruption
+// risk — see pollAll()'s own comment for why a bare setInterval() would no
+// longer be safe at this cadence, and why it isn't one anymore.
+const POLL_INTERVAL_MS = 1000;
 const ANNOUNCE_STALE_MS = 30000; // drop a pending node from the list if it stops announcing
 
 // How long to wait for a REPORT after a POLL before giving up. Sized for a
@@ -326,14 +334,16 @@ const DIAL_POLL_RESPONSE_TIMEOUT_MS = 200;
 // i2c1 link to the RP2040 (see dial_node.ino's RP2040_POLL_INTERVAL_MS,
 // which stays fast on purpose) — that link never touches this shared,
 // multi-node RS485 bus at all. This loop's only job is keeping the PI in
-// sync (so setZone()/the relay/the web app see a change), and there's no
-// reason that needs to be fast: matched to the ordinary 10s sensor cadence
-// by explicit request, since every dial-poll exchange here is one more
-// chance for collision/corruption on a bus that's already proven marginal —
-// cutting this from ~500 exchanges/10s down to 1 is a direct, meaningful
-// reduction in bus load for zero loss of felt responsiveness on the dial
-// itself. dial_node.ino's PUSH_OVERRIDE_GRACE_MS is sized off this value
-// (see its own comment) — raise both together if this ever changes again.
+// sync (so setZone()/the relay/the web app see a change).
+//
+// Matched to POLL_INTERVAL_MS by explicit choice, not a coincidence, and
+// deliberately kept that way rather than given its own independent value —
+// both loops share the exact same real constraint (bus throughput/collision
+// exposure, see POLL_INTERVAL_MS's own comment on why that's no longer a
+// correctness risk since acquireBusLock() started guaranteeing strict
+// one-exchange-at-a-time), so there's no reason for them to ever drift
+// apart. dial_node.ino's PUSH_OVERRIDE_GRACE_MS is sized off THIS value —
+// change one, change both.
 const DIAL_SWEEP_GAP_MS = POLL_INTERVAL_MS;
 const DIAL_MODE = { thermostat: 0, sound: 1 };
 const DIAL_TAP_EVENT = { none: 0, wake: 1, menuSelect: 2, toggleSpotifyEnabled: 3, returnToMenu: 4, markMaintenanceDone: 5 };
@@ -1117,10 +1127,20 @@ async function pollNodeLog(getConfiguredNodes) {
   logPollTimer = setTimeout(() => pollNodeLog(getConfiguredNodes), LOG_POLL_INTERVAL_MS);
 }
 
-async function pollAll(configuredNodes) {
+// Self-reschedules after it FINISHES (setTimeout, not setInterval) — same
+// pattern pollAllDials()/pollNodeLog() already use, and for the same
+// reason: POLL_RESPONSE_TIMEOUT_MS alone (2s) is a meaningful fraction of
+// a short POLL_INTERVAL_MS, so a single missed node could make one sweep
+// run longer than the interval between sweeps. A bare setInterval would
+// then start a SECOND sweep on top of the first — the bus mutex stops that
+// from corrupting the wire, but it doesn't stop the two sweeps' worth of
+// queued exchanges from silently stacking up faster than they drain.
+// Self-rescheduling makes that structurally impossible: there's never more
+// than one sweep in flight, period, regardless of how long a slow one runs.
+async function pollAll(getConfiguredNodes) {
   checkFrameStall();
   checkBusDownReminder(); // runs every cycle regardless of bus state — see its own comment
-  for (const node of configuredNodes) {
+  for (const node of getConfiguredNodes()) {
     if (node.busAddress == null) continue;
     if (node.kind === 'zoneAudio') {
       if (!node.zoneId) continue;
@@ -1148,6 +1168,7 @@ async function pollAll(configuredNodes) {
   for (const [id, n] of pendingNodes) {
     if (now - n.lastSeenAt > ANNOUNCE_STALE_MS) pendingNodes.delete(id);
   }
+  pollTimer = setTimeout(() => pollAll(getConfiguredNodes), POLL_INTERVAL_MS);
 }
 
 // ── Dial nodes — fast poll loop, separate from pollAll() above ─────────────
@@ -1382,7 +1403,7 @@ function assignAddress(uniqueId, usedAddresses) {
 let pollTimer = null;
 function init(getConfiguredNodes) {
   openTransport();
-  pollTimer = setInterval(() => pollAll(getConfiguredNodes()), POLL_INTERVAL_MS);
+  pollAll(getConfiguredNodes); // self-reschedules — see its own comment
   pollAllDials(getConfiguredNodes); // self-reschedules — see its own comment
   pollNodeLog(getConfiguredNodes); // self-reschedules — see its own comment
   console.log('[RS485] Service initialized.');
