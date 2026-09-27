@@ -283,13 +283,19 @@ const CMD = {
   FW_ACK: 0x86, LOG_LINE: 0x87,
 };
 const ACTIVE_SOURCE_NAME = { 0: 'off', 1: 'spotify', 2: 'override1', 3: 'override2' };
-const SENSOR_TYPE = { temperature: 0x01, humidity: 0x02, pressure: 0x03, voc: 0x04, co2: 0x05 };
+// motion: a PIR wired directly to an RS485 node's own GPIO (see
+// rs485_node.ino's HAS_PIR/PIR_PIN) — reported every cycle like any other
+// reading (1.0 = a rising edge was seen since the last report, 0.0
+// otherwise — the node latches and clears this itself so a brief pulse
+// between polls is never missed), not just an on/off level. See pollAll()
+// below for what a 1.0 actually triggers.
+const SENSOR_TYPE = { temperature: 0x01, humidity: 0x02, pressure: 0x03, voc: 0x04, co2: 0x05, motion: 0x06 };
 const SENSOR_TYPE_NAME = Object.fromEntries(Object.entries(SENSOR_TYPE).map(([k, v]) => [v, k]));
-const SENSOR_UNIT = { temperature: 'F', humidity: '%', pressure: 'hPa', voc: 'score', co2: 'ppm' };
+const SENSOR_UNIT = { temperature: 'F', humidity: '%', pressure: 'hPa', voc: 'score', co2: 'ppm', motion: '' };
 // sensorStore key prefix per type — 'temperature' on the wire but 'temp' in
 // the store, matching thermostat.js's `tempSensor: 'temp-<zoneId>'`
 // convention. Every other type's wire name IS its prefix.
-const SENSOR_KEY_PREFIX = { temperature: 'temp', humidity: 'humidity', pressure: 'pressure', voc: 'voc', co2: 'co2' };
+const SENSOR_KEY_PREFIX = { temperature: 'temp', humidity: 'humidity', pressure: 'pressure', voc: 'voc', co2: 'co2', motion: 'motion' };
 
 const RS485_PORT_PATH = process.env.RS485_PORT || '/dev/ttyUSB0'; // USB-to-RS485 adapter
 const BAUD_RATE = 9600;
@@ -1125,6 +1131,15 @@ async function pollAll(configuredNodes) {
     const readings = await pollNode(node.busAddress, node.zoneId);
     for (const { type, value } of readings) {
       sensors.set(`${SENSOR_KEY_PREFIX[type]}-${node.zoneId}`, value, SENSOR_UNIT[type], { source: 'rs485', nodeId: node.uniqueId });
+      // A node-wired PIR (see SENSOR_TYPE's own comment) drives the exact
+      // same foyer-light automation the Pi's own GPIO-22 PIR does — one
+      // shared function (gpio.js's triggerFoyerMotion()) so the two PIRs,
+      // covering opposite ends of the same staircase, can never behave
+      // differently from each other. Lazily required, same load-order
+      // reasoning as thermostat/astro/sound elsewhere in this file.
+      if (type === 'motion' && value === 1) {
+        require('./gpio').triggerFoyerMotion();
+      }
     }
   }
   // Pending nodes go stale (drop off the list) if they stop announcing —

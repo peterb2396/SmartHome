@@ -128,6 +128,11 @@
  * point present, bit1=+6h, bit2=+9h), then 3x 5B forecast points
  * (+3h/+6h/+9h in order: tempF float32 + weatherCategory 1B) — see
  * rs485.js's POLL_DIAL header for the authoritative byte-by-byte spec.
+ * Byte 48 (i2c1-ONLY, past DIAL_PUSH_LEN, never goes out over RS485):
+ * bit0 = the paired RP2040's own PIR saw a motion edge since this board
+ * last asked — wakes this dial from idle immediately (see pollRp2040()),
+ * never gated by time of day (unlike the foyer light that same PIR also
+ * drives server-side).
  *
  * Reply (RP2040 read, 8B): mode (1B: 0=thermostat, 1=sound) + newTargetF
  * (float32) + changed (1B) + tapEvent (1B) + newVolumePercent (1B).
@@ -182,7 +187,7 @@ const char* OTA_SERVER_HOST = "server.153home.online"; // same host the rest of 
 // the Console's firmware panel — see server/services/firmwareUpdate.js's
 // getLatestDialFirmware() for the exact naming convention this is
 // compared against.
-const char* FIRMWARE_VERSION = "1.0.5";
+const char* FIRMWARE_VERSION = "1.0.6";
 const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60 * 60 * 1000; // every 6 hours
 const unsigned long OTA_FIRST_CHECK_DELAY_MS = 30000; // wait until well after boot — see checkForOTA()'s comment on why this blocks loop()
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000; // don't hang indefinitely if WiFi's unavailable
@@ -210,6 +215,16 @@ const int ENCODER_PIN_B = 4;
 // for touch/PCF8574, not a second bus.
 const uint8_t DIAL_I2C_ADDR = 0x42; // MUST match rs485_node.ino's DIAL_I2C_ADDR
 const uint8_t DIAL_PUSH_LEN = 48;   // MUST match rs485.js's POLL_DIAL payload size
+// One extra byte beyond DIAL_PUSH_LEN, i2c1-ONLY (never goes out over
+// RS485) — bit0 set means the paired RP2040's own PIR (see its HAS_PIR)
+// saw a motion edge since this board last asked. Read in pollRp2040()
+// below and used to wake this dial the instant it arrives (~20ms, this
+// link's own poll rate) — completely independent of, and much faster
+// than, the Pi's 10s POLL_DIAL cadence, and never gated by time of day
+// (that gate only applies server-side, to the foyer light this same PIR
+// also drives — see rs485.js/gpio.js). Must match rs485_node.ino's own
+// DIAL_I2C_PUSH_LEN exactly.
+const uint8_t DIAL_I2C_PUSH_LEN = DIAL_PUSH_LEN + 1;
 
 // The i2c1 exchange with the RP2040 carries more than what goes out over
 // RS485 — see rs485_node.ino's header ("SCD41-on-the-dial-cable relay").
@@ -634,14 +649,23 @@ void pollRp2040() {
   Wire.write(replyPayload, DIAL_I2C_REPLY_LEN);
   if (Wire.endTransmission() != 0) return; // RP2040 not reachable this cycle — try again next tick, same tolerance a dropped exchange always had
 
-  uint8_t got = Wire.requestFrom(DIAL_I2C_ADDR, DIAL_PUSH_LEN);
-  if (got < DIAL_PUSH_LEN) { while (Wire.available()) Wire.read(); return; }
+  uint8_t got = Wire.requestFrom(DIAL_I2C_ADDR, DIAL_I2C_PUSH_LEN);
+  if (got < DIAL_I2C_PUSH_LEN) { while (Wire.available()) Wire.read(); return; }
 
-  uint8_t pushBuf[DIAL_PUSH_LEN];
-  for (uint8_t i = 0; i < DIAL_PUSH_LEN; i++) pushBuf[i] = Wire.read();
+  uint8_t pushBuf[DIAL_I2C_PUSH_LEN];
+  for (uint8_t i = 0; i < DIAL_I2C_PUSH_LEN; i++) pushBuf[i] = Wire.read();
 
   portENTER_CRITICAL(&stateMux);
-  applyPush(pushBuf, DIAL_PUSH_LEN);
+  applyPush(pushBuf, DIAL_PUSH_LEN); // only the first DIAL_PUSH_LEN bytes — see DIAL_I2C_PUSH_LEN's comment
+  // The one extra i2c1-only byte — a PIR trigger on the paired RP2040.
+  // Only wakes from IDLE, same as a real tap (onTap()'s own IDLE->CLOCK
+  // branch) — if something's already actively being used, motion at the
+  // top of the stairs shouldn't yank the screen away from it.
+  bool pirWake = pushBuf[DIAL_PUSH_LEN] & 0x01;
+  if (pirWake && currentScreen == SCREEN_IDLE) {
+    currentScreen = SCREEN_CLOCK;
+    pendingTapEvent = 1; // wake — identical to a real tap from idle
+  }
   portEXIT_CRITICAL(&stateMux);
   needsRedraw = true;
 }

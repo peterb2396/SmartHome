@@ -132,6 +132,18 @@
  *                                           reach it directly on I2C0.
  *   LM2596 OUT+ (5V)                     → RP2040 VSYS
  *   LM2596 OUT- / bus common             → RP2040 GND
+ *   PIR OUT (if HAS_PIR)                  → RP2040 GPIO 3 — a plain digital
+ *                                           input, no pull needed (these
+ *                                           modules already drive a clean
+ *                                           push-pull HIGH/LOW). Same 5V/GND
+ *                                           as everything else on this
+ *                                           board. See HAS_PIR's own comment
+ *                                           for what a trigger actually
+ *                                           does (an RS485-reported
+ *                                           SENSOR_MOTION reading AND a
+ *                                           same-cycle dial-wake byte over
+ *                                           i2c1, completely independent of
+ *                                           each other).
  *
  * Bus address is assigned by the master (see ASSIGN in rs485.js) and
  * persisted to flash-emulated EEPROM — it survives power cycles. A node
@@ -265,6 +277,14 @@
 // node: dial-relay design, no local SCD41.
 const bool HAS_SCD41 = false;
 const bool HAS_DIAL = true;  // false for zones with no wall dial attached
+// A PIR wired directly to this board's own GPIO — see this file's header
+// ("PIR motion input") for the two independent things a trigger does: an
+// RS485-reported SENSOR_MOTION reading (drives the foyer light, gated by
+// time of day server-side — see rs485.js/gpio.js) and a same-cycle wake
+// signal relayed straight to the dial over i2c1 (never gated, near-instant
+// — see onDialI2CRequest()). This node: PIR at the top of the stairs.
+const bool HAS_PIR = true;
+const int PIR_PIN = 3; // GPIO 3 — confirmed unused by anything else on this board
 
 const int RS485_DE_RE_PIN = 2;
 const unsigned long BAUD_RATE = 9600;
@@ -358,11 +378,22 @@ const uint8_t DIAL_REPLY_LEN = 8;  // must match rs485.js's DIAL_STATE payload s
 // exactly.
 const uint8_t DIAL_I2C_REPLY_LEN = 21;
 
+// Same idea as DIAL_I2C_REPLY_LEN above, mirrored for the OTHER direction:
+// this board relays one extra, i2c1-ONLY byte after the DIAL_PUSH_LEN bytes
+// that came from the Pi verbatim — bit0 = a PIR edge (see HAS_PIR) was seen
+// since the dial last asked. This never goes out over RS485 at all; it's
+// purely local to this board<->dial link, specifically so a motion trigger
+// can wake the dial within one i2c1 cycle (~20ms) instead of waiting on the
+// Pi's own 10s POLL_DIAL cadence — see onDialI2CRequest()/dial_node.ino's
+// own DIAL_I2C_PUSH_LEN.
+const uint8_t DIAL_I2C_PUSH_LEN = DIAL_PUSH_LEN + 1;
+
 const uint8_t SENSOR_TEMPERATURE = 0x01;
 const uint8_t SENSOR_HUMIDITY = 0x02;
 const uint8_t SENSOR_PRESSURE = 0x03;
 const uint8_t SENSOR_VOC = 0x04;
 const uint8_t SENSOR_CO2 = 0x05;
+const uint8_t SENSOR_MOTION = 0x06; // see HAS_PIR — 1.0 if a rising edge was seen since the last REPORT, else 0.0
 
 uint8_t busAddress = 0x00; // 0x00 = unconfigured — core 0 only
 uint8_t uniqueId[8];
@@ -415,6 +446,22 @@ struct SharedSensorState {
   uint8_t dialReplyBuf[DIAL_I2C_REPLY_LEN] = {0};
   unsigned long lastDialReceivedAtMs = 0;
   unsigned long dialPushesReceivedTotal = 0;
+
+  // ── PIR motion input (see HAS_PIR) — read/edge-detected on core 0
+  // (loop(), a plain digitalRead() — never touches I2C, so it's fine there
+  // alongside everything else RS485), but touched from BOTH cores (core 1's
+  // onDialI2CRequest() consumes pirWakePending), so it lives here under the
+  // same sharedLock as everything else cross-core, same as this file treats
+  // every other piece of state shared between the two. Two SEPARATE
+  // one-shot flags for the SAME physical edge, cleared independently by
+  // their own consumers — see this file's header and onDialI2CRequest():
+  // pirReportPending backs the SENSOR_MOTION reading in the next REPORT
+  // (core 0, up to ~10s later); pirWakePending backs the i2c1-only wake
+  // byte the dial reads on its own ~20ms schedule. Using one shared flag
+  // for both would mean whichever consumer got to it first would clear it
+  // out from under the other.
+  bool pirReportPending = false;
+  bool pirWakePending = false;
 
   unsigned long core1HeartbeatMs = 0; // core 1's own millis(), updated every loop1() iteration — see loop()
   // Core 1's OWN measurement of its longest iteration-to-iteration gap —
@@ -824,11 +871,19 @@ void onDialI2CReceive(int numBytes) {
 }
 
 void onDialI2CRequest() {
-  uint8_t buf[DIAL_PUSH_LEN];
+  uint8_t buf[DIAL_I2C_PUSH_LEN];
   critical_section_enter_blocking(&sharedLock);
   memcpy(buf, shared.dialPushBuf, DIAL_PUSH_LEN);
+  // The one i2c1-only byte beyond the RS485-mirrored payload — see
+  // DIAL_I2C_PUSH_LEN's own comment. Consumed (read + cleared) here, on
+  // whatever cadence the dial itself polls at (~20ms) — a one-shot pulse,
+  // not a level, so it fires exactly once per PIR trigger rather than
+  // re-waking the dial on every single exchange for as long as motion
+  // continues to be sensed.
+  buf[DIAL_PUSH_LEN] = shared.pirWakePending ? 0x01 : 0x00;
+  shared.pirWakePending = false;
   critical_section_exit(&sharedLock);
-  Wire1.write(buf, DIAL_PUSH_LEN);
+  Wire1.write(buf, DIAL_I2C_PUSH_LEN);
 }
 
 // ── Core 1 entry points (arduino-pico multicore) ────────────────────
@@ -934,12 +989,18 @@ void loop1() {
 // staleness tracking handles the rest), just decoupled from whether a
 // fresh read happens to land exactly during this specific report.
 void buildAndSendReport() {
-  uint8_t payload[5 * 5]; // up to 5 readings
+  uint8_t payload[6 * 5]; // up to 6 readings now that SENSOR_MOTION exists (was 5) — see HAS_PIR
   uint8_t offset = 0;
 
   SharedSensorState s;
+  bool pirTriggered;
   critical_section_enter_blocking(&sharedLock);
   s = shared; // POD struct copy — cheap, bounded, never blocks
+  // Consumed (read + cleared) here, separately from pirWakePending — see
+  // SharedSensorState's own comment on why these two flags for the same
+  // physical edge are kept independent.
+  pirTriggered = shared.pirReportPending;
+  shared.pirReportPending = false;
   critical_section_exit(&sharedLock);
 
   if (s.bmeReady && s.bmeOk) {
@@ -967,6 +1028,12 @@ void buildAndSendReport() {
   }
   if (s.co2Ok) {
     appendReading(payload, offset, SENSOR_CO2, s.co2);
+  }
+  // Reported every cycle when HAS_PIR (like every other reading here),
+  // 0.0 or 1.0 — see SENSOR_TYPE's comment in rs485.js for what a 1.0
+  // actually triggers server-side.
+  if (HAS_PIR) {
+    appendReading(payload, offset, SENSOR_MOTION, pirTriggered ? 1.0f : 0.0f);
   }
 
   sendFrame(busAddress, CMD_REPORT, payload, offset);
@@ -1263,6 +1330,10 @@ void printDiagnostics() {
     HAS_DIAL, s.dialPushesReceivedTotal, s.lastDialReceivedAtMs ? now - s.lastDialReceivedAtMs : 0, s.i2cRecoveries, maxLoopGapMs, now - s.core1HeartbeatMs, s.maxLoop1GapMs);
   diagPrint("[RS485 Node] diag: bootCount=%u watchdogReboots=%u lastRebootWasWatchdog=%d",
     bootCount, watchdogRebootCount, lastRebootWasWatchdog);
+  if (HAS_PIR) {
+    diagPrint("[RS485 Node] diag: pir(pin=%d currentLevel=%d reportPending=%d wakePending=%d)",
+      PIR_PIN, digitalRead(PIR_PIN), s.pirReportPending, s.pirWakePending);
+  }
 }
 
 // ── Setup (core 0) ─────────────────────────────────────────────────
@@ -1283,6 +1354,8 @@ void setup() {
   Serial1.setRX(1);
   Serial1.begin(BAUD_RATE);
 
+  if (HAS_PIR) pinMode(PIR_PIN, INPUT); // plain input — these modules already drive a clean push-pull HIGH/LOW, no pull needed
+
   pico_unique_board_id_t idOut;
   pico_get_unique_board_id(&idOut);
   memcpy(uniqueId, idOut.id, 8);
@@ -1297,7 +1370,30 @@ void setup() {
 }
 
 // ── Main loop (core 0) ────────────────────────────────────────────
+// Rising-edge only, same convention as the Pi's own GPIO-22 PIR
+// (gpio.js's `createPin(22, 'in', 'rising')`) — a PIR's digital output is
+// already clean (no mechanical contact bounce to debounce, unlike a real
+// switch), and most modules hold their output HIGH for several seconds per
+// detection, so treating "currently HIGH" as a continuous re-trigger would
+// fire this repeatedly for one single walk-by. Plain polling (not an
+// interrupt) is fine here — loop() runs far faster than any PIR's output
+// pulse width, so a transition can't be missed between checks.
+bool lastPirState = false;
+void checkPir() {
+  if (!HAS_PIR) return;
+  bool state = digitalRead(PIR_PIN) == HIGH;
+  if (state && !lastPirState) {
+    critical_section_enter_blocking(&sharedLock);
+    shared.pirReportPending = true;
+    shared.pirWakePending = true;
+    critical_section_exit(&sharedLock);
+  }
+  lastPirState = state;
+}
+
 void loop() {
+  checkPir();
+
   // Pet the watchdog unless core 1 has gone quiet for too long — see
   // CORE1_STALL_THRESHOLD_MS/CORE0_BOOT_GRACE_MS and this file's header
   // for the full reasoning. This is the crux of the whole fix: core 0
