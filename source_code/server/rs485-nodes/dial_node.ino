@@ -49,10 +49,13 @@
  * identifiers — only the user-facing menu label changed, see
  * showMenuScreen()) screens whenever faultCount or maintenanceDueCount is
  * nonzero — glanceable, never a popup/modal, never gates input. The menu
- * only ever has 2 items (Music Volume, Thermostat) under
- * normal conditions — a 3rd item ("Status") appears ONLY while faultCount
- * or maintenanceDueCount is nonzero (see statusItemVisible()/
+ * has 3 items (Home, Music Volume, Thermostat) under normal conditions —
+ * a 4th item ("Status") appears ONLY while faultCount or
+ * maintenanceDueCount is nonzero (see statusItemVisible()/
  * menuItemCount()), so there's nothing to check when nothing's wrong.
+ * "Home" just re-shows the same idle weather/time screen reachable by
+ * waking the dial (SCREEN_CLOCK) — it's a menu entry point to it, not a
+ * separate screen.
  * Status shows the counts in detail; faults are read-only there (they
  * clear on their own once the underlying condition resolves — see
  * faults.js), but a "Mark Done" button lets maintenance be cleared right
@@ -187,7 +190,7 @@ const char* OTA_SERVER_HOST = "server.153home.online"; // same host the rest of 
 // the Console's firmware panel — see server/services/firmwareUpdate.js's
 // getLatestDialFirmware() for the exact naming convention this is
 // compared against.
-const char* FIRMWARE_VERSION = "1.0.8";
+const char* FIRMWARE_VERSION = "1.0.9";
 const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60 * 60 * 1000; // every 6 hours
 const unsigned long OTA_FIRST_CHECK_DELAY_MS = 30000; // wait until well after boot — see checkForOTA()'s comment on why this blocks loop()
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000; // don't hang indefinitely if WiFi's unavailable
@@ -453,7 +456,7 @@ portMUX_TYPE stateMux = portMUX_INITIALIZER_UNLOCKED;
 // ── Screen state machine ────────────────────────────────────────────────
 enum Screen { SCREEN_IDLE, SCREEN_CLOCK, SCREEN_MENU, SCREEN_THERMOSTAT, SCREEN_SOUND, SCREEN_STATUS };
 Screen currentScreen = SCREEN_IDLE;
-const int MENU_ITEM_CAPACITY = 3; // Sound, Thermostat, Status — array size, NOT how many are currently shown
+const int MENU_ITEM_CAPACITY = 4; // Home, Sound, Thermostat, Status — array size, NOT how many are currently shown
 int menuSelection = 0;         // cycled by rotating on SCREEN_MENU
 unsigned long lastInteractionAt = 0;
 
@@ -466,15 +469,16 @@ bool statusItemVisible() {
   return state.faultCount > 0 || state.maintenanceDueCount > 0;
 }
 int menuItemCount() {
-  return statusItemVisible() ? 3 : 2;
+  return statusItemVisible() ? 4 : 3;
 }
 // Shared index->screen mapping for both tap paths (menuItemTapEventCb and
-// onTap()'s SCREEN_MENU branch) — index 2 (Status) is only ever reachable
-// while statusItemVisible() is true, since menuSelection is clamped to
-// menuItemCount()-1 everywhere it's set (see showMenuScreen()).
+// onTap()'s SCREEN_MENU branch) — the last index (Status) is only ever
+// reachable while statusItemVisible() is true, since menuSelection is
+// clamped to menuItemCount()-1 everywhere it's set (see showMenuScreen()).
 Screen screenForMenuIndex(int index) {
-  if (index == 0) return SCREEN_SOUND;
-  if (index == 1) return SCREEN_THERMOSTAT;
+  if (index == 0) return SCREEN_CLOCK;      // Home
+  if (index == 1) return SCREEN_SOUND;
+  if (index == 2) return SCREEN_THERMOSTAT;
   return SCREEN_STATUS;
 }
 
@@ -837,6 +841,7 @@ void menuItemTapEventCb(lv_event_t* e) {
   portEXIT_CRITICAL(&stateMux);
 
   switch (currentScreen) {
+    case SCREEN_CLOCK:      showClockScreen();      break; // Home
     case SCREEN_SOUND:      showSoundScreen();      break;
     case SCREEN_THERMOSTAT: showThermostatScreen(); break;
     case SCREEN_STATUS:     showStatusScreen();     break;
@@ -1246,7 +1251,7 @@ void showMenuScreen() {
   // this dial has no say in that — see zone_audio_node.ino's header. The
   // old "Sound" label implied this screen was a general room-audio
   // control, which it never was.
-  const char* labels[MENU_ITEM_CAPACITY] = { "Music Volume", "Thermostat", "Status" };
+  const char* labels[MENU_ITEM_CAPACITY] = { "Home", "Music Volume", "Thermostat", "Status" };
   const int ySpacing = 70;
   for (int i = 0; i < count; i++) {
     bool selected = (i == menuSelection);
@@ -1279,8 +1284,11 @@ void showMenuScreen() {
     lv_obj_clear_flag(item, LV_OBJ_FLAG_CLICKABLE); // the pill behind it is the real tap target — this just avoids the label swallowing/duplicating the pill's own click
     // "Status" only ever appears in this loop while it's actually got
     // something to show (see menuItemCount()), so the dot next to it is
-    // unconditional here — no separate due-check needed anymore.
-    if (i == 2) {
+    // unconditional here — no separate due-check needed anymore. It's
+    // always the last item when present, so `count - 1` (not a fixed
+    // index) is what still finds it correctly now that Home shifted
+    // everything else's position by one.
+    if (i == count - 1 && statusItemVisible()) {
       lv_obj_t* dot = lv_obj_create(screenMenu);
       lv_obj_set_size(dot, 10, 10);
       lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);

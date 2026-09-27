@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
-  FaExclamationTriangle, FaLightbulb,
+  FaExclamationTriangle, FaLightbulb, FaPowerOff,
   FaThermometerHalf, FaMicrochip, FaTerminal, FaThumbtack, FaTrash, FaCog,
 } from "react-icons/fa";
 import { useConsole } from "../hooks/useConsole";
 import { useConsoleLogs } from "../hooks/useConsoleLogs";
 import { useSettings } from "../hooks/useSettings";
-import { configureConsoleNode, deleteConsoleNode, getFirmwareList } from "../api";
+import { configureConsoleNode, deleteConsoleNode, getFirmwareList, restartServer } from "../api";
 import PageHeader from "../components/PageHeader";
 import CameraTile from "../components/CameraTile";
 import NodeSetupModal from "../components/NodeSetupModal";
@@ -19,6 +19,16 @@ import { colors, card, CONTAINER_WIDE, GRID_COMPACT, GRID_WIDE, pageContainerSty
 
 const cardStyle = { ...card, padding: "1.25rem" };
 const HIDDEN_LOG_SOURCES_KEY = "console.hiddenLogSources";
+
+// Mirrors the server-side restriction in server/api/console.js
+// (isAuthorizedUser) — this is just UX (hide the button instead of showing
+// a control that silently 403s), the backend check is what actually
+// enforces it. Same pattern as ZoneCard.jsx's damper-balance/force-heat
+// restriction.
+const RESTRICTED_ALLOWED_EMAIL = "pete.buo@gmail.com";
+function isRestrictedUser() {
+  return (localStorage.getItem("email") || "").toLowerCase() === RESTRICTED_ALLOWED_EMAIL;
+}
 
 function StatTile({ icon: Icon, label, value, accent = colors.accent }) {
   return (
@@ -58,7 +68,23 @@ export default function Console() {
   const { settings, updateSetting } = useSettings();
   const [setupNode, setSetupNode] = useState(null);
   const [firmwareFiles, setFirmwareFiles] = useState([]);
+  const [restarting, setRestarting] = useState(false);
   const terminalRef = useRef(null);
+
+  async function handleRestartServer() {
+    if (!window.confirm("Restart the server? Everyone using the app will briefly lose connection.")) return;
+    setRestarting(true);
+    try {
+      await restartServer();
+    } catch (e) {
+      console.error("Restart server:", e);
+      setRestarting(false);
+    }
+    // Don't reset `restarting` on success — the process is about to die and
+    // relaunch, so leaving the button in its disabled/spinning state until
+    // then (rather than briefly flipping back to normal) is more honest
+    // about what's actually happening.
+  }
 
   // Fetched here (not inside NodeFlashControl) so every node row shares
   // one list instead of each firing its own request — see FirmwarePanel
@@ -132,7 +158,27 @@ export default function Console() {
 
   return (
     <div style={pageContainerStyle(CONTAINER_WIDE)}>
-      <PageHeader title="Console" subtitle="Live status, faults, and system monitoring" />
+      <PageHeader
+        title="Console"
+        subtitle="Live status, faults, and system monitoring"
+        actions={isRestrictedUser() && (
+          <button
+            onClick={handleRestartServer}
+            disabled={restarting}
+            title="Restart the server (pm2)"
+            style={{
+              display: "flex", alignItems: "center", gap: 6,
+              padding: "0.5rem 0.9rem", background: restarting ? "var(--bg-surface-alt)" : "#fef2f2",
+              color: restarting ? colors.textMuted : "#b91c1c",
+              border: `1px solid ${restarting ? "var(--border)" : "#fecaca"}`,
+              borderRadius: 8, fontWeight: 600, fontSize: "0.8rem",
+              cursor: restarting ? "not-allowed" : "pointer",
+            }}
+          >
+            <FaPowerOff size={12} /> {restarting ? "Restarting…" : "Restart Server"}
+          </button>
+        )}
+      />
 
       {/* ── Terminal ── */}
       <div style={{ marginBottom: "1.5rem" }}>

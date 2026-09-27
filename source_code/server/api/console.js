@@ -19,6 +19,8 @@
  * GET    /console/nodes/:uniqueId/flash-status — current/last push progress for a node
  * GET    /console/dial-firmware/latest    — {version, filename} newest uploaded dial-*.bin, or null
  * GET    /console/firmware/:filename/raw  — raw .bin bytes (the dial downloads its own update over WiFi from here — see firmwareUpdate.js's header)
+ * POST   /console/restart                 — { password } restarts the whole server process via pm2 —
+ *                                            restricted to pete.buo@gmail.com only, see isAuthorizedUser() below
  *
  * Pinned-camera state deliberately has no dedicated route here — it's
  * stored under the existing generic `/settings` key `console`
@@ -26,12 +28,31 @@
  */
 
 const router = require('express').Router();
+const { exec } = require('child_process');
 const nodeRegistry = require('../services/nodeRegistry');
 const monitorZones = require('../services/monitorZones');
 const gpioMap = require('../services/gpioMap');
 const relayMap = require('../services/relayMap');
 const faultsSvc = require('../services/faults');
 const firmwareSvc = require('../services/firmwareUpdate');
+const User = require('../db/userModel');
+
+// Restarting the whole server process is disruptive to everyone using the
+// app at that moment, so — same convention as thermostat.js's balance/
+// manual-heat routes — it's locked to one person rather than the
+// household-wide PASSWORD secret. `password` here is the same value the
+// frontend already stores as "token" post-login (see web/src/api/index.js)
+// — it's actually the user's Mongo _id, not a real password.
+const RESTRICTED_ALLOWED_EMAIL = 'pete.buo@gmail.com';
+async function isAuthorizedUser(password) {
+  if (!password) return false;
+  try {
+    const user = await User.findById(password);
+    return user?.email?.toLowerCase() === RESTRICTED_ALLOWED_EMAIL;
+  } catch {
+    return false; // password wasn't a valid ObjectId, or lookup failed
+  }
+}
 
 router.get('/console/nodes', (req, res) => {
   res.json(nodeRegistry.getState());
@@ -175,6 +196,22 @@ router.get('/console/firmware/:filename/raw', (req, res) => {
   } catch (err) {
     res.status(404).json({ ok: false, error: err.message });
   }
+});
+
+// Responds before actually restarting — pm2 will kill and relaunch this
+// very process a moment later, so there's no way to send the response
+// AFTER the restart happens. The delay just gives Express time to flush
+// the response to the client before the process dies.
+router.post('/console/restart', async (req, res) => {
+  if (!await isAuthorizedUser(req.body.password)) {
+    return res.status(403).json({ ok: false, error: 'Only pete.buo@gmail.com can restart the server.' });
+  }
+  res.json({ ok: true });
+  setTimeout(() => {
+    exec('pm2 restart server', (err) => {
+      if (err) console.error('[Console] pm2 restart failed:', err.message);
+    });
+  }, 500);
 });
 
 module.exports = router;

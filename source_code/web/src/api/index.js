@@ -93,6 +93,10 @@ export const deleteFirmwareFile = (filename) => api.delete(`/console/firmware/${
 export const flashNode          = (uniqueId, filename) => api.post(`/console/nodes/${uniqueId}/flash`, { filename });
 export const getFlashStatus     = (uniqueId) => api.get(`/console/nodes/${uniqueId}/flash-status`);
 
+// Restarts the whole server process (pm2) — restricted server-side to
+// pete.buo@gmail.com, see server/api/console.js's isAuthorizedUser().
+export const restartServer      = () => api.post("/console/restart", { password: token() });
+
 // ── Sound (software scaffold — see server/services/sound.js) ───────────────
 export const getSound         = () => api.get("/sound");
 export const setSoundZone     = (id, body) => api.post(`/sound/zone/${id}`, body);
