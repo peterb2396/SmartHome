@@ -1059,7 +1059,19 @@ function getState() {
         // collapsed into a single shared field just because they happen to
         // match today.
         heatSource: activeSystem,
-        coolCalling: rt.coolCalling,
+        // Unified the same way `calling` above is, but simpler: the gas
+        // boiler has no cooling capability at all (no AC), so there's no
+        // boilerZone.coolCalling to fall back to — it's unconditionally
+        // false whenever the boiler is the active plant. Real bug this
+        // fixed (2026-09-26): the air handler's own control loop keeps
+        // running even while parked (not the active plant), using its own
+        // stale, no-longer-synced target — its leftover rt.coolCalling was
+        // leaking straight through here, so the RS485 dial (which always
+        // reads via this service) showed "Cooling" from a phantom air-
+        // handler-only calculation while the web (reading boiler.js's own
+        // zones, which have no coolCalling field at all) correctly showed
+        // Idle for the same zone at the same moment.
+        coolCalling: activeSystem === 'air-handler' && rt.coolCalling,
         safety: rt.safety,
         environment: readEnvironment(zone),
         balancePercent: zs.balancePercent ?? 100,
