@@ -1025,7 +1025,17 @@ function getState() {
         on: zs.on,
         // The currently-effective target — schedule block, manual hold, or
         // base fallback, whichever applies right now (see resolveTarget()).
-        target: resolveTarget(zs, now),
+        // Unified across both plants, exactly like `calling` below — real
+        // production bug this fixed (2026-09-26): while the boiler is
+        // actually serving this zone, ITS target is the one really driving
+        // equipment; the air handler's own target sits parked and unused,
+        // so anything reading this field (the RS485 dial poll, in
+        // particular) needs whichever plant is really in charge, not
+        // whichever plant this settings object happens to belong to. Same
+        // reasoning applies to the dial's WRITE path — see rs485.js's
+        // pollAllDials(), which now applies a dial's reported change to
+        // whichever plant getActiveSystem() says is active, not always here.
+        target: activeSystem === 'air-handler' ? resolveTarget(zs, now) : (boilerZone?.target ?? resolveTarget(zs, now)),
         overridden: isOverridden(zs, now),
         // Only meaningful while overridden is true. null both when there's
         // no active override AND when the override has no expiry (an empty

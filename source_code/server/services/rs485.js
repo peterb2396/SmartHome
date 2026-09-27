@@ -1284,6 +1284,7 @@ async function pollAllDials(getConfiguredNodes) {
   }
 
   const thermostatSvc = require('./thermostat');
+  const boilerSvc = require('./boiler');
   const astroSvc = require('./astro');
   const soundSvc = require('./sound');
   const faultsSvc = require('./faults');
@@ -1291,6 +1292,15 @@ async function pollAllDials(getConfiguredNodes) {
   // Same for every dial in this sweep — computed once, not per node.
   const faultCount = faultsSvc.getFaults().length;
   const maintenanceDueCount = maintenanceSvc.getState().tasks.filter(t => t.isDue).length;
+  // Which plant is actually driving heat right now — see thermostat.js's
+  // getState() (target unification) for the read-side half of this same
+  // fix. A dial's own reported target change (below) must land on
+  // whichever plant this says is active, not unconditionally the air
+  // handler — real production bug (2026-09-26): the boiler could be fully
+  // in charge of a zone while the dial kept editing the air handler's own,
+  // completely inert, target, with the change never visibly taking effect.
+  const activeSystem = thermostatSvc.getActiveSystem(thermostatSvc.getSettings());
+  const activeThermostatSvc = activeSystem === 'boiler' ? boilerSvc : thermostatSvc;
 
   for (const node of dialNodes) {
     // This address might currently be mid-exchange with pollAll()'s
@@ -1392,8 +1402,8 @@ async function pollAllDials(getConfiguredNodes) {
     console.log(`[RS485] Dial ${node.uniqueId} reports changed: mode=${reply.mode} newTargetF=${reply.newTargetF} newVolumePercent=${reply.newVolumePercent}`);
     try {
       if (reply.mode === DIAL_MODE.thermostat && node.zoneId) {
-        await thermostatSvc.setZone(node.zoneId, { target: reply.newTargetF });
-        console.log(`[RS485] Applied dial target=${reply.newTargetF}\xB0F to zone=${node.zoneId}`);
+        await activeThermostatSvc.setZone(node.zoneId, { target: reply.newTargetF });
+        console.log(`[RS485] Applied dial target=${reply.newTargetF}\xB0F to zone=${node.zoneId} (${activeSystem})`);
       } else if (reply.mode === DIAL_MODE.sound && node.soundZoneId) {
         await soundSvc.setZoneVolume(node.soundZoneId, reply.newVolumePercent);
         console.log(`[RS485] Applied dial volume=${reply.newVolumePercent}% to soundZone=${node.soundZoneId}`);
