@@ -850,6 +850,13 @@ let consecutiveMisses = new Map(); // busAddress -> count, reset to 0 on any res
 // dial poll would let one's routine successes mask the other's sustained
 // failures.
 let dialConsecutiveMisses = new Map();
+// Diagnostic-only: busAddress -> last target (°F) actually pushed to that
+// dial, so pollAllDials() can log a push only when the value it's sending
+// actually changes rather than every 1s tick — added to get positive
+// visibility into a reported "dial/web target never syncs" bug that left
+// no trace either way in the normal NO RESPONSE/RECOVERED logging (a
+// perfectly healthy exchange is otherwise completely silent by design).
+let lastPushedTarget = new Map();
 
 // A single node going silent while the bus/port itself is fine (dongle
 // still connected, other nodes still answering) is a DIFFERENT failure
@@ -1298,6 +1305,14 @@ async function pollAllDials(getConfiguredNodes) {
     const zone = thermostatSvc.getState().zones.find(z => z.id === node.zoneId);
     const outdoor = astroSvc.getCachedOutdoorConditions();
     const soundZone = soundSvc.getState().zones.find(z => z.id === node.soundZoneId);
+    // Diagnostic-only, see lastPushedTarget's own comment — logs only on an
+    // actual change to what's being sent, so this stays silent under
+    // normal 1s-cadence operation and only speaks up exactly when a web
+    // edit should be on its way to this dial.
+    if (zone && lastPushedTarget.get(node.busAddress) !== zone.target) {
+      console.log(`[RS485] Pushing target=${zone.target}\xB0F to dial addr=${node.busAddress} zone=${node.zoneId}`);
+      lastPushedTarget.set(node.busAddress, zone.target);
+    }
     pollingAddresses.add(node.busAddress);
     const release = await acquireBusLock();
     writeFrame(buildFrame(node.busAddress, CMD.POLL_DIAL, buildDialPushPayload(zone, outdoor, soundZone, new Date(), faultCount, maintenanceDueCount)));
@@ -1368,11 +1383,20 @@ async function pollAllDials(getConfiguredNodes) {
     }
 
     if (!reply.changed) continue;
+    // Diagnostic-only, see lastPushedTarget's own comment — this only ever
+    // fires while the dial's own pendingChange flag is set (a real local
+    // edit, held for PUSH_OVERRIDE_GRACE_MS — see dial_node.ino), so it's
+    // not a per-tick spam risk, just invisible today because there was
+    // previously no success-path logging here at all, only a rejection
+    // warning on failure.
+    console.log(`[RS485] Dial ${node.uniqueId} reports changed: mode=${reply.mode} newTargetF=${reply.newTargetF} newVolumePercent=${reply.newVolumePercent}`);
     try {
       if (reply.mode === DIAL_MODE.thermostat && node.zoneId) {
         await thermostatSvc.setZone(node.zoneId, { target: reply.newTargetF });
+        console.log(`[RS485] Applied dial target=${reply.newTargetF}\xB0F to zone=${node.zoneId}`);
       } else if (reply.mode === DIAL_MODE.sound && node.soundZoneId) {
         await soundSvc.setZoneVolume(node.soundZoneId, reply.newVolumePercent);
+        console.log(`[RS485] Applied dial volume=${reply.newVolumePercent}% to soundZone=${node.soundZoneId}`);
       }
     } catch (err) {
       console.warn(`[RS485] Dial ${node.uniqueId} change rejected:`, err.message);
