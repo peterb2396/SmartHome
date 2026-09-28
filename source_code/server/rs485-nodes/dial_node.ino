@@ -135,7 +135,14 @@
  * bit0 = the paired RP2040's own PIR saw a motion edge since this board
  * last asked — wakes this dial from idle immediately (see pollRp2040()),
  * never gated by time of day (unlike the foyer light that same PIR also
- * drives server-side).
+ * drives server-side). bit1 = the Pi's CMD_CHECK_OTA arrived at the paired
+ * RP2040 since this board last asked — set once right after the server
+ * (re)starts (see rs485.js's CHECK_OTA header comment), tells this board to
+ * run checkForOTA() immediately instead of waiting up to
+ * OTA_CHECK_INTERVAL_MS (6h). Exists because this board's own RS485 power
+ * feed is isolated from the Pi's — it never power-cycles just because the
+ * server did, so without this a fresh firmware upload could sit unnoticed
+ * for hours after a restart.
  *
  * Reply (RP2040 read, 8B): mode (1B: 0=thermostat, 1=sound) + newTargetF
  * (float32) + changed (1B) + tapEvent (1B) + newVolumePercent (1B).
@@ -190,7 +197,7 @@ const char* OTA_SERVER_HOST = "server.153home.online"; // same host the rest of 
 // the Console's firmware panel — see server/services/firmwareUpdate.js's
 // getLatestDialFirmware() for the exact naming convention this is
 // compared against.
-const char* FIRMWARE_VERSION = "1.0.9";
+const char* FIRMWARE_VERSION = "1.1.1";
 const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60 * 60 * 1000; // every 6 hours
 const unsigned long OTA_FIRST_CHECK_DELAY_MS = 30000; // wait until well after boot — see checkForOTA()'s comment on why this blocks loop()
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000; // don't hang indefinitely if WiFi's unavailable
@@ -433,16 +440,17 @@ uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect,3=toggleSpotifyEnabl
 //
 // DIAL_SWEEP_GAP_MS (rs485.js) tracks POLL_INTERVAL_MS directly — see that
 // constant's own comment for the full history: slowed to 10s while
-// collisions were a real risk, then dropped back down to 1s once
-// acquireBusLock() made collisions structurally impossible regardless of
-// cadence. Worst-case round trip is close to 2x whatever that value is
-// (wait almost a full cycle to report the edit up, then almost another
-// full cycle for the confirmed value to come back down) — this constant
-// stays sized comfortably past that, same "comfortably longer than the
-// round trip" principle throughout this comment's whole history, just
-// rescaled again for the current cadence. Keep these two in step by hand;
-// nothing enforces it automatically across two separate .ino files.
-const unsigned long PUSH_OVERRIDE_GRACE_MS = 3000;
+// collisions were a real risk, dropped to 1s once acquireBusLock() made
+// collisions structurally impossible, then back up to 2s (2026-09-28) after
+// CRC mismatches reappeared at 1s — see POLL_INTERVAL_MS's own comment.
+// Worst-case round trip is close to 2x whatever that value is (wait almost
+// a full cycle to report the edit up, then almost another full cycle for
+// the confirmed value to come back down) — this constant stays sized
+// comfortably past that (roughly 3x, matching this comment's own history
+// of margin), just rescaled again for the current cadence. Keep these two
+// in step by hand; nothing enforces it automatically across two separate
+// .ino files.
+const unsigned long PUSH_OVERRIDE_GRACE_MS = 6000;
 unsigned long lastLocalEditAtMs = 0;
 
 // `state`/pendingChange/pendingTapEvent are written from BOTH the main
@@ -679,6 +687,16 @@ void pollRp2040() {
     // actually keeps it awake.
     lastInteractionAt = millis();
   }
+  // The other i2c1-only bit — the Pi's CMD_CHECK_OTA arrived at the paired
+  // RP2040 since this board last asked (see rs485.js's header and
+  // rs485_node.ino's onDialI2CRequest()). Just a flag here, not an
+  // immediate checkForOTA() call — that function is blocking (WiFi
+  // connect + HTTP) and belongs at its usual single call site in loop(),
+  // not invoked ad-hoc from inside the fast ~20ms i2c1 poll. No mutex
+  // needed: unlike `state`/pendingChange above, this flag is only ever
+  // touched from loop()'s own call stack (pollRp2040() here, and loop()
+  // itself below) — never from a different core/interrupt context.
+  if (pushBuf[DIAL_PUSH_LEN] & 0x02) otaCheckRequested = true;
   portEXIT_CRITICAL(&stateMux);
   needsRedraw = true;
 }
@@ -2072,7 +2090,8 @@ void loop() {
     refreshActiveScreen();
   }
 
-  if (millis() - lastOtaCheckAt >= OTA_CHECK_INTERVAL_MS) {
+  if (otaCheckRequested || millis() - lastOtaCheckAt >= OTA_CHECK_INTERVAL_MS) {
+    otaCheckRequested = false;
     lastOtaCheckAt = millis();
     checkForOTA();
   }

@@ -60,8 +60,8 @@ router.get('/console/nodes', (req, res) => {
 
 router.post('/console/nodes/:uniqueId/configure', async (req, res) => {
   try {
-    const { name, kind, zoneId, soundZoneId, hasDial, sensors } = req.body;
-    await nodeRegistry.configureNode(req.params.uniqueId, { name, kind, zoneId, soundZoneId, hasDial, sensors });
+    const { name, kind, zoneId, soundZoneId, hasDial, sensors, sensorWeight } = req.body;
+    await nodeRegistry.configureNode(req.params.uniqueId, { name, kind, zoneId, soundZoneId, hasDial, sensors, sensorWeight });
     res.json({ ok: true, state: nodeRegistry.getState() });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });

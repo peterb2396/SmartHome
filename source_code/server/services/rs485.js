@@ -261,6 +261,20 @@
  *                  (LOG_POLL_INTERVAL_MS/one node per tick) — this is
  *                  debug convenience, not control traffic, and
  *                  deliberately kept cheap on bus time.
+ * 0x0A CHECK_OTA  (master→node, hasDial nodes only) — payload: none. Node
+ *                  replies ACK, and sets a one-shot flag the dial reads
+ *                  (and clears) on its own next i2c1 exchange — bit1 of
+ *                  the existing i2c1-only push byte, alongside bit0's PIR
+ *                  wake (see dial_node.ino's header) — telling it to run
+ *                  checkForOTA() immediately instead of waiting for its own
+ *                  OTA_CHECK_INTERVAL_MS timer. Sent exactly once per
+ *                  hasDial node, right after this service starts up — see
+ *                  notifyDialsToCheckOta() below. Exists because a dial's
+ *                  RS485 power feed is isolated from the Pi's own supply
+ *                  (real hardware fact, not a bug): the dial never power-
+ *                  cycles when the Pi/server restarts, so without this it
+ *                  could sit on stale firmware for up to 6h after a fresh
+ *                  build gets uploaded and the server restarts to serve it.
  *
  * 0x86 FW_ACK    (node→master) — payload: [stage 1B][ok 1B][seq u16 — only
  *                  meaningful for stage=1, echoes the chunk seq].
@@ -278,7 +292,7 @@ const { sendPush } = require('./mail');
 const SYNC = 0xaa;
 const CMD = {
   POLL: 0x01, ASSIGN: 0x02, SET_RELAY: 0x03, POLL_DIAL: 0x04, POLL_ZONE_AUDIO: 0x05,
-  FW_BEGIN: 0x06, FW_CHUNK: 0x07, FW_END: 0x08, GET_LOG: 0x09,
+  FW_BEGIN: 0x06, FW_CHUNK: 0x07, FW_END: 0x08, GET_LOG: 0x09, CHECK_OTA: 0x0A,
   ANNOUNCE: 0x81, REPORT: 0x82, ACK: 0x83, DIAL_STATE: 0x84, ZONE_AUDIO_STATE: 0x85,
   FW_ACK: 0x86, LOG_LINE: 0x87,
 };
@@ -297,24 +311,82 @@ const SENSOR_UNIT = { temperature: 'F', humidity: '%', pressure: 'hPa', voc: 'sc
 // convention. Every other type's wire name IS its prefix.
 const SENSOR_KEY_PREFIX = { temperature: 'temp', humidity: 'humidity', pressure: 'pressure', voc: 'voc', co2: 'co2', motion: 'motion' };
 
+// motion is a discrete event (did ANY node see a rising edge this cycle),
+// not a continuous measurement — averaging it across multiple nodes on the
+// same zone would make no sense, so it's the one type blendZoneReading()
+// below is never called for; see pollAll()'s own motion handling, which is
+// unaffected by any of this.
+const BLENDABLE_TYPES = new Set(['temperature', 'humidity', 'pressure', 'voc', 'co2']);
+
+// Raw per-node contributor readings feeding blendZoneReading() below — kept
+// in this file's own private Map, NOT sensorStore. sensorStore.getAll() is
+// consumed with zero filtering by both the general /sensors API
+// (smarthome.js) and its web page (Sensors.jsx's raw per-key dump) — a
+// per-node intermediate value ("upstairs" temp as seen by ONE of three
+// dials) isn't a sensor the rest of the app should ever see standalone, so
+// routing it through the shared store would just clutter that page with
+// confusing extra rows. key: `${type}-${zoneId}-${node.uniqueId}`.
+const zoneReadingContributors = new Map();
+
+// Weighted-average a zone's environment reading across every node
+// currently configured to report it — added 2026-09-28 for multi-dial
+// zones (e.g. 3 dials in the same room-group, each with its own SCD41):
+// before this, every node reporting the same zoneId+type wrote straight to
+// the SAME sensorStore key (`${prefix}-${zoneId}`), so whichever node
+// happened to be polled LAST in a given sweep silently overwrote whatever
+// the others had just reported — not a blend, just a flicker between
+// readings. Each node now records its own reading into
+// zoneReadingContributors first (see pollAll() below); this combines the
+// FRESH ones (same STALE_MS threshold sensorStore itself uses, so "stopped
+// answering" behaves identically to every other sensor in the app) using
+// each node's own `sensorWeight` (nodeRegistry.js, default 1 — a zone with
+// only one reporting node is unaffected either way, since a single-item
+// weighted average is just that item), then writes the ONE result to the
+// normal shared sensorStore key exactly like before. Falls through to
+// leaving that shared key exactly as it was if nothing fresh is available —
+// same "last known good, flagged stale" behavior every other sensor here
+// already has, not a new failure mode.
+function blendZoneReading(type, zoneId, getConfiguredNodes) {
+  const prefix = SENSOR_KEY_PREFIX[type];
+  const freshContributors = [];
+  let weightedSum = 0, totalWeight = 0;
+  for (const node of getConfiguredNodes().filter(n => n.zoneId === zoneId)) {
+    const entry = zoneReadingContributors.get(`${type}-${zoneId}-${node.uniqueId}`);
+    if (!entry || (Date.now() - entry.updatedAt) > sensors.STALE_MS) continue;
+    const weight = node.sensorWeight ?? 1;
+    weightedSum += entry.value * weight;
+    totalWeight += weight;
+    freshContributors.push(node.uniqueId);
+  }
+  if (totalWeight === 0) return; // nothing fresh from anyone this cycle — leave the existing (possibly now-stale) shared value alone
+  sensors.set(`${prefix}-${zoneId}`, weightedSum / totalWeight, SENSOR_UNIT[type], {
+    source: 'rs485-blend',
+    contributors: freshContributors,
+  });
+}
+
 const RS485_PORT_PATH = process.env.RS485_PORT || '/dev/ttyUSB0'; // USB-to-RS485 adapter
 const BAUD_RATE = 9600;
-// Was 10000 — dropped back down now that acquireBusLock() (see its own
-// comment) actually guarantees no two exchanges ever overlap on the wire,
-// which is the real problem the earlier slowdown was working around. With
-// collisions structurally impossible regardless of cadence, the only real
-// constraint left is bus throughput/latency (e.g. how quickly a PIR-
-// reported SENSOR_MOTION reading reaches the foyer light), not corruption
-// risk — see pollAll()'s own comment for why a bare setInterval() would no
-// longer be safe at this cadence, and why it isn't one anymore.
-const POLL_INTERVAL_MS = 1000;
+// Was 10000, then 1000 — moved to 2000 (2026-09-28) after real production
+// evidence: at 1000ms, CRC mismatches that acquireBusLock() had otherwise
+// fully eliminated started reappearing. acquireBusLock() still guarantees
+// no two exchanges ever overlap on the wire (that part isn't the issue —
+// true collisions remain structurally impossible regardless of cadence),
+// but at 1s the bus was left with very little idle/recovery time between
+// back-to-back exchanges, which is consistent with a timing-marginal
+// UART/adapter issue rather than a logic bug — halving the exchange rate
+// gives the wire more breathing room per cycle. If mismatches persist even
+// at 2000ms, that points at something electrical (grounding, adapter,
+// cable run) rather than pure timing, and is worth investigating directly
+// rather than continuing to just slow down further.
+const POLL_INTERVAL_MS = 2000;
 const ANNOUNCE_STALE_MS = 30000; // drop a pending node from the list if it stops announcing
 
 // How long to wait for a REPORT after a POLL before giving up. Sized for a
 // real sensor read, not a quick ack — the BME680's forced-mode conversion
 // (oversampling + its ~150ms gas heater cycle) routinely runs past a couple
 // hundred ms, and the node can't answer until that completes. Generous is
-// fine here since it's nowhere near POLL_INTERVAL_MS (10s) either way.
+// fine here since it's nowhere near POLL_INTERVAL_MS (2s) either way.
 const POLL_RESPONSE_TIMEOUT_MS = 2000;
 const RECONNECT_INTERVAL_MS = 10000; // how often to retry opening the port after it's lost/never opened
 
@@ -1134,6 +1206,39 @@ async function pollNodeLog(getConfiguredNodes) {
   logPollTimer = setTimeout(() => pollNodeLog(getConfiguredNodes), LOG_POLL_INTERVAL_MS);
 }
 
+// Tracks which hasDial nodes have already been sent CHECK_OTA this server
+// process's lifetime — in-memory only, not persisted, so it naturally
+// resets (and re-notifies every dial) on every restart, which is exactly
+// the point (see CHECK_OTA's own header comment on why this exists at
+// all). Also covers a node that's offline at the moment the server starts
+// and joins the bus later — it just gets notified whenever pollAll() first
+// sees it, not only in the very first sweep.
+const otaCheckNotified = new Set();
+
+// Called from pollAll() below, once per sweep — cheap (a Set membership
+// check per hasDial node) and self-limiting (each node drops out after its
+// one real send). Fire-and-forget by design: the RP2040 does reply with a
+// plain ACK, but there's nothing to do with it (no state to update) and no
+// harm if it's dropped — the dial's own periodic OTA_CHECK_INTERVAL_MS
+// timer is the fallback either way, this is purely a "don't make them wait
+// up to 6h for it" latency improvement, not a delivery guarantee.
+async function notifyDialsToCheckOta(getConfiguredNodes) {
+  if (usingMock) return;
+  for (const node of getConfiguredNodes()) {
+    if (!node.hasDial || node.busAddress == null || otaCheckNotified.has(node.uniqueId)) continue;
+    if (pollingAddresses.has(node.busAddress)) continue; // mid-exchange with something else this tick — try again next sweep
+    otaCheckNotified.add(node.uniqueId); // mark before sending — see this function's own comment on why a dropped ACK isn't worth retrying
+    const release = await acquireBusLock();
+    writeFrame(buildFrame(node.busAddress, CMD.CHECK_OTA));
+    // No resolver registered for CMD.ACK (nothing reads it) — just hold
+    // the bus lock long enough for the node's reply to actually land and
+    // get consumed by the normal frame parser before releasing, same
+    // settle time a dial's own exchanges use.
+    await new Promise((resolve) => setTimeout(resolve, DIAL_POLL_RESPONSE_TIMEOUT_MS));
+    release();
+  }
+}
+
 // Self-reschedules after it FINISHES (setTimeout, not setInterval) — same
 // pattern pollAllDials()/pollNodeLog() already use, and for the same
 // reason: POLL_RESPONSE_TIMEOUT_MS alone (2s) is a meaningful fraction of
@@ -1147,6 +1252,11 @@ async function pollNodeLog(getConfiguredNodes) {
 async function pollAll(getConfiguredNodes) {
   checkFrameStall();
   checkBusDownReminder(); // runs every cycle regardless of bus state — see its own comment
+  // Own pass over every node (not folded into the loop below), since that
+  // loop skips anything without a zoneId — a dial with no thermostat zone
+  // of its own (kind='other', hasDial=true) is a valid config that still
+  // needs its OTA-check notification.
+  await notifyDialsToCheckOta(getConfiguredNodes);
   for (const node of getConfiguredNodes()) {
     if (node.busAddress == null) continue;
     if (node.kind === 'zoneAudio') {
@@ -1157,7 +1267,18 @@ async function pollAll(getConfiguredNodes) {
     if (!node.zoneId) continue;
     const readings = await pollNode(node.busAddress, node.zoneId);
     for (const { type, value } of readings) {
-      sensors.set(`${SENSOR_KEY_PREFIX[type]}-${node.zoneId}`, value, SENSOR_UNIT[type], { source: 'rs485', nodeId: node.uniqueId });
+      if (BLENDABLE_TYPES.has(type)) {
+        // Own private contributor entry first, THEN re-blend the zone's
+        // shared sensorStore key from every contributing node's latest
+        // fresh reading — see blendZoneReading()'s own comment. A zone
+        // with only one node reporting this type ends up writing the exact
+        // same value to the shared key it always did, just via one extra
+        // step.
+        zoneReadingContributors.set(`${type}-${node.zoneId}-${node.uniqueId}`, { value, updatedAt: Date.now() });
+        blendZoneReading(type, node.zoneId, getConfiguredNodes);
+      } else {
+        sensors.set(`${SENSOR_KEY_PREFIX[type]}-${node.zoneId}`, value, SENSOR_UNIT[type], { source: 'rs485', nodeId: node.uniqueId });
+      }
       // A node-wired PIR (see SENSOR_TYPE's own comment) drives the exact
       // same foyer-light automation the Pi's own GPIO-22 PIR does — one
       // shared function (gpio.js's triggerFoyerMotion()) so the two PIRs,

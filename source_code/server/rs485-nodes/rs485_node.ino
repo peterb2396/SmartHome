@@ -351,6 +351,7 @@ const uint8_t CMD_FW_BEGIN = 0x06;
 const uint8_t CMD_FW_CHUNK = 0x07;
 const uint8_t CMD_FW_END = 0x08;
 const uint8_t CMD_GET_LOG = 0x09;
+const uint8_t CMD_CHECK_OTA = 0x0A; // see rs485.js's header for the full reasoning
 const uint8_t CMD_ANNOUNCE = 0x81;
 const uint8_t CMD_REPORT = 0x82;
 const uint8_t CMD_ACK = 0x83;
@@ -381,11 +382,14 @@ const uint8_t DIAL_I2C_REPLY_LEN = 21;
 // Same idea as DIAL_I2C_REPLY_LEN above, mirrored for the OTHER direction:
 // this board relays one extra, i2c1-ONLY byte after the DIAL_PUSH_LEN bytes
 // that came from the Pi verbatim — bit0 = a PIR edge (see HAS_PIR) was seen
-// since the dial last asked. This never goes out over RS485 at all; it's
-// purely local to this board<->dial link, specifically so a motion trigger
-// can wake the dial within one i2c1 cycle (~20ms) instead of waiting on the
-// Pi's own 10s POLL_DIAL cadence — see onDialI2CRequest()/dial_node.ino's
-// own DIAL_I2C_PUSH_LEN.
+// since the dial last asked; bit1 = a CMD_CHECK_OTA arrived from the Pi
+// since the dial last asked (see that command's own header comment in
+// rs485.js — tells the dial to check for a firmware update right now
+// instead of waiting on its own multi-hour timer). Neither bit ever goes
+// out over RS485 at all; both are purely local to this board<->dial link,
+// specifically so each event reaches the dial within one i2c1 cycle
+// (~20ms) instead of waiting on the Pi's own POLL_DIAL cadence — see
+// onDialI2CRequest()/dial_node.ino's own DIAL_I2C_PUSH_LEN.
 const uint8_t DIAL_I2C_PUSH_LEN = DIAL_PUSH_LEN + 1;
 
 const uint8_t SENSOR_TEMPERATURE = 0x01;
@@ -462,6 +466,13 @@ struct SharedSensorState {
   // out from under the other.
   bool pirReportPending = false;
   bool pirWakePending = false;
+
+  // Set by CMD_CHECK_OTA (core 0, on RS485 receipt), consumed and cleared
+  // by onDialI2CRequest() (core 1) on the dial's own next ~20ms poll — see
+  // rs485.js's CHECK_OTA header comment for why this exists at all. A
+  // one-shot pulse like pirWakePending above, not a level: the dial acts
+  // on it once, not on every exchange until something clears it.
+  bool otaCheckPending = false;
 
   unsigned long core1HeartbeatMs = 0; // core 1's own millis(), updated every loop1() iteration — see loop()
   // Core 1's OWN measurement of its longest iteration-to-iteration gap —
@@ -875,13 +886,15 @@ void onDialI2CRequest() {
   critical_section_enter_blocking(&sharedLock);
   memcpy(buf, shared.dialPushBuf, DIAL_PUSH_LEN);
   // The one i2c1-only byte beyond the RS485-mirrored payload — see
-  // DIAL_I2C_PUSH_LEN's own comment. Consumed (read + cleared) here, on
-  // whatever cadence the dial itself polls at (~20ms) — a one-shot pulse,
-  // not a level, so it fires exactly once per PIR trigger rather than
-  // re-waking the dial on every single exchange for as long as motion
-  // continues to be sensed.
-  buf[DIAL_PUSH_LEN] = shared.pirWakePending ? 0x01 : 0x00;
+  // DIAL_I2C_PUSH_LEN's own comment. Two independent one-shot bits, each
+  // consumed (read + cleared) here, on whatever cadence the dial itself
+  // polls at (~20ms) — pulses, not levels, so each fires exactly once per
+  // trigger rather than re-firing on every exchange until something else
+  // clears it. bit0: PIR wake. bit1: CMD_CHECK_OTA arrived — see that
+  // command's own header comment in rs485.js.
+  buf[DIAL_PUSH_LEN] = (shared.pirWakePending ? 0x01 : 0x00) | (shared.otaCheckPending ? 0x02 : 0x00);
   shared.pirWakePending = false;
+  shared.otaCheckPending = false;
   critical_section_exit(&sharedLock);
   Wire1.write(buf, DIAL_I2C_PUSH_LEN);
 }
@@ -1265,6 +1278,19 @@ void handleFrame(uint8_t addr, uint8_t cmd, uint8_t* payload, uint8_t len) {
     // No relay hardware on sensor nodes today — acknowledge so the master
     // doesn't retry, in case a future node type does carry one.
     sendFrame(busAddress, CMD_ACK, nullptr, 0);
+  } else if (cmd == CMD_CHECK_OTA) {
+    // rs485.js only ever sends this to nodes it has configured as
+    // hasDial=true, but the HAS_DIAL check here is the belt-and-suspenders
+    // match against THIS board's own compiled config — a plain sensor
+    // board has nowhere to relay this to even if somehow asked, so it
+    // still ACKs (the master doesn't act on this reply either way) without
+    // touching shared state that no i2c1 consumer will ever read.
+    if (HAS_DIAL) {
+      critical_section_enter_blocking(&sharedLock);
+      shared.otaCheckPending = true;
+      critical_section_exit(&sharedLock);
+    }
+    sendFrame(busAddress, CMD_ACK, nullptr, 0);
   }
 }
 
@@ -1333,6 +1359,9 @@ void printDiagnostics() {
   if (HAS_PIR) {
     diagPrint("[RS485 Node] diag: pir(pin=%d currentLevel=%d reportPending=%d wakePending=%d)",
       PIR_PIN, digitalRead(PIR_PIN), s.pirReportPending, s.pirWakePending);
+  }
+  if (HAS_DIAL && s.otaCheckPending) {
+    diagPrint("[RS485 Node] diag: otaCheckPending=1 (CMD_CHECK_OTA received, not yet relayed to dial)");
   }
 }
 

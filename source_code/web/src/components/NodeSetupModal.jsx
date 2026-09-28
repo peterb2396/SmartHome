@@ -38,6 +38,13 @@ export default function NodeSetupModal({ node, zones, soundZones, onClose, onSav
   const [hasDial, setHasDial] = useState(!!node.hasDial);
   const [zoneId, setZoneId] = useState(node.zoneId || "");
   const [soundZoneId, setSoundZoneId] = useState(node.soundZoneId || "");
+  // How much this node's own temp/humidity/co2 readings count toward its
+  // zone's blended value relative to other nodes sharing the same zoneId —
+  // see nodeRegistry.js/rs485.js's blendZoneReading(). Only matters once a
+  // zone has more than one reporting node (e.g. several dials in the same
+  // room group, each with their own SCD41); irrelevant, and hidden below,
+  // for a zone's only sensor.
+  const [sensorWeight, setSensorWeight] = useState(node.sensorWeight ?? 1);
 
   const usesZoneIdAsSoundZone = kind === "zoneAudio";
 
@@ -54,6 +61,7 @@ export default function NodeSetupModal({ node, zones, soundZones, onClose, onSav
       hasDial,
       zoneId: needsThermostatZone(kind, hasDial) || usesZoneIdAsSoundZone ? (zoneId || null) : null,
       soundZoneId: needsSoundZone(hasDial) ? (soundZoneId || null) : null,
+      sensorWeight: Number(sensorWeight) || 1,
     });
     onClose();
   }
@@ -108,7 +116,7 @@ export default function NodeSetupModal({ node, zones, soundZones, onClose, onSav
           )}
 
           {needsThermostatZone(kind, hasDial) && zones?.length > 0 && (
-            <div style={{ marginBottom: needsSoundZone(hasDial) ? "1.25rem" : 0 }}>
+            <div style={{ marginBottom: "1.25rem" }}>
               <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: 6 }}>
                 Thermostat zone
               </label>
@@ -116,6 +124,22 @@ export default function NodeSetupModal({ node, zones, soundZones, onClose, onSav
                 <option value="">— None —</option>
                 {zones.map(z => <option key={z.id} value={z.id}>{z.label}</option>)}
               </select>
+            </div>
+          )}
+
+          {needsThermostatZone(kind, hasDial) && zoneId && (
+            <div style={{ marginBottom: needsSoundZone(hasDial) ? "1.25rem" : 0 }}>
+              <label style={{ display: "block", fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: 6 }}>
+                Sensor weight
+              </label>
+              <input
+                type="number" min="0.1" step="0.5" value={sensorWeight}
+                onChange={e => setSensorWeight(e.target.value)}
+                style={inputStyle}
+              />
+              <p style={{ margin: "6px 0 0", color: "var(--text-muted)", fontSize: "0.75rem" }}>
+                Only matters when more than one node reports this zone's temp/humidity/CO2 (e.g. multiple dials in one room group) — their readings are averaged, weighted by this number relative to each other. Leave at 1 if this is the zone's only sensor.
+              </p>
             </div>
           )}
 

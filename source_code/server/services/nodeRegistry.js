@@ -33,7 +33,7 @@ function getState() {
   };
 }
 
-async function configureNode(uniqueId, { name, kind, zoneId, soundZoneId, hasDial, sensors }) {
+async function configureNode(uniqueId, { name, kind, zoneId, soundZoneId, hasDial, sensors, sensorWeight }) {
   if (!uniqueId) throw new Error('uniqueId is required');
   if (!name || !name.trim()) throw new Error('name is required');
   const nodes = getSettings();
@@ -68,6 +68,16 @@ async function configureNode(uniqueId, { name, kind, zoneId, soundZoneId, hasDia
     soundZoneId: soundZoneId || null,
     hasDial: !!hasDial,
     sensors: Array.isArray(sensors) ? sensors : [],
+    // How much this node's own temp/humidity/co2/pressure/voc readings
+    // count toward its zone's blended value, relative to every OTHER node
+    // reporting the SAME zoneId — see rs485.js's blendZoneReading(). Only
+    // matters once a zone has more than one node reporting sensor data
+    // (e.g. multiple dials in the same room-group, each with their own
+    // SCD41 — added 2026-09-28 for exactly that case); a zone with a
+    // single reporting node behaves identically regardless of this value.
+    // Defaults to 1 (equal weight) — existing single-sensor zones are
+    // unaffected either way.
+    sensorWeight: typeof sensorWeight === 'number' && sensorWeight > 0 ? sensorWeight : (existing?.sensorWeight ?? 1),
     busAddress,
     configuredAt: existing?.configuredAt || new Date().toISOString(),
   };
