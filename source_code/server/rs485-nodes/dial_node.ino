@@ -420,6 +420,16 @@ struct DialState {
 bool pendingChange = false;   // set when the encoder has moved something since the last push
 uint8_t pendingTapEvent = 0;  // 0=none,1=wake,2=menuSelect,3=toggleSpotifyEnabled,4=returnToMenu,5=markMaintenanceDone
 
+// Set by pollRp2040() when the paired RP2040 relays a CMD_CHECK_OTA it got
+// from the Pi (see that i2c1 bit's own comment there), consumed in loop()
+// alongside the normal OTA_CHECK_INTERVAL_MS timer — see loop()'s own
+// comment. Declared up here (not down by loop(), which is the ONLY other
+// place that touches it) specifically because Arduino auto-forward-
+// declares FUNCTIONS but not globals — pollRp2040() is defined earlier in
+// this file and sets it, so it has to exist before that point in real
+// source order, not just before it's first called.
+bool otaCheckRequested = false;
+
 // Real production evidence: after DIAL_SWEEP_GAP_MS (rs485.js) grew from
 // 20ms to 120ms, turning the encoder started "glitching, barely moving" —
 // a real regression, not a perception thing. applyPush() used to overwrite

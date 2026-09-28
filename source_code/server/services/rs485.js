@@ -1252,11 +1252,19 @@ async function notifyDialsToCheckOta(getConfiguredNodes) {
 async function pollAll(getConfiguredNodes) {
   checkFrameStall();
   checkBusDownReminder(); // runs every cycle regardless of bus state — see its own comment
-  // Own pass over every node (not folded into the loop below), since that
-  // loop skips anything without a zoneId — a dial with no thermostat zone
-  // of its own (kind='other', hasDial=true) is a valid config that still
-  // needs its OTA-check notification.
-  await notifyDialsToCheckOta(getConfiguredNodes);
+  // DISABLED (2026-09-28) — real incident: sent to the one hasDial node
+  // whose RP2040 hadn't been reflashed with the CMD_CHECK_OTA handler yet.
+  // Its old handleFrame() has no case for 0x0A and silently no-ops on it —
+  // fine in isolation — but something about that specific unrecognized
+  // command appears to desync its byte-stream frame parser, corrupting
+  // EVERY subsequent CMD_POLL/CMD_POLL_DIAL exchange with that node (CRC
+  // mismatches reading straight into the next frame's own 0xAA sync byte —
+  // a real parser desync, not noise) — persisting through a USB adapter
+  // reset, recovered only once this call was disabled. Re-enable this only
+  // once EVERY configured node's rs485_node.ino has actually been reflashed
+  // to a version that understands CMD_CHECK_OTA — never send a new command
+  // byte onto the bus before every possible receiver can safely ignore it.
+  // await notifyDialsToCheckOta(getConfiguredNodes);
   for (const node of getConfiguredNodes()) {
     if (node.busAddress == null) continue;
     if (node.kind === 'zoneAudio') {
