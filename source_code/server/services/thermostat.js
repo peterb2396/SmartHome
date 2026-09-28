@@ -136,12 +136,20 @@ const i2cRelay    = require('./i2cRelay');
 const astro       = require('./astro');
 const boiler      = require('./boiler');
 const scheduleUtil = require('./scheduleUtil');
+const climateGate = require('./climateGate');
 const { applyMinRunTime } = require('./shortCycle');
 const { readEnvironment: readEnv, updateEnvironmentAlerts: updateEnvAlerts } = require('./envSensors');
 const { sendPush } = require('./mail');
 
 const CRON_OPTS = { scheduled: true, timezone: astro.TZ };
-const DEADBAND_F = 0.5;          // hysteresis
+// 3°F total swing (±1.5 around target) — widened from 0.5 per explicit
+// request (2026-09-27): the old value was tight enough that equipment
+// looked like it was fighting itself (still "Heating" a full 0.4° past
+// target, etc.) even though the deadband alone can't cause an actual
+// heat<->cool ping-pong (see climateGate.js for what actually prevents
+// that). This is just how close to the number the room has to get before
+// something bothers to run.
+const DEADBAND_F = 1.5;          // hysteresis
 const TICK_MS = 30000;           // control loop cadence
 
 // ── Hard safety floor/ceiling ─────────────────────────────────────────────────
@@ -454,6 +462,11 @@ async function tick() {
   const activeSystem = getActiveSystem(settings);
   boiler.setSystemActive(activeSystem === 'boiler');
 
+  // Same cached reading rs485.js's dial push already uses — see
+  // climateGate.js for what this drives. Fetched once per tick, not per
+  // zone (every zone shares the same outdoor conditions).
+  const outdoor = astro.getCachedOutdoorConditions();
+
   // Pass 1: per-zone desired heat/cool calls. Comfort control (target ±
   // deadband, heat below / cool above) only runs while the zone is on; off
   // just stops steering it, it doesn't disable the zone. The hard safety
@@ -524,13 +537,23 @@ async function tick() {
 
     if (currentTemp !== null && zs.on) {
       const target = resolveTarget(zs, now);
+      // Economizer gate — per explicit instruction (2026-09-27): whichever
+      // direction the OUTDOOR temperature would push this zone for free is
+      // the only direction equipment is allowed to fight. Warmer outside
+      // than target means a below-target zone drifts up for free (heat
+      // disallowed, only cooling ever needed); colder outside means the
+      // opposite. This is what actually keeps heat and cool from ever
+      // being live right after each other — they're mutually exclusive per
+      // outdoor condition, not just deadband-separated. See climateGate.js.
+      const { heatAllowed, coolAllowed } = climateGate.allowedModes(outdoor?.tempF, outdoor?.stale, target);
+
       heatCall = rt.calling;
-      if (!rt.calling && currentTemp < target - DEADBAND_F) heatCall = true;
-      else if (rt.calling && currentTemp >= target + DEADBAND_F) heatCall = false;
+      if (!rt.calling && heatAllowed && currentTemp < target - DEADBAND_F) heatCall = true;
+      else if (rt.calling && (currentTemp >= target + DEADBAND_F || !heatAllowed)) heatCall = false;
 
       coolCall = rt.coolCalling;
-      if (!rt.coolCalling && currentTemp > target + DEADBAND_F) coolCall = true;
-      else if (rt.coolCalling && currentTemp <= target - DEADBAND_F) coolCall = false;
+      if (!rt.coolCalling && coolAllowed && currentTemp > target + DEADBAND_F) coolCall = true;
+      else if (rt.coolCalling && (currentTemp <= target - DEADBAND_F || !coolAllowed)) coolCall = false;
     }
     // zs.on === false -> no comfort call; let it drift. The safety check
     // below is still live regardless.
@@ -1025,17 +1048,21 @@ function getState() {
         on: zs.on,
         // The currently-effective target — schedule block, manual hold, or
         // base fallback, whichever applies right now (see resolveTarget()).
-        // Unified across both plants, exactly like `calling` below — real
-        // production bug this fixed (2026-09-26): while the boiler is
-        // actually serving this zone, ITS target is the one really driving
-        // equipment; the air handler's own target sits parked and unused,
-        // so anything reading this field (the RS485 dial poll, in
-        // particular) needs whichever plant is really in charge, not
-        // whichever plant this settings object happens to belong to. Same
-        // reasoning applies to the dial's WRITE path — see rs485.js's
-        // pollAllDials(), which now applies a dial's reported change to
-        // whichever plant getActiveSystem() says is active, not always here.
-        target: activeSystem === 'air-handler' ? resolveTarget(zs, now) : (boilerZone?.target ?? resolveTarget(zs, now)),
+        // This settings object (`zs`, thermostat.js's own) is now the ONE
+        // shared source of truth for target/schedule/on/manualHeat across
+        // BOTH plants — see boiler.js's tick()/getState(), which read
+        // straight from here instead of keeping an independent copy. Real
+        // production bug this fixes (2026-09-27): a brief earlier revision
+        // tried to "unify" this by reading whichever plant was active, which
+        // masked the real problem (two divergent targets) instead of fixing
+        // it — the air handler's own target sat stale/unedited while the
+        // boiler was active, so cooling (which correctly runs independent of
+        // heat-source selection — see this file's header, and
+        // driveAirHandler()'s `airHandlerIsHeatSource` gate below, which
+        // deliberately only ever suppresses heatCall, never coolCall) was
+        // comparing currentTemp against a target nobody actually meant
+        // anymore. One target, always this one, fixes it at the source.
+        target: resolveTarget(zs, now),
         overridden: isOverridden(zs, now),
         // Only meaningful while overridden is true. null both when there's
         // no active override AND when the override has no expiry (an empty
@@ -1059,19 +1086,16 @@ function getState() {
         // collapsed into a single shared field just because they happen to
         // match today.
         heatSource: activeSystem,
-        // Unified the same way `calling` above is, but simpler: the gas
-        // boiler has no cooling capability at all (no AC), so there's no
-        // boilerZone.coolCalling to fall back to — it's unconditionally
-        // false whenever the boiler is the active plant. Real bug this
-        // fixed (2026-09-26): the air handler's own control loop keeps
-        // running even while parked (not the active plant), using its own
-        // stale, no-longer-synced target — its leftover rt.coolCalling was
-        // leaking straight through here, so the RS485 dial (which always
-        // reads via this service) showed "Cooling" from a phantom air-
-        // handler-only calculation while the web (reading boiler.js's own
-        // zones, which have no coolCalling field at all) correctly showed
-        // Idle for the same zone at the same moment.
-        coolCalling: activeSystem === 'air-handler' && rt.coolCalling,
+        // NOT gated by activeSystem/heatSource — see this file's header:
+        // cooling always runs through the air handler regardless of which
+        // plant is currently chosen to deliver HEAT. A brief earlier
+        // revision gated this to `activeSystem === 'air-handler'`, which
+        // seemed to fix a "phantom cooling" report but actually broke this
+        // already-correct, deliberate design (see driveAirHandler()'s
+        // `airHandlerIsHeatSource` comment: "boiler has the house's heat
+        // right now — cooling can still run"). The real bug was the target
+        // divergence fixed above, not this field — reverted.
+        coolCalling: rt.coolCalling,
         safety: rt.safety,
         environment: readEnvironment(zone),
         balancePercent: zs.balancePercent ?? 100,

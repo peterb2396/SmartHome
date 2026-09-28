@@ -11,12 +11,32 @@
  * alternate PLANTS serving the SAME rooms (see thermostat.js's
  * getActiveSystem() for how the house picks which one is in charge — an
  * immediate read of `mode`, no seasonal prediction) rather than needing any
- * lossy name-based zone remapping — that remapping (Great Room <->
- * Downstairs/Primary Suite, etc.) is what this file and thermostat.js used
- * to need before the re-piping, and it's gone now that the zones genuinely
- * match. Each plant still keeps its own independent target/schedule/on
- * settings per zone — switching `mode` does not copy values between them,
- * it just changes which plant's own settings are actually driving relays.
+ * lossy name-based zone remapping.
+ *
+ * IMPORTANT (2026-09-27, real production bug fixed): each plant used to
+ * keep its OWN independent target/schedule/on/manualHeat settings per zone,
+ * on the theory that "switching mode" is just switching which plant's
+ * settings drive relays. That was wrong per explicit correction: `mode`
+ * ONLY selects which plant DELIVERS HEAT — it was never supposed to mean
+ * "which plant's target is real" or "whether cooling can run at all"
+ * (cooling has no boiler equivalent in the first place; it only ever runs
+ * through the air handler, unconditionally — see thermostat.js's header).
+ * Two divergent targets meant a dial/web edit made while the boiler was
+ * active silently never reached the air handler's own copy, so ITS
+ * comfort logic (including cooling) kept comparing against a stale,
+ * long-forgotten number. Fixed by making thermostat.js's own zone settings
+ * the ONE shared source of truth for target/schedule/on/manualHeat — this
+ * file no longer keeps any of its own. setZone()/setZoneSchedule()/
+ * setManualHeat() below delegate straight to thermostat.js's identical
+ * functions (then still run this plant's OWN tick() immediately after, so
+ * a manual edit takes effect on the gas valves right away rather than
+ * waiting for the next 30s cycle) and tick()/getState() read the shared
+ * settings through thermostat.js's getSettings() instead of a local copy.
+ * This file still owns everything genuinely plant-specific: its own
+ * calling/safety runtime state, its own hardware/relay mapping, and its
+ * own short-cycle-irrelevant valve driving (see the header note on why
+ * there's no min-run-time gate here — a motorized zone valve doesn't wear
+ * the way a compressor does).
  *
  * tempSensor per zone is `temp-<zoneId>` — the SAME sensorStore key the air
  * handler's own zone reads (see thermostat.js's ZONES). No new/separate
@@ -62,13 +82,18 @@
 
 const moment      = require('moment');
 const sensors     = require('./sensorStore');
-const settingsSvc = require('./settings');
 const i2cRelay    = require('./i2cRelay');
+const astro       = require('./astro');
+const climateGate = require('./climateGate');
 const scheduleUtil = require('./scheduleUtil');
 const { readEnvironment, updateEnvironmentAlerts } = require('./envSensors');
 const { sendPush } = require('./mail');
 
-const DEADBAND_F = 0.5;
+// 3°F total swing — matches thermostat.js's DEADBAND_F exactly (both plants
+// now compare against the SAME shared target, see this file's header, so
+// using a different band here would mean the two disagree about when a
+// call should start/stop for no real reason).
+const DEADBAND_F = 1.5;
 const TICK_MS = 30000;
 
 // Same hard safety range as thermostat.js — freeze/mold protection applies
@@ -98,20 +123,6 @@ const ZONES = [
   { id: 'office',        label: 'Office',         tempSensor: 'temp-office',        ch: CH.OFFICE },
 ];
 
-const DEFAULT_SETTINGS = {
-  // manualHeatUntil: epoch-ms expiry of a manual "force heat on now"
-  // override, or null — see setManualHeat()/tick(). The main reason this
-  // exists on the boiler side specifically: most zones here have no real
-  // sensor yet (see this file's header), so the normal currentTemp === null
-  // fail-safe means they can NEVER call for heat on their own — this is the
-  // one way to actually heat one of those rooms until it gets real hardware.
-  zones: Object.fromEntries(ZONES.map(z => [z.id, { on: true, target: 68, schedule: [], override: null, manualHeatUntil: null }])),
-};
-
-function clampToSafetyRange(target) {
-  return Math.min(SAFETY_MAX_F, Math.max(SAFETY_MIN_F, target));
-}
-
 const runtime = Object.fromEntries(
   ZONES.map(z => [z.id, { calling: false, safety: 'normal', envStatus: {}, callingSinceMs: 0, maxCallAlerted: false }])
 );
@@ -128,29 +139,16 @@ let systemActive = false; // true only while thermostat.js's getActiveSystem() s
 // "something is actually wrong," not to interrupt normal operation.
 const MAX_CONTINUOUS_CALL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
-// Same strict auto-off duration as MAX_CONTINUOUS_CALL_MS above, shared by
-// explicit request — a manual "force heat on now" override (setManualHeat())
-// carries the same "don't let equipment run unattended indefinitely" risk,
-// just operator-initiated instead of a stuck sensor/relay.
-const MANUAL_HEAT_MS = MAX_CONTINUOUS_CALL_MS;
+const { resolveTarget, isOverridden } = scheduleUtil;
 
-const { resolveTarget, isOverridden, nextBoundary } = scheduleUtil;
-
-function getSettings() {
-  const stored = settingsSvc.get()?.boiler;
-  if (!stored) return DEFAULT_SETTINGS;
-  return {
-    ...DEFAULT_SETTINGS,
-    ...stored,
-    zones: Object.fromEntries(ZONES.map(z => [
-      z.id,
-      { ...DEFAULT_SETTINGS.zones[z.id], ...(stored.zones?.[z.id] || {}) },
-    ])),
-  };
-}
-
-async function saveSettings(next) {
-  await settingsSvc.updateSetting('boiler', next);
+// thermostat.js requires this file at module load (for getState()/
+// setSystemActive()), so this file must NOT require thermostat.js at the
+// top level too — that's a true circular require that would hand one side
+// a half-initialized module. Required lazily, inside each function that
+// actually needs it, exactly like rs485.js already does for the same
+// load-order reason.
+function thermostatSvc() {
+  return require('./thermostat');
 }
 
 function updateSafetyState(zone, rt, currentTemp) {
@@ -192,11 +190,17 @@ function setSystemActive(active) {
 }
 
 async function tick() {
-  const settings = getSettings();
+  // Shared target/schedule/on/manualHeat — see this file's header. Not this
+  // plant's own settings anymore; thermostat.js owns the one copy both
+  // plants read.
+  const tSettings = thermostatSvc().getSettings();
   const now = moment();
+  // Same cached reading thermostat.js's own tick() uses — see
+  // climateGate.js for what this drives.
+  const outdoor = astro.getCachedOutdoorConditions();
 
   for (const zone of ZONES) {
-    const zs = settings.zones[zone.id];
+    const zs = tSettings.zones[zone.id];
     const rt = runtime[zone.id];
 
     const reading = sensors.get(zone.tempSensor);
@@ -219,14 +223,14 @@ async function tick() {
     updateSafetyState(zone, rt, currentTemp);
     updateEnvironmentAlerts(zone.label, rt, readEnvironment(zone.id));
 
-    // Manual "force heat on now" override (see setManualHeat()) — restricted
-    // to one person server-side (server/api/thermostat.js). Self-expiring
-    // after MANUAL_HEAT_MS, and still yields to a CONFIRMED over-temperature
-    // reading (a zone actually known to be too hot never gets more heat
-    // forced into it). A zone with no sensor at all (currentTemp still null
-    // below) has no such reading to yield to — that's the actual point of
-    // this override, see this file's header on most zones having no real
-    // sensor yet.
+    // Manual "force heat on now" override (see thermostat.js's
+    // setManualHeat()) — restricted to one person server-side (server/api/
+    // thermostat.js). Self-expiring after MANUAL_HEAT_MS, and still yields
+    // to a CONFIRMED over-temperature reading (a zone actually known to be
+    // too hot never gets more heat forced into it). A zone with no sensor
+    // at all (currentTemp still null below) has no such reading to yield
+    // to — that's the actual point of this override, see this file's
+    // header on most zones having no real sensor yet.
     const manualHeatActive = !!zs.manualHeatUntil && Date.now() < zs.manualHeatUntil && rt.safety !== 'above-max';
 
     if (currentTemp === null && !manualHeatActive) {
@@ -239,8 +243,14 @@ async function tick() {
     let heatCall = zs.on ? rt.calling : false;
     if (currentTemp !== null && zs.on) {
       const target = resolveTarget(zs, now);
-      if (!rt.calling && currentTemp < target - DEADBAND_F) heatCall = true;
-      else if (rt.calling && currentTemp >= target + DEADBAND_F) heatCall = false;
+      // Economizer gate, shared with thermostat.js — see climateGate.js.
+      // Applies to gas heat exactly the same way it applies to air-source
+      // heat: if it's warmer outside than the target, letting the zone
+      // drift up for free is preferred over burning gas to do the same
+      // thing.
+      const { heatAllowed } = climateGate.allowedModes(outdoor?.tempF, outdoor?.stale, target);
+      if (!rt.calling && heatAllowed && currentTemp < target - DEADBAND_F) heatCall = true;
+      else if (rt.calling && (currentTemp >= target + DEADBAND_F || !heatAllowed)) heatCall = false;
     }
     if (manualHeatActive) heatCall = true;
     if (rt.safety === 'below-min') heatCall = true; // freeze protection wins outright, on or off
@@ -286,57 +296,41 @@ async function tick() {
   }
 }
 
+// Delegates straight to thermostat.js's identical function — see this
+// file's header on why there's only ONE target/schedule/on per zone now,
+// not one per plant. Still runs this plant's OWN tick() right after, so a
+// manual change takes effect on the gas valves immediately rather than
+// waiting for the next 30s cycle (thermostat.js's own setZone() already
+// does the same for the air handler's relays via its own tick()).
 async function setZone(zoneId, { target, on }) {
-  const settings = getSettings();
-  if (!settings.zones[zoneId]) throw new Error(`Unknown boiler zone ${zoneId}`);
-  const zs = { ...settings.zones[zoneId] };
-  if (typeof on === 'boolean') zs.on = on;
-  if (typeof target === 'number') {
-    const clamped = clampToSafetyRange(target);
-    zs.target = clamped;
-    zs.override = { target: clamped, untilTime: nextBoundary(zs.schedule, moment()) };
-  }
-  const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
-  await saveSettings(next);
+  await thermostatSvc().setZone(zoneId, { target, on });
   await tick();
-  return next;
+  return getState();
 }
 
 async function setZoneSchedule(zoneId, schedule) {
-  const settings = getSettings();
-  if (!settings.zones[zoneId]) throw new Error(`Unknown boiler zone ${zoneId}`);
-  const clamped = schedule.map(b => ({ ...b, target: clampToSafetyRange(b.target) }));
-  const zs = { ...settings.zones[zoneId], schedule: clamped, override: null };
-  const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
-  await saveSettings(next);
+  await thermostatSvc().setZoneSchedule(zoneId, schedule);
   await tick();
-  return next;
+  return getState();
 }
 
 // Manual "force heat on now" override — restricted server-side to one
-// person (server/api/thermostat.js's isAuthorizedUser()). Turning it off
-// just clears the expiry early; letting it run lets it clear itself once
-// MANUAL_HEAT_MS elapses (see tick()) — tick()/getState() both just compare
-// against the stored timestamp, no separate persisted "off" write needed
-// for the auto-expiry case.
+// person (server/api/thermostat.js's isAuthorizedUser()). See setZone()'s
+// comment on delegating to thermostat.js as the single source of truth.
 async function setManualHeat(zoneId, on) {
-  const settings = getSettings();
-  if (!settings.zones[zoneId]) throw new Error(`Unknown boiler zone ${zoneId}`);
-  const zs = { ...settings.zones[zoneId], manualHeatUntil: on ? Date.now() + MANUAL_HEAT_MS : null };
-  const next = { ...settings, zones: { ...settings.zones, [zoneId]: zs } };
-  await saveSettings(next);
+  await thermostatSvc().setManualHeat(zoneId, on);
   await tick();
-  return next;
+  return getState();
 }
 
 function getState() {
-  const settings = getSettings();
+  const tSettings = thermostatSvc().getSettings();
   const now = moment();
   return {
     active: systemActive,
     safetyRange: { min: SAFETY_MIN_F, max: SAFETY_MAX_F },
     zones: ZONES.map(zone => {
-      const zs = settings.zones[zone.id];
+      const zs = tSettings.zones[zone.id];
       const reading = sensors.get(zone.tempSensor);
       const hasReading = typeof reading?.value === 'number';
       const stale = hasReading && reading.stale;
@@ -370,9 +364,6 @@ function shutdown() {
 }
 
 async function init() {
-  if (!settingsSvc.get()?.boiler) {
-    await saveSettings(DEFAULT_SETTINGS);
-  }
   for (const zone of ZONES) i2cRelay.setChannel(BOILER_BOARD, zone.ch, false);
 
   setInterval(() => { tick().catch(err => console.error('[Boiler] Tick error:', err.message)); }, TICK_MS);
@@ -386,8 +377,6 @@ module.exports = {
   setZoneSchedule,
   setManualHeat,
   setSystemActive,
-  getSettings,
-  saveSettings,
   shutdown,
   ZONES,
 };
