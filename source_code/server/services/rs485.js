@@ -367,19 +367,17 @@ function blendZoneReading(type, zoneId, getConfiguredNodes) {
 
 const RS485_PORT_PATH = process.env.RS485_PORT || '/dev/ttyUSB0'; // USB-to-RS485 adapter
 const BAUD_RATE = 9600;
-// Was 10000, then 1000 — moved to 2000 (2026-09-28) after real production
-// evidence: at 1000ms, CRC mismatches that acquireBusLock() had otherwise
-// fully eliminated started reappearing. acquireBusLock() still guarantees
-// no two exchanges ever overlap on the wire (that part isn't the issue —
-// true collisions remain structurally impossible regardless of cadence),
-// but at 1s the bus was left with very little idle/recovery time between
-// back-to-back exchanges, which is consistent with a timing-marginal
-// UART/adapter issue rather than a logic bug — halving the exchange rate
-// gives the wire more breathing room per cycle. If mismatches persist even
-// at 2000ms, that points at something electrical (grounding, adapter,
-// cable run) rather than pure timing, and is worth investigating directly
-// rather than continuing to just slow down further.
-const POLL_INTERVAL_MS = 2000;
+// Was 10000, then 1000, briefly 2000 (2026-09-28) — reverted back to 1000
+// the same day after the 2000ms change coincided with a total, sustained
+// breakdown on one node (100% CRC failure, not just occasional mismatches)
+// that a full firmware reflash and power cycle did NOT clear. That's not
+// proof this constant caused it — going slower should mechanically reduce
+// bus contention, not create it — but the timing correlation was exact and
+// direct, and reverting a timing constant is cheap/safe to test against a
+// live HVAC outage, unlike continuing to theorize. If mismatches persist
+// at 1000ms too, this constant is cleared and the real cause is still
+// unfound — don't treat this revert alone as confirmation of what broke it.
+const POLL_INTERVAL_MS = 1000;
 const ANNOUNCE_STALE_MS = 30000; // drop a pending node from the list if it stops announcing
 
 // How long to wait for a REPORT after a POLL before giving up. Sized for a

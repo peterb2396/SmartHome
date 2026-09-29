@@ -197,7 +197,7 @@ const char* OTA_SERVER_HOST = "server.153home.online"; // same host the rest of 
 // the Console's firmware panel — see server/services/firmwareUpdate.js's
 // getLatestDialFirmware() for the exact naming convention this is
 // compared against.
-const char* FIRMWARE_VERSION = "1.1.1";
+const char* FIRMWARE_VERSION = "1.1.3";
 const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60 * 60 * 1000; // every 6 hours
 const unsigned long OTA_FIRST_CHECK_DELAY_MS = 30000; // wait until well after boot — see checkForOTA()'s comment on why this blocks loop()
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000; // don't hang indefinitely if WiFi's unavailable
@@ -451,16 +451,17 @@ bool otaCheckRequested = false;
 // DIAL_SWEEP_GAP_MS (rs485.js) tracks POLL_INTERVAL_MS directly — see that
 // constant's own comment for the full history: slowed to 10s while
 // collisions were a real risk, dropped to 1s once acquireBusLock() made
-// collisions structurally impossible, then back up to 2s (2026-09-28) after
-// CRC mismatches reappeared at 1s — see POLL_INTERVAL_MS's own comment.
-// Worst-case round trip is close to 2x whatever that value is (wait almost
-// a full cycle to report the edit up, then almost another full cycle for
-// the confirmed value to come back down) — this constant stays sized
-// comfortably past that (roughly 3x, matching this comment's own history
-// of margin), just rescaled again for the current cadence. Keep these two
-// in step by hand; nothing enforces it automatically across two separate
-// .ino files.
-const unsigned long PUSH_OVERRIDE_GRACE_MS = 6000;
+// collisions structurally impossible, briefly tried 2s (2026-09-28), then
+// reverted back to 1s the same day after that change coincided with a
+// total node breakdown — see POLL_INTERVAL_MS's own comment on why that's
+// a correlation being tested, not confirmed causation. Worst-case round
+// trip is close to 2x whatever that value is (wait almost a full cycle to
+// report the edit up, then almost another full cycle for the confirmed
+// value to come back down) — this constant stays sized comfortably past
+// that (roughly 3x, matching this comment's own history of margin), just
+// rescaled again for the current cadence. Keep these two in step by hand;
+// nothing enforces it automatically across two separate .ino files.
+const unsigned long PUSH_OVERRIDE_GRACE_MS = 3000;
 unsigned long lastLocalEditAtMs = 0;
 
 // `state`/pendingChange/pendingTapEvent are written from BOTH the main
@@ -1737,6 +1738,20 @@ void LVGL_DISPLAY_INIT() {
   // real bug, not just a style choice; moved here to match Elecrow's own
   // working example's setup() order exactly.
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  // Real production incident (2026-09-28): with no explicit timeout, a
+  // wedged/crash-looping paired RP2040 could make Wire.endTransmission()/
+  // Wire.requestFrom() in pollRp2040() below block indefinitely waiting on
+  // a response that was never coming — which hangs THIS board's entire
+  // loop() (pollRp2040() runs synchronously, every 20ms, inline), freezing
+  // the screen on whatever it last drew and making touch/knob input dead,
+  // even though this board's own firmware was never at fault. 50ms is
+  // comfortably longer than a healthy exchange ever needs (see
+  // RP2040_POLL_INTERVAL_MS's own 20ms cadence) but short enough that a
+  // truly wedged companion just costs one skipped poll instead of the
+  // whole UI. Every call site already has its own graceful "not reachable
+  // this cycle, try again next tick" fallback — this is what actually lets
+  // that fallback trigger instead of never getting the chance to.
+  Wire.setTimeOut(50);
 
   // pcf8574.begin() failing (real evidence, not assumed) means it's not
   // ACKing at PCF8574_ADDR (0x21) — since touch (a DIFFERENT chip on this
