@@ -115,11 +115,10 @@
  * playing: TV" etc. — the dial has no say in it, same as the web app.
  * faultCount/maintenanceDueCount are plain counts (from faults.js/
  * maintenance.js, same numbers the Console/Maintenance pages show) for an
- * ambient badge on every OTHER screen — it just flags "something's up" via
- * that badge when either is nonzero. The Status screen itself DOES now
- * render real text (bytes 48+, below) — this earlier design call ("no room
- * on a round face") was reversed per explicit ask (2026-09-29). Same for
- * every dial in a sweep, not per-zone.
+ * ambient badge — the dial deliberately never renders fault/maintenance
+ * TEXT (no room on a round face, and it'd duplicate the web app's detail
+ * view); it just flags "go check the app" when either is nonzero. Same
+ * for every dial in a sweep, not per-zone.
  *
  * Bytes 27-47, appended for the Clock/weather screen redesign (kept after
  * the original 27B so none of those offsets ever had to move): [weekday
@@ -136,18 +135,6 @@
  * magic temperature][3x forecast point, 5B each, +3h/+6h/+9h in order:
  * tempF f32 + weatherCategory 1B — ignore both if this point's
  * forecastValidMask bit is unset].
- *
- * Bytes 48+, appended for individual fault/maintenance text on the Status
- * screen (2026-09-29) — up to MAX_STATUS_ITEMS (3) slots, (1 +
- * STATUS_ITEM_TEXT_LEN(48))B each: [isFault 1B][text 48B, NUL-padded/
- * truncated, always a valid terminated C string]. Faults first (more
- * urgent), then due maintenance, combined and truncated to 3 total — see
- * buildStatusItems(). An unused slot is all-zero; the dial treats
- * text[0]==0 as "no item here," no separate item-count byte needed. The
- * dial cycles through whichever slots are populated one at a time by
- * rotating while on the Status screen; faultCount/maintenanceDueCount
- * above are unrelated raw counts, unchanged, still driving the ambient
- * badge on every other screen.
  *
  * DIAL_STATE payload (dial→master reply, 8B): [mode 1B: 0=thermostat,
  * 1=sound][newTargetF f32][changed 1B][tapEvent 1B][newVolumePercent 1B].
@@ -473,11 +460,11 @@ function crc32(buf) {
 }
 
 // onData()'s resync safety net — see its own comment for the failure mode
-// this guards against. Largest real payload today is POLL_DIAL's 195B (see
-// buildDialPushPayload() — grew from 60 for the Status-screen fault/
-// maintenance text, 2026-09-29); generous headroom over that so a
-// legitimate future protocol addition doesn't false-positive against this.
-const MAX_PAYLOAD_LEN = 220;
+// this guards against. Largest real payload today is POLL_DIAL's 48B (see
+// buildDialPushPayload() — grew from 27B for the Clock/weather screen
+// redesign); generous headroom over that so a legitimate future protocol
+// addition doesn't false-positive against this.
+const MAX_PAYLOAD_LEN = 60;
 // NOT just wire-transmission time (9600 baud is ~1ms/byte, which alone
 // would suggest well under 50ms) — real USB-to-RS485 adapters/OS serial
 // drivers can legitimately deliver one genuine frame's bytes split across
@@ -1325,34 +1312,8 @@ async function pollAll(getConfiguredNodes) {
 // finished loading.
 const SOUND_SOURCE_BYTE = { off: 0, spotify: 1, override1: 2, override2: 3 };
 
-// Individual fault/maintenance TEXT on the dial's Status screen, cycled
-// one at a time by rotating — per explicit ask (2026-09-29), reversing
-// this file's own earlier design call ("the dial never shows fault/
-// maintenance TEXT... no room on a round 480x480 face"). Capped at 3
-// items combined (faults prioritized over maintenance, same as the
-// badge's own color priority — see buildStatusItems()) and 48 characters
-// each: a real household is expected to have at most a couple of these
-// active at once, and this is still an ambient glance surface, not meant
-// to replace the web app's own full fault/maintenance views.
-const MAX_STATUS_ITEMS = 3;
-const STATUS_ITEM_TEXT_LEN = 48; // bytes, NUL-padded — dial treats it as a C string
-
-// Builds the up-to-3-item list buildDialPushPayload() encodes below.
-// Faults first (more urgent — matches the existing badge's own
-// DANGER-over-WARNING color priority), then maintenance, combined list
-// truncated to MAX_STATUS_ITEMS. Takes the SAME faults/dueTasks arrays
-// pollAllDials() already fetched for faultCount/maintenanceDueCount, so
-// this doesn't re-query either service.
-function buildStatusItems(faults, dueTasks) {
-  const items = [
-    ...faults.map(f => ({ isFault: true, text: f.message })),
-    ...dueTasks.map(t => ({ isFault: false, text: t.label })),
-  ];
-  return items.slice(0, MAX_STATUS_ITEMS);
-}
-
-function buildDialPushPayload(zone, outdoor, soundZone, now, faultCount, maintenanceDueCount, statusItems) {
-  const buf = Buffer.alloc(48 + MAX_STATUS_ITEMS * (1 + STATUS_ITEM_TEXT_LEN));
+function buildDialPushPayload(zone, outdoor, soundZone, now, faultCount, maintenanceDueCount) {
+  const buf = Buffer.alloc(48);
   buf.writeFloatLE(zone?.target ?? 68, 0);
   buf.writeFloatLE(zone?.currentTemp ?? 0, 4);
   buf.writeFloatLE(zone?.environment?.humidity?.value ?? 0, 8);
@@ -1412,28 +1373,6 @@ function buildDialPushPayload(zone, outdoor, soundZone, now, faultCount, mainten
     buf.writeUInt8(point?.weatherCategory ?? 2, offset + 4);
   });
   buf.writeUInt8(forecastValidMask, 32); // bit0=+3h, bit1=+6h, bit2=+9h
-
-  // ── Status items (see MAX_STATUS_ITEMS/STATUS_ITEM_TEXT_LEN above) —
-  // appended after the original 48 bytes, same "never move an existing
-  // offset" convention as the Clock/weather block above. Per slot: isFault
-  // (1B) + text (STATUS_ITEM_TEXT_LEN B, NUL-padded/truncated). An empty
-  // slot (past however many real items there are) is left all-zero —
-  // dial_node.ino treats text[0]==0 as "no item here," no separate count
-  // byte needed.
-  statusItems.forEach((item, i) => {
-    const base = 48 + i * (1 + STATUS_ITEM_TEXT_LEN);
-    buf.writeUInt8(item.isFault ? 1 : 0, base);
-    // Reserve the last byte as a guaranteed NUL terminator even if the
-    // message is long enough to otherwise fill the whole field exactly —
-    // dial_node.ino trusts this is always a valid, terminated C string.
-    // The explicit byte-length cap (3rd arg) matters even after the
-    // character-count .slice() above: .slice() counts UTF-16 code units,
-    // not bytes, so any non-ASCII character could still encode to more
-    // bytes than that count implies — without this cap, write() would
-    // happily spill past STATUS_ITEM_TEXT_LEN into the NEXT item's slot
-    // (or past the buffer's end, on the last one).
-    buf.write(item.text.slice(0, STATUS_ITEM_TEXT_LEN - 1), base + 1, STATUS_ITEM_TEXT_LEN - 1, 'utf8');
-  });
   return buf;
 }
 
@@ -1477,11 +1416,8 @@ async function pollAllDials(getConfiguredNodes) {
   const faultsSvc = require('./faults');
   const maintenanceSvc = require('./maintenance');
   // Same for every dial in this sweep — computed once, not per node.
-  const faults = faultsSvc.getFaults();
-  const dueTasks = maintenanceSvc.getState().tasks.filter(t => t.isDue);
-  const faultCount = faults.length;
-  const maintenanceDueCount = dueTasks.length;
-  const statusItems = buildStatusItems(faults, dueTasks);
+  const faultCount = faultsSvc.getFaults().length;
+  const maintenanceDueCount = maintenanceSvc.getState().tasks.filter(t => t.isDue).length;
 
   for (const node of dialNodes) {
     // This address might currently be mid-exchange with pollAll()'s
@@ -1506,7 +1442,7 @@ async function pollAllDials(getConfiguredNodes) {
     }
     pollingAddresses.add(node.busAddress);
     const release = await acquireBusLock();
-    writeFrame(buildFrame(node.busAddress, CMD.POLL_DIAL, buildDialPushPayload(zone, outdoor, soundZone, new Date(), faultCount, maintenanceDueCount, statusItems)));
+    writeFrame(buildFrame(node.busAddress, CMD.POLL_DIAL, buildDialPushPayload(zone, outdoor, soundZone, new Date(), faultCount, maintenanceDueCount)));
 
     // Real production evidence (2026-09-26): this exchange used to fail
     // completely SILENTLY on timeout — no warning, no miss count, nothing —

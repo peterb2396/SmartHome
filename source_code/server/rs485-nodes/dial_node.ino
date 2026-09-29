@@ -197,7 +197,7 @@ const char* OTA_SERVER_HOST = "server.153home.online"; // same host the rest of 
 // the Console's firmware panel — see server/services/firmwareUpdate.js's
 // getLatestDialFirmware() for the exact naming convention this is
 // compared against.
-const char* FIRMWARE_VERSION = "1.2.0";
+const char* FIRMWARE_VERSION = "1.1.4";
 const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60 * 60 * 1000; // every 6 hours
 const unsigned long OTA_FIRST_CHECK_DELAY_MS = 30000; // wait until well after boot — see checkForOTA()'s comment on why this blocks loop()
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000; // don't hang indefinitely if WiFi's unavailable
@@ -243,20 +243,7 @@ const int ENCODER_PIN_B = 4;
 // link, over the SAME Wire (I2C_SDA_PIN/I2C_SCL_PIN above) already used
 // for touch/PCF8574, not a second bus.
 const uint8_t DIAL_I2C_ADDR = 0x42; // MUST match rs485_node.ino's DIAL_I2C_ADDR
-// 195 = 48 (original) + 3 status-item slots (see MAX_STATUS_ITEMS/
-// STATUS_ITEM_TEXT_LEN below) — grew (2026-09-29) for individual fault/
-// maintenance text on the Status screen. MUST match rs485.js's POLL_DIAL
-// payload size exactly.
-const uint8_t DIAL_PUSH_LEN = 195;
-// Individual fault/maintenance items on the Status screen, cycled one at a
-// time by rotating — see rs485.js's POLL_DIAL header for the exact byte
-// layout (bytes 48+) and buildStatusItems() for how the up-to-3 list is
-// chosen (faults first, then maintenance). STATUS_ITEM_TEXT_LEN reserves
-// the last byte as a guaranteed NUL terminator even if the server's own
-// message exactly filled the field — never trust the incoming bytes alone
-// to already be terminated.
-const uint8_t MAX_STATUS_ITEMS = 3;
-const uint8_t STATUS_ITEM_TEXT_LEN = 48;
+const uint8_t DIAL_PUSH_LEN = 48;   // MUST match rs485.js's POLL_DIAL payload size
 // One extra byte beyond DIAL_PUSH_LEN, i2c1-ONLY (never goes out over
 // RS485) — bit0 set means the paired RP2040's own PIR (see its HAS_PIR)
 // saw a motion edge since this board last asked. Read in pollRp2040()
@@ -418,13 +405,6 @@ lv_obj_t* soundEnabledBtn; // the pill-shaped container (background color reflec
 lv_obj_t* soundEnabledLabel; // the text inside it — soundEnabledBtn stopped being a label itself once it became a real button
 lv_obj_t* soundBadgeDot;
 
-// One fault/maintenance item — see MAX_STATUS_ITEMS/STATUS_ITEM_TEXT_LEN's
-// own comment for the wire layout this comes from.
-struct StatusItem {
-  bool isFault = false;
-  char text[STATUS_ITEM_TEXT_LEN] = {0}; // empty (text[0]==0) means this slot is unused
-};
-
 // ── Local live state — updated from I2C pushes, and by the encoder
 // between pushes; the I2C reply always reports these absolute values ──
 struct DialState {
@@ -445,15 +425,6 @@ struct DialState {
   bool spotifyEnabled = false; // this dial's own optimistic copy — see onTap()'s SCREEN_SOUND case
   uint8_t faultCount = 0;
   uint8_t maintenanceDueCount = 0;
-  // Individual items for the Status screen — see StatusItem's own comment
-  // and rs485.js's POLL_DIAL header (bytes 48+). statusItemCount is how
-  // many of the MAX_STATUS_ITEMS slots are actually populated (the
-  // highest populated slot + 1 — the server always front-packs the list,
-  // never leaves a gap before the end), NOT the same as faultCount +
-  // maintenanceDueCount above, which can be larger than 3 — this is
-  // already truncated server-side.
-  uint8_t statusItemCount = 0;
-  StatusItem statusItems[MAX_STATUS_ITEMS];
   // ── Clock/weather screen — see rs485.js's POLL_DIAL header for the exact
   // byte layout this all comes from (bytes 27-47).
   uint8_t weekday = 0; // 0=Sunday..6=Saturday
@@ -525,7 +496,6 @@ enum Screen { SCREEN_IDLE, SCREEN_CLOCK, SCREEN_MENU, SCREEN_THERMOSTAT, SCREEN_
 Screen currentScreen = SCREEN_IDLE;
 const int MENU_ITEM_CAPACITY = 4; // Home, Sound, Thermostat, Status — array size, NOT how many are currently shown
 int menuSelection = 0;         // cycled by rotating on SCREEN_MENU
-int statusItemIndex = 0;       // cycled by rotating on SCREEN_STATUS — see showStatusScreen()
 unsigned long lastInteractionAt = 0;
 
 // Status only ever shows up in the menu while there's something worth
@@ -588,29 +558,6 @@ void applyPush(const uint8_t* p, uint8_t len) {
   for (uint8_t i = 0; i < 3; i++) {
     memcpy(&state.forecastTempF[i], p + 33 + i * 5, 4);
     state.forecastCategory[i] = p[33 + i * 5 + 4];
-  }
-
-  // Status items (bytes 48+) — see StatusItem's own comment and rs485.js's
-  // POLL_DIAL header for the exact layout. Unconditional, same as
-  // faultCount/maintenanceDueCount above (never locally edited). A slot's
-  // text is copied with a fixed length, never trusting the incoming bytes
-  // to already be a valid terminated C string on their own — always force
-  // a terminator at the last reserved byte regardless of what arrived.
-  uint8_t itemCount = 0;
-  for (uint8_t i = 0; i < MAX_STATUS_ITEMS; i++) {
-    uint16_t base = 48 + i * (1 + STATUS_ITEM_TEXT_LEN);
-    state.statusItems[i].isFault = p[base] & 0x01;
-    memcpy(state.statusItems[i].text, p + base + 1, STATUS_ITEM_TEXT_LEN - 1);
-    state.statusItems[i].text[STATUS_ITEM_TEXT_LEN - 1] = '\0';
-    if (state.statusItems[i].text[0] != '\0') itemCount = i + 1;
-  }
-  state.statusItemCount = itemCount;
-  // If the list shrank since last seen (an item resolved on its own — e.g.
-  // a fault clearing itself), keep the view in range instead of pointing
-  // at a now-empty slot; showStatusScreen() also clamps on its own next
-  // redraw, this just keeps the two in sync between redraws too.
-  if (statusItemIndex >= state.statusItemCount) {
-    statusItemIndex = state.statusItemCount > 0 ? state.statusItemCount - 1 : 0;
   }
 
   // Real production evidence (2026-09-26): once DIAL_SWEEP_GAP_MS grew to
@@ -865,23 +812,12 @@ void processEncoder() {
       lastLocalEditAtMs = millis();
       break;
     }
-    case SCREEN_STATUS: {
-      // Cycles between whichever fault/maintenance items are actually
-      // populated — per explicit ask (2026-09-29), this screen is no
-      // longer purely read-only. A no-op (count<=1) is still safe: 1 % 1
-      // is always 0, so it just redraws the same single item.
-      if (state.statusItemCount > 0) {
-        statusItemIndex = (statusItemIndex + (delta > 0 ? 1 : -1) + state.statusItemCount) % state.statusItemCount;
-      }
-      break;
-    }
-    default: break;
+    default: break; // STATUS screen is read-only, rotating there does nothing
   }
   portEXIT_CRITICAL(&stateMux);
 
   switch (currentScreen) {
     case SCREEN_MENU:        showMenuScreen();        break;
-    case SCREEN_STATUS:      showStatusScreen();      break;
     case SCREEN_THERMOSTAT:  showThermostatScreen();  break;
     case SCREEN_SOUND:       showSoundScreen();       break;
     default: break;
@@ -1661,28 +1597,6 @@ void maintenanceDoneBtnEventCb(lv_event_t* e) {
   portENTER_CRITICAL(&stateMux);
   pendingTapEvent = 5; // markMaintenanceDone
   state.maintenanceDueCount = 0;
-  // The server-side action completes EVERY due task, not just the one
-  // being viewed (see this function's header comment) — so the correct
-  // optimistic update strips ALL maintenance items from the local list,
-  // not just the current one, keeping only faults (front-packed, no
-  // gaps — same convention applyPush() itself follows). Without this the
-  // just-"cleared" item would keep showing, stale, until the next real
-  // push arrived (~1s later) — the count would say 0 but the item you
-  // just tapped Done on would still be sitting right there.
-  {
-    uint8_t kept = 0;
-    for (uint8_t i = 0; i < state.statusItemCount; i++) {
-      if (state.statusItems[i].isFault) {
-        if (kept != i) state.statusItems[kept] = state.statusItems[i];
-        kept++;
-      }
-    }
-    for (uint8_t i = kept; i < state.statusItemCount; i++) state.statusItems[i].text[0] = '\0';
-    state.statusItemCount = kept;
-    if (statusItemIndex >= state.statusItemCount) {
-      statusItemIndex = state.statusItemCount > 0 ? state.statusItemCount - 1 : 0;
-    }
-  }
   // Real bug fixed (2026-09-29): every sibling handler (thermostatArcEventCb,
   // soundArcEventCb, soundEnabledBtnEventCb) sets this; this one never did.
   // Without it, applyPush()'s grace-window check saw a stale (or zero)
@@ -1698,19 +1612,12 @@ void maintenanceDoneBtnEventCb(lv_event_t* e) {
   showStatusScreen();
 }
 
-// Shows ONE fault/maintenance item at a time, cycled by rotating — see
-// processEncoder()'s SCREEN_STATUS case — reversing this screen's earlier
-// "counts only, no text" design per explicit ask (2026-09-29). Faults stay
-// read-only (they clear on their own once the underlying condition
-// resolves — see faults.js); the currently-viewed item gets the Mark Done
-// button only while it's a maintenance item, since "due" doesn't resolve
-// itself. Still clears EVERY due task server-side, not just the one being
-// viewed (see maintenanceDoneBtnEventCb()'s own comment) — the dial has no
-// way to identify a single task to the server, only "something's due right
-// now, clear it." All-clear state shown in green so checking this screen
-// is reassuring, not just an alert surface. UNVERIFIED against real
-// hardware: exact pixel positions below, tune during bring-up like every
-// other layout value in this file.
+// Faults are read-only here — counts only, see this file's header on why
+// no fault/maintenance text is rendered — they clear on their own once the
+// underlying condition resolves. Maintenance gets one real action (the
+// Mark Done button above) since "due" doesn't resolve itself. All-clear
+// state shown in green so checking this screen is reassuring, not just an
+// alert surface.
 void showStatusScreen() {
   lv_obj_clean(screenStatus);
   lv_obj_set_style_bg_color(screenStatus, COLOR_BG, 0);
@@ -1734,64 +1641,50 @@ void showStatusScreen() {
   lv_obj_set_style_text_color(version, COLOR_MUTED, 0);
   lv_obj_align(version, LV_ALIGN_TOP_MID, 0, 40);
 
-  bool allClear = state.statusItemCount == 0;
+  bool allClear = state.faultCount == 0 && state.maintenanceDueCount == 0;
 
   lv_obj_t* icon = lv_label_create(screenStatus);
+  lv_label_set_text(icon, allClear ? LV_SYMBOL_OK : LV_SYMBOL_WARNING);
   lv_obj_set_style_text_font(icon, &lv_font_montserrat_48, 0);
-  lv_obj_align(icon, LV_ALIGN_CENTER, 0, -80);
+  lv_obj_set_style_text_color(icon, allClear ? COLOR_SUCCESS : COLOR_DANGER, 0);
+  lv_obj_align(icon, LV_ALIGN_CENTER, 0, -70);
 
   if (allClear) {
-    lv_label_set_text(icon, LV_SYMBOL_OK);
-    lv_obj_set_style_text_color(icon, COLOR_SUCCESS, 0);
-
     lv_obj_t* label = lv_label_create(screenStatus);
     lv_label_set_text(label, "All normal");
     lv_obj_set_style_text_font(label, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(label, COLOR_TEXT, 0);
     lv_obj_align(label, LV_ALIGN_CENTER, 0, -10);
   } else {
-    // Defensive clamp — applyPush() already keeps this in range whenever
-    // the list changes, this is just a cheap second safety net against
-    // ever indexing state.statusItems out of bounds.
-    if (statusItemIndex >= state.statusItemCount) statusItemIndex = state.statusItemCount - 1;
-    StatusItem& item = state.statusItems[statusItemIndex];
-    lv_color_t itemColor = item.isFault ? COLOR_DANGER : COLOR_WARNING;
+    char faultStr[24];
+    snprintf(faultStr, sizeof(faultStr), "%d fault%s", state.faultCount, state.faultCount == 1 ? "" : "s");
+    lv_obj_t* faultLabel = lv_label_create(screenStatus);
+    lv_label_set_text(faultLabel, faultStr);
+    lv_obj_set_style_text_font(faultLabel, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(faultLabel, state.faultCount > 0 ? COLOR_DANGER : COLOR_MUTED, 0);
+    lv_obj_align(faultLabel, LV_ALIGN_CENTER, 0, -20);
 
-    lv_label_set_text(icon, LV_SYMBOL_WARNING);
-    lv_obj_set_style_text_color(icon, itemColor, 0);
+    char maintStr[32];
+    snprintf(maintStr, sizeof(maintStr), "%d maintenance due", state.maintenanceDueCount);
+    lv_obj_t* maintLabel = lv_label_create(screenStatus);
+    lv_label_set_text(maintLabel, maintStr);
+    lv_obj_set_style_text_font(maintLabel, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(maintLabel, state.maintenanceDueCount > 0 ? COLOR_WARNING : COLOR_MUTED, 0);
+    lv_obj_align(maintLabel, LV_ALIGN_CENTER, 0, 20);
 
-    char kindStr[24];
-    snprintf(kindStr, sizeof(kindStr), "%s  %d/%d", item.isFault ? "Fault" : "Maintenance", statusItemIndex + 1, state.statusItemCount);
-    lv_obj_t* kindLabel = lv_label_create(screenStatus);
-    lv_label_set_text(kindLabel, kindStr);
-    lv_obj_set_style_text_font(kindLabel, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(kindLabel, itemColor, 0);
-    lv_obj_align(kindLabel, LV_ALIGN_CENTER, 0, -35);
-
-    // Wrapped, unlike every other screen's short labels — these are real
-    // sentences (see faults.js's own message text), not single values.
-    lv_obj_t* msgLabel = lv_label_create(screenStatus);
-    lv_label_set_text(msgLabel, item.text);
-    lv_label_set_long_mode(msgLabel, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(msgLabel, 260);
-    lv_obj_set_style_text_align(msgLabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(msgLabel, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(msgLabel, COLOR_TEXT, 0);
-    lv_obj_align(msgLabel, LV_ALIGN_CENTER, 0, 10);
-
-    if (!item.isFault) {
+    if (state.maintenanceDueCount > 0) {
       // The one real action on this screen — see maintenanceDoneBtnEventCb()
       // above. Touch works directly (touchpadReadCb() treats Status as
       // having its own widget while this button exists); the knob press
-      // still means "back to menu," rotation is "next item" — three
-      // independent gestures, no ambiguity between them.
+      // still means "back to menu" everywhere, unchanged, so there's no
+      // ambiguity between the two gestures.
       lv_obj_t* btn = lv_obj_create(screenStatus);
-      lv_obj_set_size(btn, 200, 54);
+      lv_obj_set_size(btn, 220, 60);
       lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
       lv_obj_set_style_bg_color(btn, COLOR_ACCENT, 0);
       lv_obj_set_style_border_width(btn, 0, 0);
       lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-      lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -58);
+      lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -36);
       lv_obj_add_event_cb(btn, maintenanceDoneBtnEventCb, LV_EVENT_CLICKED, NULL);
 
       lv_obj_t* btnLabel = lv_label_create(btn);
@@ -1799,14 +1692,11 @@ void showStatusScreen() {
       lv_obj_set_style_text_font(btnLabel, &lv_font_montserrat_28, 0);
       lv_obj_set_style_text_color(btnLabel, lv_color_white(), 0);
       lv_obj_center(btnLabel);
-    }
-
-    if (state.statusItemCount > 1) {
+    } else {
       lv_obj_t* hint = lv_label_create(screenStatus);
-      lv_label_set_text(hint, "Rotate for more");
-      lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+      lv_label_set_text(hint, "See the app for details");
       lv_obj_set_style_text_color(hint, COLOR_MUTED, 0);
-      lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -14);
+      lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -20);
     }
   }
 
@@ -1857,19 +1747,17 @@ void touchpadReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
     // screens with no competing interactive LVGL widget. Sound/Thermostat
     // have a real draggable arc plus their own toggle button; Menu items
     // are now individually tappable too (menuItemTapEventCb); Status grows
-    // its own "Mark Done" button only while the CURRENTLY VIEWED item is a
-    // maintenance one (see showStatusScreen()) — calling onTap() on top of
-    // any of these would fire its OWN generic action on every touch
-    // release (undoing a drag, jumping to whatever menuSelection happened
-    // to be instead of the item actually tapped, or bouncing straight back
-    // to the menu before the button's own tap registers). Idle/Clock/an
-    // all-clear or fault-item Status have no competing widget, so the
-    // plain global tap (wake, tap-to-enter-menu on Clock, tap-anywhere-to-
-    // go-back on Status) still applies there.
-    bool statusHasButton = currentScreen == SCREEN_STATUS && state.statusItemCount > 0 &&
-      statusItemIndex < state.statusItemCount && !state.statusItems[statusItemIndex].isFault;
+    // its own Mark Done button whenever maintenance is actually due — see
+    // showStatusScreen() — calling onTap() on top of any of these would
+    // fire its OWN generic action on every touch release (undoing a drag,
+    // jumping to whatever menuSelection happened to be instead of the item
+    // actually tapped, or bouncing straight back to the menu before the
+    // button's own tap registers). Idle/Clock/an all-clear or fault-only
+    // Status have no competing widget, so the plain global tap (wake,
+    // tap-to-enter-menu on Clock, tap-anywhere-to-go-back on Status) still
+    // applies there.
     bool hasOwnWidgets = currentScreen == SCREEN_SOUND || currentScreen == SCREEN_THERMOSTAT ||
-      currentScreen == SCREEN_MENU || statusHasButton;
+      currentScreen == SCREEN_MENU || (currentScreen == SCREEN_STATUS && state.maintenanceDueCount > 0);
     if (touchPressed && !hasOwnWidgets) onTap();
     touchPressed = false;
   }

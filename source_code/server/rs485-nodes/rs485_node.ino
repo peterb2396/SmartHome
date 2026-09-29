@@ -366,14 +366,7 @@ const uint8_t CMD_LOG_LINE = 0x87;
 // regardless of value. Must still match dial_node.ino's own DIAL_I2C_ADDR
 // constant exactly.
 const uint8_t DIAL_I2C_ADDR = 0x42;
-// 195 = 48 (original) + 3 status-item slots x 49B each (1 isFault byte +
-// 48B NUL-padded text) — grew again (2026-09-29) for individual fault/
-// maintenance text on the dial's Status screen. Still fits a uint8_t (255
-// max) and the frame header's own 1-byte length field, so no wire-format
-// change beyond the payload actually being bigger — see rs485.js's own
-// POLL_DIAL header for the exact byte layout. Must match rs485.js's
-// POLL_DIAL payload size exactly.
-const uint8_t DIAL_PUSH_LEN = 195;
+const uint8_t DIAL_PUSH_LEN = 48;  // must match rs485.js's POLL_DIAL payload size
 const uint8_t DIAL_REPLY_LEN = 8;  // must match rs485.js's DIAL_STATE payload size — the RS485-facing frame, NEVER grows
 
 // The i2c1 exchange carries more than the RS485 frame does — see this
@@ -1074,6 +1067,9 @@ void saveAddressToEEPROM(uint8_t addr) {
 }
 
 // ── Receive + dispatch ─────────────────────────────────────────────
+uint8_t rxBuf[64];
+uint8_t rxLen = 0;
+
 // Resync safety net, mirrors the Pi-side master's identical fix in
 // server/services/rs485.js's onData() — read that comment for the full
 // reasoning. Short version: a stray byte that happens to equal SYNC (bus
@@ -1085,26 +1081,8 @@ void saveAddressToEEPROM(uint8_t addr) {
 // master, even though it's still receiving them electrically. Two checks:
 // an implausible len drops the sync byte immediately, a plausible-but-
 // never-completing one times out.
-const uint8_t MAX_PAYLOAD_LEN = 220; // largest real payload today is POLL_DIAL's 195B (grew from 60 for the Status-screen fault/maintenance text, 2026-09-29) — matches rs485.js's MAX_PAYLOAD_LEN
-
-// Real bug found and fixed alongside the MAX_PAYLOAD_LEN growth above
-// (2026-09-29): this was a bare `uint8_t rxBuf[64]`, sized for the OLD 48B
-// POLL_DIAL payload's full frame (4B header + 48B + 1B crc = 53B, fits in
-// 64 with room to spare) but never revisited when the payload grew. A full
-// frame at the new size (4 + up to MAX_PAYLOAD_LEN + 1) would silently
-// stop being accepted the instant rxLen hit 64 (see the `if (rxLen <
-// sizeof(rxBuf))` guard below) — MAX_PAYLOAD_LEN's own resync safety net
-// checks the frame's CLAIMED length is plausible, but does nothing to
-// ensure the buffer can actually HOLD a frame that size, so this would
-// have reproduced the exact "frame stall, never completes" failure mode
-// the safety net above exists to catch, just from the receive buffer being
-// too small rather than bus noise. Sized directly off MAX_PAYLOAD_LEN
-// (not a second hand-picked number) specifically so the two can never
-// drift apart like this again.
-uint8_t rxBuf[4 + MAX_PAYLOAD_LEN + 1]; // sync+addr+cmd+len (4) + payload + crc (1)
-uint8_t rxLen = 0;
-
-const unsigned long FRAME_STALL_MS = 500; // even the largest frame today (~225B, POLL_DIAL) takes well under 250ms at 9600 baud — generous margin
+const uint8_t MAX_PAYLOAD_LEN = 60; // largest real payload today is POLL_DIAL's 48B (grew from 27B for the Clock/weather screen redesign) — matches rs485.js's MAX_PAYLOAD_LEN
+const unsigned long FRAME_STALL_MS = 500; // a full 30B frame takes ~30ms at 9600 baud — generous margin
 bool awaitingFrame = false;
 unsigned long awaitingFrameSince = 0;
 
