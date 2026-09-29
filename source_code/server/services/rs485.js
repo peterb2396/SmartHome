@@ -1250,19 +1250,19 @@ async function notifyDialsToCheckOta(getConfiguredNodes) {
 async function pollAll(getConfiguredNodes) {
   checkFrameStall();
   checkBusDownReminder(); // runs every cycle regardless of bus state — see its own comment
-  // DISABLED (2026-09-28) — real incident: sent to the one hasDial node
-  // whose RP2040 hadn't been reflashed with the CMD_CHECK_OTA handler yet.
-  // Its old handleFrame() has no case for 0x0A and silently no-ops on it —
-  // fine in isolation — but something about that specific unrecognized
-  // command appears to desync its byte-stream frame parser, corrupting
-  // EVERY subsequent CMD_POLL/CMD_POLL_DIAL exchange with that node (CRC
-  // mismatches reading straight into the next frame's own 0xAA sync byte —
-  // a real parser desync, not noise) — persisting through a USB adapter
-  // reset, recovered only once this call was disabled. Re-enable this only
-  // once EVERY configured node's rs485_node.ino has actually been reflashed
-  // to a version that understands CMD_CHECK_OTA — never send a new command
-  // byte onto the bus before every possible receiver can safely ignore it.
-  // await notifyDialsToCheckOta(getConfiguredNodes);
+  // Re-enabled (2026-09-29) — was briefly disabled (2026-09-28) while
+  // chasing a total RS485 outage on the one hasDial node that this
+  // function targets, initially (wrongly) suspected as its cause. Real
+  // root cause, found directly on the hardware: a firmware reflash had
+  // wiped that node's EEPROM-persisted bus address back to unconfigured
+  // (0x00) — the ~5s TX blink that looked like activity was actually its
+  // own ANNOUNCE beacon (ANNOUNCE_INTERVAL_MS, rs485_node.ino), not a
+  // reply to anything this file sent — completely unrelated to
+  // CMD_CHECK_OTA. Re-addressed via the Console and confirmed working
+  // again. Safe to re-enable: that node's currently-flashed firmware
+  // already understands CMD_CHECK_OTA (0x0A), and it's still the only
+  // hasDial node configured.
+  await notifyDialsToCheckOta(getConfiguredNodes);
   for (const node of getConfiguredNodes()) {
     if (node.busAddress == null) continue;
     if (node.kind === 'zoneAudio') {
