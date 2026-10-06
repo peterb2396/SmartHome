@@ -300,17 +300,20 @@ export default function Console() {
       </div>
 
       {/* ── Dial failover ── */}
-      {dialFailover.length > 0 && (
+      {nodes.configured.some(n => n.hasDial) && (
         <div style={{ ...cardStyle, marginBottom: "1.5rem" }}>
           <h2 style={{ margin: "0 0 0.35rem", fontSize: "1rem", fontWeight: 700, color: colors.textPrimary, display: "flex", alignItems: "center", gap: 8 }}>
             <FaExchangeAlt color={colors.textMuted} /> Dial Failover
           </h2>
           <p style={{ margin: "0 0 0.85rem", fontSize: "0.8rem", color: colors.textMuted }}>
-            When a zone's own wall dial stops responding, a working dial from another zone
-            stands in for it automatically — pick a preferred one below, or leave it on Auto.
+            A zone with no working wall dial of its own temporarily merges onto a working one
+            from another zone — sharing its dial and thermometer as one zone — until its own
+            comes online. Pick a specific dial to merge onto below, or leave it on Auto.
           </p>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {dialFailover.map(z => (
+            {dialFailover.map(z => {
+              const labelFor = (id) => dialFailover.find(x => x.zoneId === id)?.zoneLabel || id;
+              return (
               <div key={z.zoneId} style={{
                 display: "flex", justifyContent: "space-between", alignItems: "center",
                 background: colors.surface, borderRadius: 10, padding: "0.6rem 0.85rem",
@@ -323,10 +326,12 @@ export default function Console() {
                     color: !z.servingNodeUniqueId ? colors.danger : z.isBackup ? "var(--warning)" : "#059669",
                   }}>
                     {!z.servingNodeUniqueId
-                      ? "No dial available — own is down, no backup free"
+                      ? (z.hasOwnDial ? "No dial available — own is down, nothing to merge onto" : "No dial set up — nothing to merge onto (pick one below)")
                       : z.isBackup
-                        ? `Using ${z.servingNodeName}'s dial as backup (own is down)`
-                        : "Own dial up"}
+                        ? `Merged onto ${z.servingNodeName}'s dial (${z.hasOwnDial ? "own is down" : "none set up"})`
+                        : z.mergedWith.length > 0
+                          ? `Own dial up — sharing with ${z.mergedWith.map(labelFor).join(", ")}`
+                          : "Own dial up"}
                   </div>
                 </div>
                 <select
@@ -345,7 +350,8 @@ export default function Console() {
                   ))}
                 </select>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

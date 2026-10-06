@@ -1,14 +1,22 @@
 /**
  * Dial Failover
  * ─────────────────────────────────────────────────────────────────
- * When a zone's own wall dial (its hasDial RS485 node) stops answering
- * POLL_DIAL, this picks a DIFFERENT zone's working dial to stand in for
- * it — its rotary/touch target-temp control and its onboard temp/humidity/
- * CO2 reading both get redirected to the down zone, for as long as the
- * down zone's own dial stays unreachable. The zone itself never actually
- * stops working either way (thermostat.js's schedule/target/manualHeat
- * run regardless of any dial, see its own header) — this is purely about
- * keeping SOME physical interface available, not a safety mechanism.
+ * When a zone has no working wall dial of its own — either its hasDial
+ * RS485 node is down, or one was simply never set up for that zone yet —
+ * it temporarily MERGES onto a different zone's working dial: both
+ * zones share that one dial's rotary/touch target-temp control and its
+ * onboard temp/humidity/CO2 reading, as if they were one zone, for as
+ * long as the merged-in zone has nothing of its own. This is additive,
+ * not exclusive — a working dial keeps serving its OWN zone exactly as
+ * before AND simultaneously drives every other zone merged onto it;
+ * nothing is "taken away" from the zone that owns it. Any number of
+ * zones can merge onto the same dial at once (e.g. three unconfigured
+ * zones all merging onto the one zone that actually has a working dial,
+ * per the explicit ask this was built from). The zone itself never
+ * actually stops working either way (thermostat.js's schedule/target/
+ * manualHeat run regardless of any dial, see its own header) — this is
+ * purely about keeping SOME physical interface and SOME real sensor
+ * reading available, not a safety mechanism.
  *
  * Health is tracked here (not duplicated from rs485.js's own
  * dialConsecutiveMisses, which exists purely for its own log throttling)
@@ -16,15 +24,18 @@
  * the one signal that actually means "this zone's dial is reachable right
  * now" — and consulted by BOTH pollAllDials() (who to push/pull for a
  * zone) and pollAll()'s blendZoneReading() (whose onboard sensor counts
- * toward a zone's blended reading), via resolveActiveNodes()/
- * effectiveZoneIdFor() below, without the two loops needing to coordinate
- * directly.
+ * toward a zone's blended reading), via resolveZoneGroups() below,
+ * without the two loops needing to coordinate directly.
  *
- * A node only ever gets borrowed as a backup for ONE zone at a time (it's
- * one physical screen) — with fewer up dials than down zones, whichever
- * down zones get resolved first in resolveActiveNodes() below claim the
- * available ones; the rest simply have no physical dial until another one
- * recovers, same as a zone that never had a dial configured at all.
+ * Which dial a zone with nothing of its own merges onto: its explicit
+ * preference if one is set and that node is up (setPreferredBackup), else
+ * a single shared DEFAULT — the first up hasDial node found at all. Using
+ * one shared default (rather than spreading unassigned zones across every
+ * available dial) is deliberate: it's what makes "all three of my down
+ * zones merge onto the one dial that's actually up" the out-of-the-box
+ * behavior, matching a household's own mental model of "temporarily one
+ * zone," rather than an arbitrary fan-out. Set an explicit preference to
+ * put a specific zone in a DIFFERENT merge group instead.
  *
  * Storage follows the same schema-less settings-blob pattern as
  * thermostat.js/maintenance.js/nodeRegistry.js (key 'dialFailover') —
@@ -72,122 +83,119 @@ function isUp(uniqueId) {
   return (missStreaks.get(uniqueId) || 0) < DOWN_THRESHOLD;
 }
 
-// For every THERMOSTAT zone with at least one hasDial node, decides which
-// ONE node is actively serving it this cycle: its own node if any of its
-// own are up, otherwise a backup (preferred if set/up/unclaimed, else the
-// first available up+unclaimed hasDial node). Returns Map<zoneId,
-// uniqueId> — a zone with zero up nodes anywhere (its own AND no spare
-// available) simply has no entry.
-function resolveActiveNodes(hasDialNodes) {
+// For every THERMOSTAT zone (zoneIds — ALL of them, not just ones with a
+// hasDial node already configured: a zone whose dial was simply never set
+// up yet needs to merge onto one exactly like a zone whose dial died, see
+// this file's header), decides which node's dial it's currently part of.
+// Returns Map<nodeUniqueId, Set<zoneId>> — every UP hasDial node mapped
+// to the FULL set of zones currently merged onto it (always including its
+// own zoneId once it's up). A zone with no up node anywhere to merge onto
+// (nothing of its own AND no default/preferred backup up either) simply
+// appears in no group.
+function resolveZoneGroups(hasDialNodes, zoneIds) {
   const byZone = new Map();
+  for (const id of zoneIds) byZone.set(id, []);
   for (const n of hasDialNodes) {
     if (!n.zoneId) continue;
-    if (!byZone.has(n.zoneId)) byZone.set(n.zoneId, []);
+    if (!byZone.has(n.zoneId)) byZone.set(n.zoneId, []); // a configured node pointed at a zoneId outside the passed list — keep it rather than drop it
     byZone.get(n.zoneId).push(n);
   }
 
-  const claimed = new Set();
-  const active = new Map();
+  const groups = new Map(); // uniqueId -> Set<zoneId>
+  function addToGroup(uniqueId, zoneId) {
+    if (!groups.has(uniqueId)) groups.set(uniqueId, new Set());
+    groups.get(uniqueId).add(zoneId);
+  }
 
-  // Pass 1 — DOWN zones (none of their own nodes up) claim a backup
-  // FIRST, from every up hasDial node regardless of whose zone it
-  // normally belongs to. A zone with nothing of its own takes priority
-  // over a zone that still has a working dial — see this file's header:
-  // "use that backup interface from another zone" means exactly this,
-  // including a healthy zone's own (and only) dial, if that's what's
-  // available. Order here is just Map iteration order (insertion order =
-  // hasDialNodes' own order, itself nodeRegistry's name-sorted list);
-  // with fewer spares than down zones, earlier zones in that order win —
-  // set an explicit preferred backup (setPreferredBackup) to control
-  // which one that is instead of leaving it to this ordering.
-  // 1a — explicit preferences first, across every down zone, before any
-  // auto-pick touches the pool — otherwise whichever down zone happens
-  // to iterate first grabs the one spare regardless of some OTHER zone
-  // having explicitly asked for it (a real bug caught by testing: with
-  // one spare and zoneC preferring it, zoneA — earlier in iteration
-  // order — claimed it first under a single-pass version of this).
+  // Every zone with an up node of its own anchors its OWN group with it —
+  // merging is additive, so this doesn't block anyone else from ALSO
+  // merging onto the same node below.
   for (const [zoneId, nodes] of byZone) {
-    if (nodes.some(n => isUp(n.uniqueId))) continue; // has its own — handled in pass 2
+    const ownUp = nodes.find(n => isUp(n.uniqueId));
+    if (ownUp) addToGroup(ownUp.uniqueId, zoneId);
+  }
+
+  // The one shared default for every zone with nothing of its own and no
+  // (working) explicit preference — see this file's header on why this
+  // is a single shared node, not spread across whatever's available.
+  const defaultBackup = hasDialNodes.find(n => isUp(n.uniqueId)) || null;
+
+  for (const [zoneId, nodes] of byZone) {
+    if (nodes.some(n => isUp(n.uniqueId))) continue; // already anchored above
     const preferred = getPreferredBackup(zoneId);
-    if (preferred && isUp(preferred) && !claimed.has(preferred) && hasDialNodes.some(n => n.uniqueId === preferred)) {
-      active.set(zoneId, preferred);
-      claimed.add(preferred);
-    }
-  }
-  // 1b — everything left without a satisfied preference auto-picks
-  // whatever's still unclaimed, preferring a TRULY free spare (one whose
-  // own zone has another up node too, so lending it costs that zone
-  // nothing — e.g. the 3-independent-RP2040 Upstairs zone, where a
-  // second/third dial is redundant with the first) over sacrificing a
-  // single-dial zone's only interface. Falls back to sacrificing one
-  // anyway if that's genuinely all that's left — see this file's header,
-  // that's the literal "3 down, 1 up" case this whole feature exists for.
-  const upCountByZone = new Map();
-  for (const [zoneId, nodes] of byZone) upCountByZone.set(zoneId, nodes.filter(n => isUp(n.uniqueId)).length);
-  for (const [zoneId, nodes] of byZone) {
-    if (active.has(zoneId) || nodes.some(n => isUp(n.uniqueId))) continue;
-    const spare = hasDialNodes.find(n => isUp(n.uniqueId) && !claimed.has(n.uniqueId) && upCountByZone.get(n.zoneId) > 1)
-      || hasDialNodes.find(n => isUp(n.uniqueId) && !claimed.has(n.uniqueId));
-    if (spare) { active.set(zoneId, spare.uniqueId); claimed.add(spare.uniqueId); }
+    const backupId = (preferred && isUp(preferred) && hasDialNodes.some(n => n.uniqueId === preferred))
+      ? preferred
+      : defaultBackup?.uniqueId;
+    if (backupId) addToGroup(backupId, zoneId);
   }
 
-  // Pass 2 — every zone with an up node of its own keeps it, UNLESS pass
-  // 1 just claimed that exact node to rescue a DOWN zone instead — that
-  // zone is sacrificed for this cycle (no dial, same as a zone that never
-  // had one — thermostat.js keeps running it via the web app/schedule
-  // regardless, see this file's header).
-  for (const [zoneId, nodes] of byZone) {
-    if (active.has(zoneId)) continue;
-    const ownUp = nodes.find(n => isUp(n.uniqueId) && !claimed.has(n.uniqueId));
-    if (ownUp) { active.set(zoneId, ownUp.uniqueId); claimed.add(ownUp.uniqueId); }
-  }
-
-  return active;
+  return groups;
 }
 
-// Builds a (node) => effectiveZoneId lookup from resolveActiveNodes()'s
-// result — a hasDial node not currently claimed as anyone's active
-// server (e.g. it's down, or it's up but nobody needs it as a backup)
-// just falls through to its own real zoneId, same as before this file
-// existed.
-function effectiveZoneIdFor(hasDialNodes) {
-  const active = resolveActiveNodes(hasDialNodes);
-  const byNode = new Map();
-  for (const [zoneId, uniqueId] of active) byNode.set(uniqueId, zoneId);
-  return (node) => byNode.get(node.uniqueId) ?? node.zoneId;
+// Every zone a given hasDial node is currently representing — its own
+// (once up) plus whatever's merged onto it. A node not up at all, or with
+// no zoneId of its own (sound-only), just returns its own zoneId alone.
+function getHostedZoneIds(groups, node) {
+  const hosted = groups.get(node.uniqueId);
+  return hosted ? Array.from(hosted) : (node.zoneId ? [node.zoneId] : []);
 }
 
-// Console status view — per thermostat zone, who's actually serving it
-// right now and what else is available to pick as a preferred backup.
+// Whether a given node's reading/control currently counts toward zoneId —
+// true for its own zone once it's up, AND for every zone merged onto it;
+// a plain non-hasDial sensor node is unaffected by any of this (it only
+// ever reports to its own real zone).
+function nodeContributesToZone(groups, node, zoneId) {
+  if (!node.hasDial) return node.zoneId === zoneId;
+  const hosted = groups.get(node.uniqueId);
+  return hosted ? hosted.has(zoneId) : node.zoneId === zoneId;
+}
+
+// Console status view — EVERY thermostat zone (not just ones with a
+// hasDial node already set up — a never-configured zone is exactly the
+// case this exists to cover), who's actually serving it right now, and
+// what else is available to pick as a preferred backup.
 function getStatus(getConfiguredNodes, zones) {
   const allNodes = getConfiguredNodes();
   const hasDialNodes = allNodes.filter(n => n.hasDial && n.busAddress != null && n.zoneId);
-  const active = resolveActiveNodes(hasDialNodes);
+  const zoneIds = zones.map(z => z.id);
+  const groups = resolveZoneGroups(hasDialNodes, zoneIds);
   const nodeById = new Map(hasDialNodes.map(n => [n.uniqueId, n]));
 
-  return zones
-    .filter(z => hasDialNodes.some(n => n.zoneId === z.id))
-    .map(z => {
-      const ownNodes = hasDialNodes.filter(n => n.zoneId === z.id);
-      const servingId = active.get(z.id) || null;
-      const serving = servingId ? nodeById.get(servingId) : null;
-      const isBackup = !!serving && serving.zoneId !== z.id;
-      return {
-        zoneId: z.id,
-        zoneLabel: z.label,
-        ownUp: ownNodes.some(n => isUp(n.uniqueId)),
-        servingNodeUniqueId: servingId,
-        servingNodeName: serving?.name ?? null,
-        isBackup,
-        preferredBackupUniqueId: getPreferredBackup(z.id),
-        candidates: hasDialNodes
-          .filter(n => n.zoneId !== z.id)
-          .map(n => ({ uniqueId: n.uniqueId, name: n.name, zoneId: n.zoneId, up: isUp(n.uniqueId) })),
-      };
-    });
+  // zoneId -> the node currently hosting it (for display — a zone only
+  // ever shows ONE "serving" node even though that node may ALSO be
+  // hosting several other zones at once; see mergedWith below for the
+  // rest of its group).
+  const servingByZone = new Map();
+  for (const [uniqueId, zoneSet] of groups) {
+    for (const zid of zoneSet) servingByZone.set(zid, uniqueId);
+  }
+
+  return zones.map(z => {
+    const ownNodes = hasDialNodes.filter(n => n.zoneId === z.id);
+    const servingId = servingByZone.get(z.id) || null;
+    const serving = servingId ? nodeById.get(servingId) : null;
+    const isBackup = !!serving && serving.zoneId !== z.id;
+    const mergedWith = servingId
+      ? Array.from(groups.get(servingId)).filter(zid => zid !== z.id)
+      : [];
+    return {
+      zoneId: z.id,
+      zoneLabel: z.label,
+      hasOwnDial: ownNodes.length > 0,
+      ownUp: ownNodes.some(n => isUp(n.uniqueId)),
+      servingNodeUniqueId: servingId,
+      servingNodeName: serving?.name ?? null,
+      isBackup,
+      mergedWith, // other zoneIds currently sharing the same dial/sensor
+      preferredBackupUniqueId: getPreferredBackup(z.id),
+      candidates: hasDialNodes
+        .filter(n => n.zoneId !== z.id)
+        .map(n => ({ uniqueId: n.uniqueId, name: n.name, zoneId: n.zoneId, up: isUp(n.uniqueId) })),
+    };
+  });
 }
 
 module.exports = {
-  reportResult, isUp, resolveActiveNodes, effectiveZoneIdFor,
+  reportResult, isUp, resolveZoneGroups, getHostedZoneIds, nodeContributesToZone,
   getPreferredBackup, setPreferredBackup, getStatus, DOWN_THRESHOLD,
 };
