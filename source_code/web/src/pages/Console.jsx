@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   FaExclamationTriangle, FaLightbulb, FaPowerOff,
-  FaThermometerHalf, FaMicrochip, FaTerminal, FaThumbtack, FaTrash, FaCog,
+  FaThermometerHalf, FaMicrochip, FaTerminal, FaThumbtack, FaTrash, FaCog, FaExchangeAlt,
 } from "react-icons/fa";
 import { useConsole } from "../hooks/useConsole";
 import { useConsoleLogs } from "../hooks/useConsoleLogs";
 import { useSettings } from "../hooks/useSettings";
-import { configureConsoleNode, deleteConsoleNode, getFirmwareList, restartServer } from "../api";
+import { configureConsoleNode, deleteConsoleNode, getFirmwareList, restartServer, setDialFailoverBackup } from "../api";
 import PageHeader from "../components/PageHeader";
 import CameraTile from "../components/CameraTile";
 import NodeSetupModal from "../components/NodeSetupModal";
@@ -62,7 +62,7 @@ function LogLine({ entry }) {
 export default function Console() {
   const {
     loading, faults, zones, monitorZones, soundZones, lights,
-    nodes, cameras, refetch,
+    nodes, dialFailover, cameras, refetch,
   } = useConsole();
   const { lines: logLines, connected: logsConnected } = useConsoleLogs();
   const { settings, updateSetting } = useSettings();
@@ -153,6 +153,11 @@ export default function Console() {
   async function handleRemoveNode(uniqueId) {
     if (!window.confirm("Remove this node from the registry?")) return;
     await deleteConsoleNode(uniqueId);
+    refetch();
+  }
+
+  async function handleSetBackup(zoneId, backupNodeUniqueId) {
+    await setDialFailoverBackup(zoneId, backupNodeUniqueId || null);
     refetch();
   }
 
@@ -293,6 +298,57 @@ export default function Console() {
           ))}
         </div>
       </div>
+
+      {/* ── Dial failover ── */}
+      {dialFailover.length > 0 && (
+        <div style={{ ...cardStyle, marginBottom: "1.5rem" }}>
+          <h2 style={{ margin: "0 0 0.35rem", fontSize: "1rem", fontWeight: 700, color: colors.textPrimary, display: "flex", alignItems: "center", gap: 8 }}>
+            <FaExchangeAlt color={colors.textMuted} /> Dial Failover
+          </h2>
+          <p style={{ margin: "0 0 0.85rem", fontSize: "0.8rem", color: colors.textMuted }}>
+            When a zone's own wall dial stops responding, a working dial from another zone
+            stands in for it automatically — pick a preferred one below, or leave it on Auto.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {dialFailover.map(z => (
+              <div key={z.zoneId} style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                background: colors.surface, borderRadius: 10, padding: "0.6rem 0.85rem",
+                flexWrap: "wrap", gap: "0.5rem",
+              }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: "0.85rem", color: colors.textPrimary }}>{z.zoneLabel}</div>
+                  <div style={{
+                    fontSize: "0.75rem", fontWeight: 600,
+                    color: !z.servingNodeUniqueId ? colors.danger : z.isBackup ? "var(--warning)" : "#059669",
+                  }}>
+                    {!z.servingNodeUniqueId
+                      ? "No dial available — own is down, no backup free"
+                      : z.isBackup
+                        ? `Using ${z.servingNodeName}'s dial as backup (own is down)`
+                        : "Own dial up"}
+                  </div>
+                </div>
+                <select
+                  value={z.preferredBackupUniqueId || ""}
+                  onChange={(e) => handleSetBackup(z.zoneId, e.target.value)}
+                  style={{
+                    padding: "0.35rem 0.6rem", borderRadius: 8, border: `1px solid var(--border)`,
+                    background: "var(--bg-surface-alt)", color: colors.textPrimary, fontSize: "0.8rem",
+                  }}
+                >
+                  <option value="">Auto (any available)</option>
+                  {z.candidates.map(c => (
+                    <option key={c.uniqueId} value={c.uniqueId}>
+                      {c.name} ({c.zoneId}){c.up ? "" : " — down"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* FirmwarePanel's own copy says "pick it from a node's row below" —
           the RS485 Nodes section (with each node's NodeFlashControl) is

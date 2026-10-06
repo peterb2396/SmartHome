@@ -346,12 +346,21 @@ const zoneReadingContributors = new Map();
 // leaving that shared key exactly as it was if nothing fresh is available —
 // same "last known good, flagged stale" behavior every other sensor here
 // already has, not a new failure mode.
-function blendZoneReading(type, zoneId, getConfiguredNodes) {
+// getEffectiveZoneId defaults to real node.zoneId (a plain function
+// reference) when the caller doesn't care about dial failover — only
+// pollAll()'s own hasDial-aware call site below passes a real one, so a
+// node currently on backup duty for another zone (see dialFailover.js)
+// contributes its reading there instead of to its own zone.
+function blendZoneReading(type, zoneId, getConfiguredNodes, getEffectiveZoneId = (n) => n.zoneId) {
   const prefix = SENSOR_KEY_PREFIX[type];
   const freshContributors = [];
   let weightedSum = 0, totalWeight = 0;
-  for (const node of getConfiguredNodes().filter(n => n.zoneId === zoneId)) {
-    const entry = zoneReadingContributors.get(`${type}-${zoneId}-${node.uniqueId}`);
+  for (const node of getConfiguredNodes().filter(n => getEffectiveZoneId(n) === zoneId)) {
+    // Looked up by the node's OWN real zoneId — that's the key pollAll()
+    // wrote it under (see below), unaffected by any failover redirection;
+    // only WHICH zone bucket this node's reading counts toward (the
+    // filter above) changes while it's on backup duty.
+    const entry = zoneReadingContributors.get(`${type}-${node.zoneId}-${node.uniqueId}`);
     if (!entry || (Date.now() - entry.updatedAt) > sensors.STALE_MS) continue;
     const weight = node.sensorWeight ?? 1;
     weightedSum += entry.value * weight;
@@ -1263,6 +1272,15 @@ async function pollAll(getConfiguredNodes) {
   // already understands CMD_CHECK_OTA (0x0A), and it's still the only
   // hasDial node configured.
   await notifyDialsToCheckOta(getConfiguredNodes);
+  // Same redirection pollAllDials() applies to the dial push/pull itself
+  // (see dialFailover.js) — a hasDial node currently standing in as
+  // another zone's backup contributes its OWN onboard sensor reading to
+  // THAT zone instead of its real one, for as long as the borrow lasts.
+  // Built once per sweep over every hasDial node, not per reading.
+  const dialFailoverSvc = require('./dialFailover');
+  const getEffectiveZoneId = dialFailoverSvc.effectiveZoneIdFor(
+    getConfiguredNodes().filter(n => n.hasDial && n.busAddress != null && n.zoneId)
+  );
   for (const node of getConfiguredNodes()) {
     if (node.busAddress == null) continue;
     if (node.kind === 'zoneAudio') {
@@ -1281,7 +1299,7 @@ async function pollAll(getConfiguredNodes) {
         // same value to the shared key it always did, just via one extra
         // step.
         zoneReadingContributors.set(`${type}-${node.zoneId}-${node.uniqueId}`, { value, updatedAt: Date.now() });
-        blendZoneReading(type, node.zoneId, getConfiguredNodes);
+        blendZoneReading(type, getEffectiveZoneId(node), getConfiguredNodes, getEffectiveZoneId);
       } else {
         sensors.set(`${SENSOR_KEY_PREFIX[type]}-${node.zoneId}`, value, SENSOR_UNIT[type], { source: 'rs485', nodeId: node.uniqueId });
       }
@@ -1415,9 +1433,17 @@ async function pollAllDials(getConfiguredNodes) {
   const soundSvc = require('./sound');
   const faultsSvc = require('./faults');
   const maintenanceSvc = require('./maintenance');
+  const dialFailoverSvc = require('./dialFailover');
   // Same for every dial in this sweep — computed once, not per node.
   const faultCount = faultsSvc.getFaults().length;
   const maintenanceDueCount = maintenanceSvc.getState().tasks.filter(t => t.isDue).length;
+  // Which THERMOSTAT zone each node is actually serving this cycle — its
+  // own if up, otherwise whichever down zone has claimed it as a backup
+  // (see dialFailover.js). Computed once for the whole sweep, not per
+  // node — resolveActiveNodes() needs the full node list to decide who's
+  // already claimed. soundZoneId is never redirected — see this file's
+  // header on scope.
+  const getEffectiveZoneId = dialFailoverSvc.effectiveZoneIdFor(dialNodes);
 
   for (const node of dialNodes) {
     // This address might currently be mid-exchange with pollAll()'s
@@ -1429,7 +1455,9 @@ async function pollAllDials(getConfiguredNodes) {
     if (usingMock) continue;
     if (pollingAddresses.has(node.busAddress)) continue;
 
-    const zone = thermostatSvc.getState().zones.find(z => z.id === node.zoneId);
+    const effectiveZoneId = getEffectiveZoneId(node);
+    const isBackupDuty = effectiveZoneId && effectiveZoneId !== node.zoneId;
+    const zone = thermostatSvc.getState().zones.find(z => z.id === effectiveZoneId);
     const outdoor = astroSvc.getCachedOutdoorConditions();
     const soundZone = soundSvc.getState().zones.find(z => z.id === node.soundZoneId);
     // Diagnostic-only, see lastPushedTarget's own comment — logs only on an
@@ -1437,7 +1465,7 @@ async function pollAllDials(getConfiguredNodes) {
     // normal 1s-cadence operation and only speaks up exactly when a web
     // edit should be on its way to this dial.
     if (zone && lastPushedTarget.get(node.busAddress) !== zone.target) {
-      console.log(`[RS485] Pushing target=${zone.target}\xB0F to dial addr=${node.busAddress} zone=${node.zoneId}`);
+      console.log(`[RS485] Pushing target=${zone.target}\xB0F to dial addr=${node.busAddress} zone=${effectiveZoneId}${isBackupDuty ? ` (backup for ${node.zoneId}'s dial)` : ''}`);
       lastPushedTarget.set(node.busAddress, zone.target);
     }
     pollingAddresses.add(node.busAddress);
@@ -1457,7 +1485,7 @@ async function pollAllDials(getConfiguredNodes) {
     // constantly resetting a genuine, sustained dial-poll failure back to
     // "1 in a row," masking exactly the kind of silent, persistent break
     // this is here to catch.
-    const label = `addr=${node.busAddress}${node.zoneId ? ` zone=${node.zoneId}` : ''} (dial)`;
+    const label = `addr=${node.busAddress}${effectiveZoneId ? ` zone=${effectiveZoneId}` : ''} (dial)${isBackupDuty ? ` [backup for ${node.zoneId}]` : ''}`;
     const reply = await new Promise((resolve) => {
       const timeout = setTimeout(() => {
         pendingDialResolvers.delete(node.busAddress);
@@ -1480,6 +1508,12 @@ async function pollAllDials(getConfiguredNodes) {
         resolve(state);
       });
     });
+    // Drives dialFailover.js's up/down determination for THIS node — the
+    // one signal (an actual POLL_DIAL round trip) that means its dial is
+    // reachable right now, independent of pollAll()'s own sensor-poll
+    // health for the same address (see this file's header on why those
+    // two exchanges are tracked separately).
+    dialFailoverSvc.reportResult(node.uniqueId, !!reply);
     if (!reply) continue;
 
     // Strictly the Spotify-enable gate — see sound.js's header. Checked
@@ -1518,15 +1552,17 @@ async function pollAllDials(getConfiguredNodes) {
     // warning on failure.
     console.log(`[RS485] Dial ${node.uniqueId} reports changed: mode=${reply.mode} newTargetF=${reply.newTargetF} newVolumePercent=${reply.newVolumePercent}`);
     try {
-      if (reply.mode === DIAL_MODE.thermostat && node.zoneId) {
+      if (reply.mode === DIAL_MODE.thermostat && effectiveZoneId) {
         // Always thermostat.js — it's the single source of truth for a
         // zone's target/schedule/on/manualHeat regardless of which plant is
         // actually delivering heat right now (see thermostat.js's getState()
         // target comment, and boiler.js's tick()/getState(), which read
         // through to this same settings object rather than keeping their
-        // own copy).
-        await thermostatSvc.setZone(node.zoneId, { target: reply.newTargetF });
-        console.log(`[RS485] Applied dial target=${reply.newTargetF}\xB0F to zone=${node.zoneId}`);
+        // own copy). effectiveZoneId, not node.zoneId — while this node is
+        // standing in as a backup, a turn of ITS knob sets the DOWN zone's
+        // target, not this node's own (see dialFailover.js).
+        await thermostatSvc.setZone(effectiveZoneId, { target: reply.newTargetF });
+        console.log(`[RS485] Applied dial target=${reply.newTargetF}\xB0F to zone=${effectiveZoneId}${isBackupDuty ? ` (via ${node.zoneId}'s backup dial)` : ''}`);
       } else if (reply.mode === DIAL_MODE.sound && node.soundZoneId) {
         await soundSvc.setZoneVolume(node.soundZoneId, reply.newVolumePercent);
         console.log(`[RS485] Applied dial volume=${reply.newVolumePercent}% to soundZone=${node.soundZoneId}`);

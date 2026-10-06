@@ -12,6 +12,8 @@
  * POST   /console/relay-map              — { address, channel, label, notes? } add/edit a relay
  * DELETE /console/relay-map/:address/:channel — remove a relay from the map
  * GET    /console/faults                 — { faults } — same list the fault LED drives off
+ * GET    /console/dial-failover           — per-zone dial up/down + who's actively serving it + backup candidates
+ * POST   /console/dial-failover/:zoneId   — { backupNodeUniqueId | null } set/clear this zone's preferred backup dial
  * GET    /console/firmware                — [{filename, size, uploadedAt}] uploaded node images
  * POST   /console/firmware                — { filename, dataBase64 } upload/replace a .bin image
  * DELETE /console/firmware/:filename      — remove an uploaded image
@@ -35,6 +37,8 @@ const gpioMap = require('../services/gpioMap');
 const relayMap = require('../services/relayMap');
 const faultsSvc = require('../services/faults');
 const firmwareSvc = require('../services/firmwareUpdate');
+const dialFailoverSvc = require('../services/dialFailover');
+const thermostatSvc = require('../services/thermostat');
 const User = require('../db/userModel');
 
 // Restarting the whole server process is disruptive to everyone using the
@@ -129,6 +133,21 @@ router.delete('/console/relay-map/:address/:channel', async (req, res) => {
 
 router.get('/console/faults', (req, res) => {
   res.json({ faults: faultsSvc.getFaults() });
+});
+
+router.get('/console/dial-failover', (req, res) => {
+  const zones = thermostatSvc.getState().zones;
+  res.json({ zones: dialFailoverSvc.getStatus(() => nodeRegistry.getState().configured, zones) });
+});
+
+router.post('/console/dial-failover/:zoneId', async (req, res) => {
+  try {
+    await dialFailoverSvc.setPreferredBackup(req.params.zoneId, req.body.backupNodeUniqueId || null);
+    const zones = thermostatSvc.getState().zones;
+    res.json({ ok: true, zones: dialFailoverSvc.getStatus(() => nodeRegistry.getState().configured, zones) });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
 });
 
 router.get('/console/firmware', (req, res) => {
