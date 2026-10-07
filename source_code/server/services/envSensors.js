@@ -21,15 +21,34 @@ const { sendPush } = require('./mail');
 // humidity is a comfort/mold-prevention band, not an acute hazard, so it
 // only has one "warn" tier. co2/voc use standard indoor-air-quality tiers.
 const ENV_RANGES = {
-  humidity: { warnLow: 30, warnHigh: 50 },  // %RH
+  // hysteresis: once humidity has crossed INTO warn (past 30/50), it has
+  // to cross back past an inner margin (32/48) to clear again, not just
+  // re-touch the original line. Without this, a reading sitting right at
+  // the boundary (e.g. hovering at 49.8/50.1/49.9/50.2...) flips the
+  // status back and forth every single tick — and since
+  // updateEnvironmentAlerts() below pushes on every status CHANGE, that
+  // meant a push notification per flip. See classifyEnv()'s own comment
+  // for how this is applied.
+  humidity: { warnLow: 30, warnHigh: 50, hysteresis: 2 },  // %RH
   co2:      { warn: 1000, danger: 2000 },   // ppm
   voc:      { warn: 50, danger: 25 },       // 0-100 heuristic score, higher = cleaner (see rs485_node.ino)
 };
 
-function classifyEnv(type, value) {
+// `wasWarn` — this type's PREVIOUS status for the same zone, if the
+// caller is tracking one (see readEnvironment()'s own comment) — lets
+// humidity apply the hysteresis band above: already-'warn' uses the
+// tighter inner thresholds to decide whether it's really cleared yet,
+// everything else (first reading, or already 'ok') uses the plain
+// 30/50 line. co2/voc are unaffected — not what was asked for here, and
+// their existing warn/danger split isn't reported as flapping.
+function classifyEnv(type, value, wasWarn = false) {
   if (typeof value !== 'number') return null;
   if (type === 'humidity') {
-    return (value < ENV_RANGES.humidity.warnLow || value > ENV_RANGES.humidity.warnHigh) ? 'warn' : 'ok';
+    const { warnLow, warnHigh, hysteresis } = ENV_RANGES.humidity;
+    if (wasWarn) {
+      return (value < warnLow + hysteresis || value > warnHigh - hysteresis) ? 'warn' : 'ok';
+    }
+    return (value < warnLow || value > warnHigh) ? 'warn' : 'ok';
   }
   if (type === 'co2') {
     if (value > ENV_RANGES.co2.danger) return 'danger';
@@ -48,7 +67,15 @@ function classifyEnv(type, value) {
 // follow the `<type>-<zoneId>` convention rs485.js writes with. Zones with
 // no node yet simply read as "no reading", same as any other unwired
 // sensor elsewhere in the app.
-function readEnvironment(zoneId) {
+//
+// `previousStatus` — the caller's own persisted `{ humidity, co2, voc }`
+// status from last time (thermostat.js/boiler.js's `rt.envStatus`), so
+// humidity's hysteresis (see ENV_RANGES/classifyEnv's own comments) has
+// something to compare against. Optional and defaults to {} — callers
+// with no persisted state to track (monitorZones.js, which never alerts
+// on these at all) just get the plain, un-hystereses 30/50 classification,
+// same as before this existed.
+function readEnvironment(zoneId, previousStatus = {}) {
   const env = {};
   for (const type of ['humidity', 'pressure', 'voc', 'co2']) {
     const r = sensors.get(`${type}-${zoneId}`);
@@ -57,7 +84,7 @@ function readEnvironment(zoneId) {
       value,
       updatedAt: r?.updatedAt ?? null,
       sensorOk: value !== null && !r.stale,
-      status: classifyEnv(type, value),
+      status: classifyEnv(type, value, previousStatus[type] === 'warn'),
     };
   }
   return env;

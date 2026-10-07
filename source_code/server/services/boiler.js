@@ -221,7 +221,7 @@ async function tick() {
     const currentTemp = typeof reading?.value === 'number' && !reading.stale ? reading.value : null;
 
     updateSafetyState(zone, rt, currentTemp);
-    updateEnvironmentAlerts(zone.label, rt, readEnvironment(zone.id));
+    updateEnvironmentAlerts(zone.label, rt, readEnvironment(zone.id, rt.envStatus));
 
     // Manual "force heat on now" override (see thermostat.js's
     // setManualHeat()) — restricted to one person server-side (server/api/
@@ -348,7 +348,7 @@ function getState() {
         sensorOk: hasReading && !stale,
         calling: rt.calling && systemActive,
         safety: rt.safety,
-        environment: readEnvironment(zone.id),
+        environment: readEnvironment(zone.id, rt.envStatus),
         // Manual "force heat on now" override state — see setManualHeat()/
         // tick(). manualHeatActive is already expiry-checked; manualHeatUntil
         // is only for rendering an "auto-off in Xh Ym" countdown.

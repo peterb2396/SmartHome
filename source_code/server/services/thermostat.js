@@ -378,8 +378,8 @@ const { resolveTarget, isOverridden, nextBoundary } = scheduleUtil;
 // (equipment down, sensor lag, extreme weather overwhelming capacity).
 // ── Environmental sensors (RS485 zone nodes: BME680 + SCD41) ───────────────
 // Read/classify/alert logic lives in envSensors.js (shared with boiler.js).
-function readEnvironment(zone) {
-  return readEnv(zone.id);
+function readEnvironment(zone, rt) {
+  return readEnv(zone.id, rt?.envStatus);
 }
 
 function updateEnvironmentAlerts(zone, rt, env) {
@@ -508,7 +508,7 @@ async function tick() {
     const currentTemp = typeof reading?.value === 'number' && !reading.stale ? reading.value : null;
 
     updateSafetyState(zone, rt, currentTemp, settings);
-    updateEnvironmentAlerts(zone, rt, readEnvironment(zone));
+    updateEnvironmentAlerts(zone, rt, readEnvironment(zone, rt));
 
     // Manual "force heat on now" override (see setManualHeat()) — restricted
     // to one person server-side (server/api/thermostat.js). Self-expiring:
@@ -1097,7 +1097,7 @@ function getState() {
         // divergence fixed above, not this field — reverted.
         coolCalling: rt.coolCalling,
         safety: rt.safety,
-        environment: readEnvironment(zone),
+        environment: readEnvironment(zone, rt),
         balancePercent: zs.balancePercent ?? 100,
         damperPercent: rt.damperPercent,
         damperMoving: rt.damperMoving,
