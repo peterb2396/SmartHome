@@ -81,8 +81,6 @@ export const getRelayMap        = () => api.get("/console/relay-map");
 export const upsertRelay        = (relay) => api.post("/console/relay-map", relay);
 export const deleteRelay        = (address, channel) => api.delete(`/console/relay-map/${address}/${channel}`);
 export const getConsoleFaults   = () => api.get("/console/faults");
-export const getDialFailover    = () => api.get("/console/dial-failover");
-export const setDialFailoverBackup = (zoneId, backupNodeUniqueId) => api.post(`/console/dial-failover/${zoneId}`, { backupNodeUniqueId });
 
 // Remote firmware update (RP2040 nodes) — see server/services/rs485.js's
 // header for the wire protocol and server/services/firmwareUpdate.js for
