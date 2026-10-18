@@ -726,6 +726,15 @@ float vocHeuristic(float gasResistanceOhms) {
 const unsigned long SENSOR_READ_INTERVAL_MS = 2000;
 unsigned long lastSensorReadAttempt = 0;
 
+// How long getDataReadyStatus() can keep saying "not ready" before this
+// node stops calling it benign and treats it as a real failure instead —
+// see the co2Ok handling below for the full story. The chip's own
+// natural cycle is ~5s; this is 6x that, generous enough to never
+// false-trip on normal timing jitter, but still short enough that a
+// physically removed/dead sensor gets caught and marked stale within
+// well under a minute instead of never.
+const unsigned long SCD41_READ_TIMEOUT_MS = 30000;
+
 void readSensorsOnCore1() {
   bool bmeReadyLocal, scd41ReadyLocal;
   critical_section_enter_blocking(&sharedLock);
@@ -804,9 +813,26 @@ void readSensorsOnCore1() {
     }
     bmeFailStreakNow = shared.bmeFailStreak;
   }
-  // No data-ready yet is NOT a failure — leave co2Ok/streak/counters
-  // completely untouched (the last known-good value, and its staleness
-  // clock, just keep holding until a real new attempt actually happens).
+  // No data-ready yet is NOT a failure on its own — the chip only
+  // produces a new sample every ~5s, so this holds the last known-good
+  // value/staleness clock for a few of those cycles without complaint.
+  // BUT "not ready" and "not THERE" look identical through this API:
+  // getDataReadyStatus() returns the same plain `false` whether the chip
+  // is mid-cycle or has been physically removed/disconnected — the
+  // library has no separate "I2C comm failure" signal here. Real
+  // production case (2026-10-17): yanking a working SCD41 out of a live
+  // node left co2Ok/tempOk/humidityOk stuck true FOREVER, since this
+  // branch was never entered again to ever clear them — every report
+  // kept re-sending the last cached reading with a fresh timestamp,
+  // which never aged into "stale" on the Pi side despite the sensor
+  // being gone. SCD41_READ_TIMEOUT_MS below is the fix: "not ready" is
+  // only ever benign for a FEW missed cycles — comfortably longer than
+  // the ~5s norm, but once it's been silent far longer than that with at
+  // least one real success already on record, treat it as a genuine
+  // failure instead of holding stale data open-endedly. Gated on
+  // lastGoodCo2AtMs != 0 so a node that's never had its FIRST real
+  // reading yet (e.g. still warming up right after boot) isn't
+  // mistakenly flagged before it's had a fair chance.
   if (HAS_SCD41 && scd41ReadyLocal && co2DataReady) {
     shared.lastScd41ReadMs = scdMs;
     if (co2Ok) {
@@ -828,6 +854,12 @@ void readSensorsOnCore1() {
       shared.scd41FailTotal++;
       shared.scd41FailStreak++;
     }
+  } else if (HAS_SCD41 && scd41ReadyLocal && shared.lastGoodCo2AtMs != 0
+             && now - shared.lastGoodCo2AtMs > SCD41_READ_TIMEOUT_MS) {
+    shared.co2Ok = false;
+    shared.scd41FailTotal++;
+    shared.scd41FailStreak++;
+    if (!bmeReadyLocal) { shared.humidityOk = false; shared.tempOk = false; }
   }
   scd41FailStreakNow = shared.scd41FailStreak;
   critical_section_exit(&sharedLock);

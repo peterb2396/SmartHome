@@ -365,6 +365,38 @@ async function saveSettings(next) {
   await settingsSvc.updateSetting('thermostat', next);
 }
 
+// Persists `calling`/`coolCalling`/`callingSinceMs`/`maxCallAlerted` —
+// just enough of `runtime`'s per-zone state to survive a restart without
+// losing a heat/cool call that's genuinely still in progress. Real
+// production bug (2026-10-17): `runtime` only ever lived in memory, so a
+// server restart reset every zone's `calling` to false. The deadband
+// hysteresis in tick() below (heatCall = rt.calling, only flips true once
+// currentTemp drops BELOW target-DEADBAND, never just "below target")
+// means a zone mid-call — already heating, temp risen back into the
+// deadband but not yet satisfied — came back from a restart reading as
+// "never started," and wouldn't call again until temp fell all the way
+// past the outer threshold a second time, sometimes hours later. This is
+// NOT what forces every relay off at boot (see init()'s own comment on
+// that — a real, separate, and still-correct safety measure for the
+// hardware register defaulting energized) — this only fixes the LOGICAL
+// "was I calling" decision tick() makes on the very first run after
+// restart, so a genuinely still-needed call resumes within one tick
+// instead of never.
+function getCallState() {
+  return settingsSvc.get()?.thermostatCallState || {};
+}
+
+async function saveCallState() {
+  const next = Object.fromEntries(ZONES.map(z => {
+    const rt = runtime[z.id];
+    return [z.id, {
+      calling: rt.calling, coolCalling: rt.coolCalling,
+      callingSinceMs: rt.callingSinceMs, maxCallAlerted: rt.maxCallAlerted,
+    }];
+  }));
+  await settingsSvc.updateSetting('thermostatCallState', next);
+}
+
 // ── Schedule resolution (shared with boiler.js) ──────────────────────────────
 const { resolveTarget, isOverridden, nextBoundary } = scheduleUtil;
 
@@ -596,6 +628,11 @@ async function tick() {
     rt.calling = heatCall;
     rt.coolCalling = coolCall;
   }
+
+  // See saveCallState()'s own comment — persisted every tick (cheap, one
+  // upsert for all 4 zones) so a restart can resume a genuinely
+  // still-needed call instead of silently dropping it.
+  try { await saveCallState(); } catch (err) { console.error('[Thermostat] Failed to persist call state:', err.message); }
 
   // Pass 2: system-wide arbitration + relay writes. A heat pump can't heat
   // and cool at once — if any zone needs safety cooling, that wins, and
@@ -1128,6 +1165,23 @@ function shutdown(signal) {
 async function init() {
   if (!settingsSvc.get()?.thermostat) {
     await saveSettings(DEFAULT_SETTINGS);
+  }
+
+  // Restore each zone's calling state from before this restart — see
+  // saveCallState()'s own comment for why. Relays themselves still start
+  // forced off a few lines below regardless (the separate, correct boot
+  // safety measure); this only seeds tick()'s first-run hysteresis
+  // decision so a genuinely still-needed call turns back on within one
+  // tick instead of silently never resuming.
+  const savedCallState = getCallState();
+  for (const zone of ZONES) {
+    const saved = savedCallState[zone.id];
+    if (!saved) continue;
+    const rt = runtime[zone.id];
+    rt.calling = !!saved.calling;
+    rt.coolCalling = !!saved.coolCalling;
+    rt.callingSinceMs = saved.callingSinceMs || 0;
+    rt.maxCallAlerted = !!saved.maxCallAlerted;
   }
 
   i2cRelay.init();

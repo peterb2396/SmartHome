@@ -86,6 +86,7 @@ const i2cRelay    = require('./i2cRelay');
 const astro       = require('./astro');
 const climateGate = require('./climateGate');
 const scheduleUtil = require('./scheduleUtil');
+const settingsSvc = require('./settings');
 const { readEnvironment, updateEnvironmentAlerts } = require('./envSensors');
 const { sendPush } = require('./mail');
 
@@ -127,6 +128,33 @@ const runtime = Object.fromEntries(
   ZONES.map(z => [z.id, { calling: false, safety: 'normal', envStatus: {}, callingSinceMs: 0, maxCallAlerted: false }])
 );
 let systemActive = false; // true only while thermostat.js's getActiveSystem() says 'boiler'
+
+// Persists `calling`/`callingSinceMs`/`maxCallAlerted` across a restart —
+// see thermostat.js's identical saveCallState()/getCallState() for the
+// full story (this is the SAME real bug, same fix, just this plant's own
+// copy — see this file's header on why boiler.js doesn't share state with
+// the air handler). Short version: `runtime` only lives in memory, so a
+// restart reset every zone's `calling` to false; tick()'s deadband
+// hysteresis below (heatCall starts at rt.calling, only flips true once
+// currentTemp drops BELOW target-DEADBAND) then couldn't tell "genuinely
+// still mid-call, temp just hasn't dropped that far YET" apart from
+// "never started" — so a zone that was actively heating when the server
+// restarted would NOT turn its relay back on until temp fell all the way
+// past the outer threshold again, sometimes hours later. This does NOT
+// change init()'s own forced-off boot safety write below (still correct,
+// still happens) — it only fixes the LOGICAL decision tick() makes about
+// whether to turn it back ON again right after.
+function getCallState() {
+  return settingsSvc.get()?.boilerCallState || {};
+}
+
+async function saveCallState() {
+  const next = Object.fromEntries(ZONES.map(z => {
+    const rt = runtime[z.id];
+    return [z.id, { calling: rt.calling, callingSinceMs: rt.callingSinceMs, maxCallAlerted: rt.maxCallAlerted }];
+  }));
+  await settingsSvc.updateSetting('boilerCallState', next);
+}
 
 // Explicit backstop, independent of the stale-reading fix above — direct
 // response to a real overnight incident where heat ran unbounded for
@@ -281,6 +309,11 @@ async function tick() {
     rt.calling = heatCall;
   }
 
+  // See saveCallState()'s own comment — persisted every tick (cheap, one
+  // upsert for all zones) so a restart can resume a genuinely
+  // still-needed call instead of silently dropping it.
+  try { await saveCallState(); } catch (err) { console.error('[Boiler] Failed to persist call state:', err.message); }
+
   // Each zone drives its own valve off its own `calling` state. Primary
   // Suite/Downstairs/Office have no real sensor yet, so their `calling`
   // stays permanently false (see the currentTemp === null fail-safe above)
@@ -364,6 +397,22 @@ function shutdown() {
 }
 
 async function init() {
+  // Restore each zone's calling state from before this restart — see
+  // saveCallState()'s own comment for why. The relay write right below
+  // still forces everything off first regardless (the separate, correct
+  // boot safety measure); this only seeds tick()'s first-run hysteresis
+  // decision so a genuinely still-needed call turns back on within one
+  // tick instead of silently never resuming.
+  const savedCallState = getCallState();
+  for (const zone of ZONES) {
+    const saved = savedCallState[zone.id];
+    if (!saved) continue;
+    const rt = runtime[zone.id];
+    rt.calling = !!saved.calling;
+    rt.callingSinceMs = saved.callingSinceMs || 0;
+    rt.maxCallAlerted = !!saved.maxCallAlerted;
+  }
+
   for (const zone of ZONES) i2cRelay.setChannel(BOILER_BOARD, zone.ch, false);
 
   setInterval(() => { tick().catch(err => console.error('[Boiler] Tick error:', err.message)); }, TICK_MS);
