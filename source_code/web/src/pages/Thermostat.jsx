@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { FaExclamationTriangle, FaCog, FaFire, FaEye } from "react-icons/fa";
+import { FaExclamationTriangle, FaCog, FaEye } from "react-icons/fa";
 import { useThermostat } from "../hooks/useThermostat";
 import { useBoiler } from "../hooks/useBoiler";
 import { useMonitorZones } from "../hooks/useMonitorZones";
@@ -10,6 +10,7 @@ import ScheduleModal from "../components/ScheduleModal";
 import RatesModal    from "../components/RatesModal";
 import Spinner       from "../components/Spinner";
 import PageHeader    from "../components/PageHeader";
+import ZoneHistoryChart from "../components/ZoneHistoryChart";
 import { CONTAINER_NARROW, CONTAINER_WIDE, GRID_COMPACT, pageContainerStyle } from "../styles/tokens";
 
 const SHOW_MONITOR_ZONES_KEY = "thermostat.showMonitorZones";
@@ -130,20 +131,6 @@ export default function Thermostat() {
         }
       />
 
-      {isBoilerActive && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 8, marginBottom: "1.25rem",
-          background: "var(--tint-warning)", border: "1px solid #fed7aa", borderRadius: 10,
-          padding: "0.65rem 1rem", color: "#9a3412", fontSize: "0.85rem", fontWeight: 600,
-        }}>
-          <FaFire />
-          Gas boiler heating season — Primary Suite / Upstairs / Downstairs / Office are being
-          served by the boiler below. The air handler (and any cooling) is fully idle until gas
-          mode is deselected or it warms back up above the season threshold (set in Settings, the
-          gear icon above).
-        </div>
-      )}
-
       <div style={{
         display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_COMPACT}px, 1fr))`,
         gap: "1.25rem", marginBottom: "1.5rem",
@@ -219,6 +206,8 @@ export default function Thermostat() {
           onSetAvailability={setAvailability}
         />
       </div>
+
+      <ZoneHistoryChart zones={state.zones.map(z => ({ id: z.id, label: z.label }))} />
 
       {scheduleZone && (
         <ScheduleModal

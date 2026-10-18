@@ -8,6 +8,12 @@ node_modules/
 dist/
 web-build/
 
+# CRA build output (source_code/web) — generated, never source. The
+# "web-build/" entry above is a leftover Expo/RN convention and doesn't
+# match this project's actual CRA output path, which is why this got
+# committed by accident in the first place.
+source_code/web/build/
+
 # Native
 *.orig.*
 *.jks

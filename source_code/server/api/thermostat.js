@@ -17,6 +17,10 @@
  * POST /thermostat/mode            — { mode: 'auto'|'gas'|'electric'|'air' }
  * POST /thermostat/rates           — { gasPricePerTherm?, elecPricePerKwh?, gasAfue? }
  * POST /thermostat/availability    — { source: 'gas'|'electric'|'air', available: boolean }
+ * GET  /thermostat/zone/:id/history  — ?from=<ms>&to=<ms> raw points + duty-cycle/
+ *                                     short-cycling analysis for that window (zoneHistory.js) —
+ *                                     window capped to 7 days back, matching the TTL that
+ *                                     actually bounds how much history exists at all
  *
  * GET  /thermostat/boiler          — the separate gas boiler's state — a
  *                                     distinct hydronic plant, but as of a
@@ -54,7 +58,10 @@
 const router = require('express').Router();
 const thermostatSvc = require('../services/thermostat');
 const boilerSvc = require('../services/boiler');
+const zoneHistorySvc = require('../services/zoneHistory');
 const User = require('../db/userModel');
+
+const MAX_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // matches zoneHistory.js's own TTL — nothing older ever exists to return anyway
 
 // A couple of controls here are risky/annoying enough (a mis-set airflow
 // balance, a manual "force heat on" override that ignores target/temperature
@@ -127,6 +134,24 @@ router.post('/thermostat/zone/:id/manual-heat', async (req, res) => {
   try {
     await thermostatSvc.setManualHeat(req.params.id, req.body.on);
     res.json({ ok: true, state: thermostatSvc.getState() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+router.get('/thermostat/zone/:id/history', async (req, res) => {
+  try {
+    const to = req.query.to ? Number(req.query.to) : Date.now();
+    const from = req.query.from ? Number(req.query.from) : to - 24 * 60 * 60 * 1000;
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+      return res.status(400).json({ ok: false, error: 'from/to must be valid millisecond timestamps with to > from' });
+    }
+    // Clamp rather than reject — a frontend day-picker drifting slightly
+    // past the 7-day boundary (e.g. a stale "oldest day" button) should
+    // just get whatever's actually still there, not an error.
+    const clampedFrom = Math.max(from, Date.now() - MAX_HISTORY_WINDOW_MS);
+    const data = await zoneHistorySvc.getHistoryWithAnalysis(req.params.id, clampedFrom, to);
+    res.json({ ok: true, ...data });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
   }

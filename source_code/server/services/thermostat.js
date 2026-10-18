@@ -140,6 +140,7 @@ const climateGate = require('./climateGate');
 const { applyMinRunTime } = require('./shortCycle');
 const { readEnvironment: readEnv, updateEnvironmentAlerts: updateEnvAlerts } = require('./envSensors');
 const { sendPush } = require('./mail');
+const zoneHistory = require('./zoneHistory');
 
 const CRON_OPTS = { scheduled: true, timezone: astro.TZ };
 // 3°F total swing (±1.5 around target) — widened from 0.5 per explicit
@@ -652,6 +653,19 @@ async function tick() {
   }
 
   driveAirHandler(settings, activeSource, anyCooling, anyHeatCalling, Date.now());
+
+  // Logged from getState()'s own output, not any of tick()'s local
+  // variables — that's the exact same unified `calling`/currentTemp/
+  // target merge the web app and dial already render, so the history
+  // graph can never disagree with what the UI showed at that moment
+  // (see zoneHistory.js's header on why "calling" always means whichever
+  // plant actually served the zone, not an air-handler-only internal
+  // flag). Fire-and-forget — a missed history write is a shrug, not an
+  // incident, and never worth blocking or slowing this tick over.
+  zoneHistory.logSnapshot(getState().zones.map(z => ({
+    zoneId: z.id, currentTemp: z.currentTemp, target: z.target,
+    calling: z.calling, coolCalling: z.coolCalling,
+  })));
 }
 
 // Proportional damper actuation over I2C: drives toward `targetPercent`

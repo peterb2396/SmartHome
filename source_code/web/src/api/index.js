@@ -53,6 +53,7 @@ export const setZoneManualHeat = (id, on) => api.post(`/thermostat/zone/${id}/ma
 export const setThermostatMode = (mode) => api.post("/thermostat/mode", { mode });
 export const setThermostatRates = (rates) => api.post("/thermostat/rates", rates);
 export const setThermostatAvailability = (source, available) => api.post("/thermostat/availability", { source, available });
+export const getZoneHistory = (id, from, to) => api.get(`/thermostat/zone/${id}/history`, { params: { from, to } });
 
 // ── Gas boiler (separate hydronic system, same 4 zones as the air handler) ──
 export const getBoiler         = () => api.get("/thermostat/boiler");
