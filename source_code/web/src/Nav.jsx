@@ -5,6 +5,7 @@ import ThemeToggle from "./components/ThemeToggle";
 
 const LINKS = [
   { to: "/",        label: "Home"     },
+  { to: "/lights",  label: "Lights"   },
   { to: "/sensors", label: "Sensors"  },
   { to: "/cameras", label: "Cameras"  },
   { to: "/finance", label: "Finance"  },

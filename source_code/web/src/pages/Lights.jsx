@@ -1,137 +1,27 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
-import { FaLightbulb, FaTv, FaPlug, FaSun, FaMoon, FaPowerOff, FaStarAndCrescent, FaCloudMoon, FaThermometerHalf, FaCloudSun, FaExclamationTriangle, FaCheckCircle } from "react-icons/fa";
+import { FaLightbulb, FaTv, FaPlug, FaPowerOff } from "react-icons/fa";
 import { useDevices }  from "../hooks/useDevices";
 import { useSettings } from "../hooks/useSettings";
-import { useCar }      from "../hooks/useCar";
-import { useThermostat } from "../hooks/useThermostat";
-import { useBoiler }   from "../hooks/useBoiler";
-import { formatOperatingState } from "../utils";
+import { formatOperatingState, recordLightUsage } from "../utils";
 import LightCard            from "../components/LightCard";
 import LightSettingsModal   from "../components/LightSettingsModal";
-import CarControls          from "../components/CarControls";
 import SectionHeader        from "../components/SectionHeader";
 import Spinner              from "../components/Spinner";
 import PageHeader           from "../components/PageHeader";
 import { CONTAINER_WIDE, GRID_COMPACT, GRID_WIDE, pageContainerStyle } from "../styles/tokens";
 
-// ── House overview ───────────────────────────────────────────────────────────
-// The at-a-glance "this is actually my home" strip — climate, lights,
-// outside conditions, and anything that needs attention — sitting above the
-// device-control sections below it.
-
-function greeting() {
-  const h = new Date().getHours();
-  if (h < 5) return "Still up";
-  if (h < 12) return "Good morning";
-  if (h < 18) return "Good afternoon";
-  return "Good evening";
-}
-
-function OverviewTile({ icon: Icon, label, value, detail, tone = "neutral" }) {
-  const toneColor = {
-    neutral: "var(--accent)", ok: "var(--success)", warn: "var(--warning)", danger: "var(--danger)",
-  }[tone];
-  return (
-    <div style={{
-      background: "var(--bg-card)", borderRadius: 14, border: "1px solid var(--border)",
-      boxShadow: "var(--shadow-card)", padding: "1.1rem 1.25rem",
-      display: "flex", alignItems: "center", gap: "0.9rem",
-    }}>
-      <div style={{
-        width: 42, height: 42, borderRadius: 10, flexShrink: 0,
-        background: `${toneColor}22`, color: toneColor,
-        display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.1rem",
-      }}>
-        <Icon />
-      </div>
-      <div style={{ minWidth: 0 }}>
-        <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.75rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em" }}>{label}</p>
-        <p style={{ margin: "2px 0 0", color: "var(--text-primary)", fontSize: "1.15rem", fontWeight: 700, lineHeight: 1.2 }}>{value}</p>
-        {detail && <p style={{ margin: "1px 0 0", color: "var(--text-muted)", fontSize: "0.78rem" }}>{detail}</p>}
-      </div>
-    </div>
-  );
-}
-
-function HouseOverview({ lightsOn, lightsTotal }) {
-  const { state: thermo } = useThermostat();
-  const { state: boilerState } = useBoiler();
-
-  const isBoilerActive = thermo?.activeSystem === "boiler";
-  const climateZones = isBoilerActive ? (boilerState?.zones ?? []) : (thermo?.zones ?? []);
-  const readingZones = climateZones.filter(z => z.sensorOk && typeof z.currentTemp === "number");
-  const avgIndoor = readingZones.length
-    ? Math.round(readingZones.reduce((sum, z) => sum + z.currentTemp, 0) / readingZones.length)
-    : null;
-  const callingCount = climateZones.filter(z => z.calling || z.coolCalling).length;
-  const outsideTemp = thermo?.lastDecision?.avgOutdoorTempF;
-
-  const unresponsive = climateZones.filter(z => !z.sensorOk).length;
-  const inSafety = climateZones.filter(z => z.safety && z.safety !== "normal").length;
-  const issues = unresponsive + inSafety;
-
-  return (
-    <div style={{
-      display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(220px, 1fr))`,
-      gap: "1rem", marginBottom: "1.75rem",
-    }}>
-      <OverviewTile icon={FaThermometerHalf} label="Climate" tone="neutral"
-        value={avgIndoor != null ? `${avgIndoor}°F inside` : "No reading"}
-        detail={callingCount > 0 ? `${callingCount} zone${callingCount === 1 ? "" : "s"} calling` : "All zones idle"} />
-      <OverviewTile icon={FaCloudSun} label="Outside" tone="neutral"
-        value={typeof outsideTemp === "number" ? `${Math.round(outsideTemp)}°F` : "—"}
-        detail="Today's forecast average" />
-      <OverviewTile icon={FaLightbulb} label="Lights" tone={lightsOn > 0 ? "warn" : "neutral"}
-        value={`${lightsOn} of ${lightsTotal} on`}
-        detail={lightsOn > 0 ? "Some lights are on" : "All lights off"} />
-      <OverviewTile
-        icon={issues > 0 ? FaExclamationTriangle : FaCheckCircle}
-        label="Status" tone={issues > 0 ? "danger" : "ok"}
-        value={issues > 0 ? `${issues} issue${issues === 1 ? "" : "s"}` : "All normal"}
-        detail={issues > 0 ? <Link to="/thermostat" style={{ color: "inherit" }}>Check Thermostat →</Link> : "Nothing needs attention"} />
-    </div>
-  );
-}
-
-// ── Sub-displays ──────────────────────────────────────────────────────────────
-
-function WeatherCard({ title, pairs }) {
-  return (
-    <div style={{
-      background: "var(--bg-card)", borderRadius: 12, border: "1px solid var(--border)",
-      boxShadow: "0 1px 3px rgba(0,0,0,0.07)", padding: "1.25rem",
-    }}>
-      <p style={{ textAlign: "center", color: "var(--text-muted)", fontWeight: 300, fontSize: "1.1rem", margin: "0 0 1rem" }}>{title}</p>
-      <div style={{ display: "flex", justifyContent: "space-around" }}>
-        {pairs.map(({ icon: Icon, bg, time }) => (
-          <div key={time} style={{ textAlign: "center" }}>
-            <div style={{
-              width: 44, height: 44, borderRadius: 10, background: bg,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: "var(--text-secondary)", fontSize: "1.25rem", margin: "0 auto 6px",
-            }}>
-              <Icon />
-            </div>
-            <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem", fontWeight: 500 }}>{time || "—"}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Main Lights page ──────────────────────────────────────────────────────────
+// Every physical light/fan (grouped by room), appliance, and smart plug in
+// the house — the full device-control page. Deliberately NOT the Home
+// screen (see pages/Home.jsx) — this is where you come to manage things
+// room by room, not the at-a-glance dashboard.
 
 export default function Lights() {
   const { devices, loading, setDeviceState, previewLevel } = useDevices();
   const { settings, users, updateSetting } = useSettings();
-  const car = useCar();
 
   const [showLights,     setShowLights]     = useState(true);
   const [showAppliances, setShowAppliances] = useState(true);
   const [showPlugs,      setShowPlugs]      = useState(false);
-  const [showWeather,    setShowWeather]    = useState(true);
   const [expandedRooms,  setExpandedRooms]  = useState({});
   const [modalDevice,    setModalDevice]    = useState(null);
   const [initedSettings, setInitedSettings] = useState(false);
@@ -161,6 +51,8 @@ export default function Lights() {
     updateSetting("lights", updated);
   };
 
+  const trackedToggle = (id, on, level) => { recordLightUsage(settings, updateSetting, id); setDeviceState(id, on, level); };
+
   // Device classification — appliances/plugs distinguished by manufacturerName
   // (the real field SmartThings returns; deviceTypeName doesn't exist on the
   // API response and was always empty).
@@ -178,13 +70,11 @@ export default function Lights() {
   const existingRooms = [...new Set(Object.values(settings.lights || {}).map(l => l.room?.trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
 
-  const lightsOnCount = lightsDevices.filter(d => d.status?.components?.main?.switch?.switch?.value === "on").length;
-
   if (loading) return <Spinner message="Loading your smart home..." />;
 
   return (
     <div className="lights-page" style={pageContainerStyle(CONTAINER_WIDE)}>
-      <PageHeader title="Home" subtitle={`${greeting()} — here's how the house is doing`} />
+      <PageHeader title="Lights" subtitle="Lights, fans, appliances, and plugs — by room" />
       <style>{`
         .device-card-wrapper:hover .settings-button { opacity: 1 !important; }
         .settings-button:hover { background: var(--border) !important; color: var(--text-primary) !important; }
@@ -196,12 +86,7 @@ export default function Lights() {
         }
       `}</style>
 
-      <HouseOverview lightsOn={lightsOnCount} lightsTotal={lightsDevices.length} />
-
-      {/* Car controls */}
-      <CarControls start={car.start} lock={car.lock} unlock={car.unlock} />
-
-      {/* ── Lights ── */}
+      {/* ── Lights (and fans — same LightCard, same room grouping) ── */}
       <SectionHeader title="Lights" isExpanded={showLights} onClick={() => setShowLights(v => !v)}
         icon={FaLightbulb} count={lightsDevices.length} />
 
@@ -229,9 +114,9 @@ export default function Lights() {
                     {roomDevices.map(d => (
                       <LightCard
                         key={d.deviceId} device={d}
-                        onToggle={(id, on, level) => setDeviceState(id, on, level)}
+                        onToggle={trackedToggle}
                         onPreview={previewLevel}
-                        onCommit={(id, on, level) => setDeviceState(id, on, level)}
+                        onCommit={trackedToggle}
                         onSettings={id => setModalDevice(id)}
                       />
                     ))}
@@ -289,23 +174,6 @@ export default function Lights() {
               </div>
             );
           })}
-        </div>
-      )}
-
-      {/* ── Weather ── */}
-      <SectionHeader title="Weather" isExpanded={showWeather} onClick={() => setShowWeather(v => !v)}
-        icon={FaSun} accentColor="#f59e0b" />
-
-      {showWeather && (
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_COMPACT}px, 1fr))`, gap: "1rem", marginBottom: "1.5rem" }}>
-          <WeatherCard title="Sunrise" pairs={[
-            { icon: FaSun,   bg: "#fef3c7", time: settings.sunrise },
-            { icon: FaMoon,  bg: "#f3f0ff", time: settings.sunset  },
-          ]} />
-          <WeatherCard title="Darksky" pairs={[
-            { icon: FaStarAndCrescent, bg: "#f3f0ff", time: settings.stargazingStart },
-            { icon: FaCloudMoon,       bg: "#f3f0ff", time: settings.stargazingEnd   },
-          ]} />
         </div>
       )}
 

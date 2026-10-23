@@ -197,7 +197,7 @@ const char* OTA_SERVER_HOST = "server.153home.online"; // same host the rest of 
 // the Console's firmware panel — see server/services/firmwareUpdate.js's
 // getLatestDialFirmware() for the exact naming convention this is
 // compared against.
-const char* FIRMWARE_VERSION = "1.1.4";
+const char* FIRMWARE_VERSION = "1.1.5";
 const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60 * 60 * 1000; // every 6 hours
 const unsigned long OTA_FIRST_CHECK_DELAY_MS = 30000; // wait until well after boot — see checkForOTA()'s comment on why this blocks loop()
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000; // don't hang indefinitely if WiFi's unavailable
@@ -271,9 +271,24 @@ const uint8_t DIAL_I2C_REPLY_LEN = 21;
 SCD4x scd41;
 const unsigned long SCD41_READ_INTERVAL_MS = 2000; // mirrors rs485_node.ino's own SENSOR_READ_INTERVAL_MS — the chip only produces a new reading every ~5s regardless of how often this asks
 unsigned long lastScd41ReadAttempt = 0;
+unsigned long lastGoodScd41AtMs = 0; // millis() at the last successful readMeasurement() — see readScd41()'s timeout comment
 bool scd41Ready = false;      // found at setup() — never changes after
 bool scd41ValueOk = false;    // latest reading actually valid — see readScd41()
 float scd41TempF = 0, scd41Humidity = 0, scd41Co2 = 0;
+// Same real bug as rs485_node.ino's local-SCD41 path (2026-10-18): a
+// getDataReadyStatus() that quietly stops returning true — chip going
+// bad, not necessarily a clean comms failure — is indistinguishable from
+// "just not ready yet" through this API, and readScd41() below used to
+// leave scd41ValueOk stuck at whatever it last was forever in that case.
+// Relayed to the paired RP2040 every cycle regardless (replyBuffer[8]
+// below), which re-sent a frozen reading under a fresh timestamp forever
+// — looked perpetually "fresh" on the server even though the sensor had
+// stopped producing anything real. Only a hard power-cycle of the SCD41
+// ever cleared it (resets the chip, giving one more real reading before
+// going quiet again if it's genuinely failing). SCD41_READ_TIMEOUT_MS
+// below is the same fix: no real success in this long, despite having
+// had at least one before, means treat it as actually failed.
+const unsigned long SCD41_READ_TIMEOUT_MS = 30000;
 
 const unsigned long IDLE_TIMEOUT_MS = 20000; // no interaction -> back to IDLE (screen off)
 const unsigned long MENU_TIMEOUT_MS = 8000;  // no interaction on the menu -> back to IDLE
@@ -652,13 +667,21 @@ void readScd41() {
   if (millis() - lastScd41ReadAttempt < SCD41_READ_INTERVAL_MS) return;
   lastScd41ReadAttempt = millis();
 
-  if (!scd41.getDataReadyStatus()) return; // not a failure, just not yet — leave scd41ValueOk/the last good reading alone
+  if (!scd41.getDataReadyStatus()) {
+    // See SCD41_READ_TIMEOUT_MS's own comment — "not ready yet" is only
+    // benign for a few missed cycles. Gated on lastGoodScd41AtMs != 0 so
+    // a chip that's never had its first real reading yet (still warming
+    // up right after boot) isn't flagged before it's had a fair chance.
+    if (lastGoodScd41AtMs != 0 && millis() - lastGoodScd41AtMs > SCD41_READ_TIMEOUT_MS) scd41ValueOk = false;
+    return;
+  }
   if (!scd41.readMeasurement()) { scd41ValueOk = false; return; }
 
   scd41Co2 = (float)scd41.getCO2();
   scd41Humidity = scd41.getHumidity();
   scd41TempF = scd41.getTemperature() * 9.0 / 5.0 + 32.0;
   scd41ValueOk = true;
+  lastGoodScd41AtMs = millis();
 }
 
 // Called from loop() every RP2040_POLL_INTERVAL_MS — this board is now

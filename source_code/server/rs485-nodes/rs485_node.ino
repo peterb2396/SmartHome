@@ -887,7 +887,22 @@ void onDialI2CReceive(int numBytes) {
   // sensorValid mirrors readSensorsOnCore1()'s existing "not ready yet is
   // NOT a failure" tolerance: only overwrite tempF/humidity/co2 when the
   // dial is actually relaying a fresh reading, otherwise leave whatever
-  // was last known (and its staleness clock) exactly alone.
+  // was last known (and its staleness clock) exactly alone — the dial's
+  // OWN readScd41() has already decided, via its own SCD41_READ_TIMEOUT_MS,
+  // whether a run of "not ready yet" has gone on long enough to actually
+  // mean failed; sensorValid=0 here is that verdict, not a per-cycle blip.
+  //
+  // Real production bug (2026-10-18): this used to have no `else` at all —
+  // tempOk/humidityOk/co2Ok only ever got SET here, never cleared, so once
+  // the dial's own chip stopped producing fresh readings (a failing SCD41,
+  // same symptom the Attic node had locally), this board kept relaying the
+  // frozen last-good values up to the Pi via buildAndSendReport() — which
+  // only checks the *Ok flags, not how old lastGood*AtMs actually is — and
+  // the Pi stamps its OWN receipt time on every report regardless, so a
+  // dead sensor looked perpetually fresh the whole way up. Only a hard
+  // power-cycle of the SCD41 ever cleared it (one real reading right after
+  // chip reset, before going quiet again). Trusting the dial's verdict
+  // directly here — no second timeout layer needed, it already waited.
   bool sensorValid = buf[8] & 0x01;
   float relayedTempF, relayedHumidity, relayedCo2;
   memcpy(&relayedTempF, buf + 9, 4);
@@ -909,6 +924,15 @@ void onDialI2CReceive(int numBytes) {
     shared.co2 = relayedCo2;
     shared.co2Ok = true;
     shared.lastGoodCo2AtMs = now;
+  } else if (shared.tempOk || shared.humidityOk || shared.co2Ok) {
+    // Only actually counts as a NEW failure the first time this fires
+    // after a run of good relays — see the fail-streak fields' own
+    // existing semantics elsewhere in this file.
+    shared.tempOk = false;
+    shared.humidityOk = false;
+    shared.co2Ok = false;
+    shared.scd41FailTotal++;
+    shared.scd41FailStreak++;
   }
   critical_section_exit(&sharedLock);
 }

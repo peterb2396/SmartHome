@@ -43,6 +43,18 @@ export function formatOperatingState(operatingStateObj) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+// Pinning-by-usage for the Home page's "Quick Lights" — a plain counter per
+// deviceId in the generic settings blob (settings.lightUsage), bumped every
+// time a light is actually toggled/adjusted from either the Home quick
+// panel or the full Lights page. Deliberately just a tally, not a decayed/
+// weighted score — simplest thing that answers "which lights do we
+// actually reach for," and small enough that drift/staleness was never a
+// real concern raised for this feature.
+export function recordLightUsage(settings, updateSetting, deviceId) {
+  const usage = settings.lightUsage || {};
+  updateSetting("lightUsage", { ...usage, [deviceId]: (usage[deviceId] || 0) + 1 });
+}
+
 // Classify a sensor name into a category
 export function getSensorCategory(name) {
   if (name.startsWith("temp"))      return "temperature";

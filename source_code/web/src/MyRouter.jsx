@@ -1,5 +1,6 @@
 import { Routes, Route } from "react-router-dom";
 import Nav      from "./Nav";
+import Home     from "./pages/Home";
 import Lights   from "./pages/Lights";
 import Sensors  from "./pages/Sensors";
 import Cameras  from "./pages/Cameras";
@@ -22,7 +23,8 @@ export default function MyRouter() {
       <Nav />
       <div style={{ flex: 1, width: "100%" }}>
         <Routes>
-          <Route index           element={<Lights   />} />
+          <Route index           element={<Home     />} />
+          <Route path="lights"   element={<Lights   />} />
           <Route path="sensors"  element={<Sensors  />} />
           <Route path="cameras"  element={<Cameras  />} />
           <Route path="finance"  element={<Finance  />} />

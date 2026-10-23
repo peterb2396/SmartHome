@@ -1,6 +1,7 @@
 import { FaCog, FaLightbulb, FaFan } from "react-icons/fa";
 
 export default function LightCard({ device, onToggle, onPreview, onCommit, onSettings }) {
+  const showSettings = typeof onSettings === "function";
   const main       = device.status?.components?.main || {};
   const isFan      = device.name?.toLowerCase().includes("fan");
   const isOffline  = main.healthCheck?.["DeviceWatch-DeviceStatus"]?.value === "offline";
@@ -25,15 +26,17 @@ export default function LightCard({ device, onToggle, onPreview, onCommit, onSet
         boxShadow: "0 1px 3px rgba(0,0,0,0.07)", opacity: isOffline ? 0.55 : 1,
         transition: "all 0.25s",
       }}>
-        <button className="settings-button" onClick={() => onSettings(device.deviceId)} style={{
-          position: "absolute", top: 12, right: 12, width: 34, height: 34,
-          background: "var(--bg-surface-alt)", border: "none", borderRadius: "50%",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          cursor: "pointer", color: "var(--text-muted)", opacity: 0.5, transition: "opacity 0.2s",
-          fontSize: "0.85rem",
-        }}>
-          <FaCog />
-        </button>
+        {showSettings && (
+          <button className="settings-button" onClick={() => onSettings(device.deviceId)} style={{
+            position: "absolute", top: 12, right: 12, width: 34, height: 34,
+            background: "var(--bg-surface-alt)", border: "none", borderRadius: "50%",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer", color: "var(--text-muted)", opacity: 0.5, transition: "opacity 0.2s",
+            fontSize: "0.85rem",
+          }}>
+            <FaCog />
+          </button>
+        )}
 
         <div style={{ padding: "1.25rem" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: 12 }}>
